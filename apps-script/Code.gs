@@ -11,7 +11,7 @@
  * 코드를 고친 뒤에는 배포 → 배포 관리 → 수정(연필) → 버전: 새 버전 → 배포 를 눌러야 반영됩니다.
  */
 
-const SERVER_VERSION = 2;                                  // 서버를 고칠 때마다 올린다. 상태 응답에 실려서 새 버전이 배포됐는지 밖에서 확인할 수 있다
+const SERVER_VERSION = 3;                                  // 서버를 고칠 때마다 올린다. 상태 응답에 실려서 새 버전이 배포됐는지 밖에서 확인할 수 있다
 const SHEET_NAME = '선수등록';
 const HEADERS = ['등록시각', '수정시각', '상태', '닉네임', '스팀프로필', '스팀키', '디스코드', 'MMR', '1지망', '2지망', '3지망', '4지망'];
 const COL = HEADERS.reduce((o, h, i) => (o[h] = i, o), {});
@@ -20,6 +20,7 @@ const STATUSES = ['대기', '승인', '제외'];
 const MAX_MMR = 15000;
 const MAX_ROWS = 3000;
 const ROSTER_MAX = 60;
+const STEAM_TRIES = 4;                                     // 스팀 조회를 몇 번까지 시도할지
 
 /* =========================================================
    설치: 편집기에서 setup 을 한 번 실행하세요
@@ -255,19 +256,24 @@ function lookupSteamId_(path) {
   const cacheKey = 'steam:' + path.toLowerCase();
   const hit = cache.get(cacheKey);
   if (hit) return hit === 'none' ? '' : hit;
-  let text;
-  try {
-    const res = UrlFetchApp.fetch('https://steamcommunity.com/' + path + '/?xml=1', { muteHttpExceptions: true });
-    if (res.getResponseCode() !== 200) return null;
-    text = res.getContentText();
-  } catch (err) {
-    console.warn('스팀 조회 실패: ' + err);
-    return null;
+  // 스팀은 구글 서버에서 오는 요청을 가끔 거절한다(실제 배포에서 열 번에 세 번꼴). 그래서 몇 번 다시 물어본다.
+  for (let attempt = 1; attempt <= STEAM_TRIES; attempt++) {
+    if (attempt > 1) Utilities.sleep(300);
+    let text = '';
+    try {
+      const res = UrlFetchApp.fetch('https://steamcommunity.com/' + path + '/?xml=1', { muteHttpExceptions: true });
+      if (res.getResponseCode() !== 200) { console.warn('스팀 조회 실패(' + attempt + '번째): HTTP ' + res.getResponseCode()); continue; }
+      text = res.getContentText();
+    } catch (err) {
+      console.warn('스팀 조회 실패(' + attempt + '번째): ' + err);
+      continue;
+    }
+    const m = text.match(/<steamID64>(7656\d{13})<\/steamID64>/);
+    if (!m && !/<error>/.test(text)) continue;           // 점검 화면처럼 알 수 없는 답
+    try { cache.put(cacheKey, m ? m[1] : 'none', m ? 600 : 120); } catch (err) { /* 캐시는 없어도 된다 */ }
+    return m ? m[1] : '';
   }
-  const m = text.match(/<steamID64>(7656\d{13})<\/steamID64>/);
-  if (!m && !/<error>/.test(text)) return null;          // 점검 화면처럼 알 수 없는 답
-  try { cache.put(cacheKey, m ? m[1] : 'none', m ? 600 : 120); } catch (err) { /* 캐시는 없어도 된다 */ }
-  return m ? m[1] : '';
+  return null;
 }
 
 // 예전에는 사용자 지정 주소(steamcommunity.com/id/이름)를 그대로 키로 저장했다. 그런 줄을 스팀 고유 번호로 바꾼다. setup 이 부른다.

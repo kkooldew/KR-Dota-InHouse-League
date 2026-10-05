@@ -27,12 +27,13 @@ function makeEnv(){
     }
   };
   const props = {}, cache = {}, files = {};
-  // 가짜 스팀: vanity 는 사용자 지정 주소 → 고유 번호, missing 은 없는 번호, down 이면 답하지 않는다
-  const steam = { vanity: {}, missing: new Set(), down: false, calls: 0 };
+  // 가짜 스팀: vanity 는 사용자 지정 주소 → 고유 번호, missing 은 없는 번호, down 이면 답하지 않는다, flaky 는 그 횟수만큼만 거절한다
+  const steam = { vanity: {}, missing: new Set(), down: false, flaky: 0, calls: 0 };
   const env = {
     UrlFetchApp: { fetch: url => {
       steam.calls++;
       if (steam.down) throw new Error('timeout');
+      if (steam.flaky > 0) { steam.flaky--; return { getResponseCode: () => 429, getContentText: () => 'Too Many Requests' }; }
       const m = url.match(/^https:\/\/steamcommunity\.com\/(profiles|id)\/([^/]+)\/\?xml=1$/);
       const id = !m ? '' : m[1] === 'profiles' ? (steam.missing.has(m[2]) ? '' : m[2]) : (steam.vanity[m[2].toLowerCase()] || '');
       const body = id ? '<profile><steamID64>' + id + '</steamID64></profile>'
@@ -44,7 +45,7 @@ function makeEnv(){
     CacheService: { getScriptCache: () => ({ get: k => cache[k] ?? null, put: (k, v) => { cache[k] = v; } }) },
     LockService: { getScriptLock: () => ({ tryLock: () => true, releaseLock(){} }) },
     ContentService: { MimeType: { JSON: 'json' }, createTextOutput: t => ({ text: t, setMimeType(){ return this; } }) },
-    Utilities: { getUuid: () => require('crypto').randomUUID() },
+    Utilities: { getUuid: () => require('crypto').randomUUID(), sleep(){} },
     DriveApp: {
       createFile: (name, content) => { const id = 'f' + Object.keys(files).length; files[id] = content; return { getId: () => id, setContent: c => { files[id] = c; }, getBlob: () => ({ getDataAsString: () => files[id] }) }; },
       getFileById: id => { if(!(id in files)) throw new Error('nf'); return { getId: () => id, setContent: c => { files[id] = c; }, getBlob: () => ({ getDataAsString: () => files[id] }) }; }

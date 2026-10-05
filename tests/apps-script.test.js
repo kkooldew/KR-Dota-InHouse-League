@@ -117,6 +117,17 @@ r = post({ ...base, steam:'https://steamcommunity.com/profiles/76561198000000555
 assert(r.ok && grid.length === 4 && grid[3][5] === 's:76561198000000555', 'steam not answering: numeric address is still accepted');
 steam.down = false;
 
+// 스팀이 몇 번 거절하다가 답할 때 (실제 배포에서 자주 있다)
+steam.vanity.flakyname = '76561198000000666';
+clearSteam(); clearRL(); steam.flaky = 3;
+let before = steam.calls;
+r = post({ ...base, steam:'https://steamcommunity.com/id/FlakyName', discord:'down_user', nickname:'점검중' });
+assert(!r.ok && r.code === 'conflict' && steam.calls === before + 4 && steam.flaky === 0, 'steam refusing three times: the fourth try gets the answer');
+clearSteam(); clearRL(); steam.flaky = 4; before = steam.calls;
+r = post({ ...base, steam:'https://steamcommunity.com/id/FlakyName', discord:'down_user', nickname:'점검중' });
+assert(!r.ok && r.code === 'steam' && steam.calls === before + 4, 'steam refusing four times: gives up and asks to retry');
+steam.flaky = 0;
+
 // 예전 방식(사용자 지정 주소가 키)으로 저장된 줄
 const oldRow = (nick, vanity, discord) => [new Date(), new Date(), '대기', nick, 'https://steamcommunity.com/id/' + vanity, 'id:' + vanity.toLowerCase(), discord, 3000, '캐리', '미드', '오프', '서폿'];
 grid.push(oldRow('옛주소', 'OldName', 'old_user'), oldRow('사라진주소', 'Gone', 'gone_user'), oldRow('느긋한사람', 'Lazy', 'lazy_user'), oldRow('겹친사람', 'Dupe', 'dupe_user'));
