@@ -11,6 +11,7 @@
  * 코드를 고친 뒤에는 배포 → 배포 관리 → 수정(연필) → 버전: 새 버전 → 배포 를 눌러야 반영됩니다.
  */
 
+const SERVER_VERSION = 2;                                  // 서버를 고칠 때마다 올린다. 상태 응답에 실려서 새 버전이 배포됐는지 밖에서 확인할 수 있다
 const SHEET_NAME = '선수등록';
 const HEADERS = ['등록시각', '수정시각', '상태', '닉네임', '스팀프로필', '스팀키', '디스코드', 'MMR', '1지망', '2지망', '3지망', '4지망'];
 const COL = HEADERS.reduce((o, h, i) => (o[h] = i, o), {});
@@ -34,6 +35,10 @@ function setup() {
   if (props.getProperty('REG_OPEN') === null) props.setProperty('REG_OPEN', 'true');
   if (props.getProperty('SEASON') === null) props.setProperty('SEASON', '시즌 1');
   recordsFile_();                                   // 공개 기록 파일을 미리 만들어 권한을 받아 둔다
+  const moved = migrateSteamKeys_();                // 스팀에 물어보는 권한도 여기서 함께 받는다
+  if (moved.changed) Logger.log('스팀 사용자 지정 주소로 저장돼 있던 ' + moved.changed + '명을 고유 번호로 바꿨습니다.');
+  if (moved.failed.length) Logger.log('스팀에서 찾지 못해 그대로 둔 선수: ' + moved.failed.join(', ') + ' (시트의 스팀프로필 칸을 직접 확인해 주세요)');
+  if (moved.duplicates.length) Logger.log('같은 스팀 계정이 여러 줄에 있습니다: ' + moved.duplicates.join(', ') + ' (시트에서 한 줄만 남겨 주세요)');
   Logger.log('준비가 끝났습니다. 시트: ' + sheet.getName());
   Logger.log('운영진 키: ' + key);
   Logger.log('이 키는 운영진 페이지·리그 매니저·디스코드 봇에 넣습니다. 다른 사람에게 보이지 않게 보관하세요.');
@@ -121,7 +126,8 @@ function statusInfo_() {
     open: props.getProperty('REG_OPEN') !== 'false',
     season: props.getProperty('SEASON') || '',
     registered: Math.max(0, sheet.getLastRow() - 1),
-    recordsAt: props.getProperty('RECORDS_AT') || ''
+    recordsAt: props.getProperty('RECORDS_AT') || '',
+    version: SERVER_VERSION
   };
 }
 
@@ -141,10 +147,10 @@ function register_(body) {
   if (PropertiesService.getScriptProperties().getProperty('REG_OPEN') === 'false') fail_('지금은 선수 등록 기간이 아닙니다', 'closed');
 
   const nickname = cleanNickname_(body.nickname);
-  const steam = parseSteam_(body.steam);
   const discord = normDiscord_(body.discord);
   const mmr = parseMmr_(body.mmr);
   const prefs = parsePrefs_(body.prefs);
+  const steam = resolveSteam_(parseSteam_(body.steam));     // 스팀에 물어봐야 해서 다른 칸을 모두 확인한 뒤에 한다
 
   // 같은 스팀 프로필로 너무 자주 보내는 것을 막는다
   const cache = CacheService.getScriptCache();
@@ -156,7 +162,8 @@ function register_(body) {
     const rows = readRows_(sheet);
     if (rows.length >= MAX_ROWS) fail_('등록 인원이 가득 찼습니다. 운영진에게 문의해 주세요.');
 
-    const mine = rows.find(r => r.steamKey === steam.key);
+    // 예전에 사용자 지정 주소로 저장된 줄(id:이름)도 같은 사람으로 알아본다
+    const mine = rows.find(r => r.steamKey === steam.key) || (steam.legacyKey ? rows.find(r => r.steamKey === steam.legacyKey) : undefined);
     const nickKey = nickname.toLowerCase().replace(/\s+/g, '');
     const nickOwner = rows.find(r => r.nickname.toLowerCase().replace(/\s+/g, '') === nickKey);
     const discordOwner = rows.find(r => r.discord === discord);
@@ -165,7 +172,10 @@ function register_(body) {
       fail_('이 스팀 프로필은 다른 디스코드 계정으로 이미 등록돼 있습니다. 디스코드 계정이 바뀌었다면 운영진에게 알려 주세요.', 'conflict');
     if (!mine && discordOwner)
       fail_('이 디스코드 계정은 다른 스팀 프로필로 이미 등록돼 있습니다. 스팀 프로필이 바뀌었다면 운영진에게 알려 주세요.', 'conflict');
-    if (nickOwner && nickOwner.steamKey !== steam.key)
+    // 운영진이 승인하거나 제외한 등록은 본인이 고칠 수 없다. 운영진이 상태를 대기로 돌리면 다시 고칠 수 있다.
+    if (mine && mine.status !== '대기')
+      fail_('운영진이 확인을 마친 등록이라 직접 고칠 수 없습니다. 바꿀 내용이 있으면 운영진에게 알려 주세요.', 'locked');
+    if (nickOwner && nickOwner !== mine)
       fail_('다른 선수가 이미 쓰고 있는 닉네임입니다. 다른 닉네임을 넣어 주세요.', 'nickname');
 
     const now = new Date();
@@ -176,7 +186,7 @@ function register_(body) {
       line[COL['상태']] = mine.status;
       line[COL['닉네임']] = text_(nickname);
       line[COL['스팀프로필']] = text_(steam.url);
-      line[COL['스팀키']] = text_(mine.steamKey);
+      line[COL['스팀키']] = text_(steam.key);
       line[COL['디스코드']] = text_(mine.discord);
       line[COL['MMR']] = mmr;
       prefCells.forEach((v, i) => { line[COL['1지망'] + i] = v; });
@@ -213,15 +223,74 @@ function cleanNickname_(v) {
   return s;
 }
 
-// 스팀 프로필 주소를 읽어 같은 사람을 가리키는 키를 만든다.
-// steamcommunity.com/profiles/7656… 는 숫자 ID, steamcommunity.com/id/이름 은 사용자 지정 주소다.
+// 스팀 프로필 주소의 모양을 읽는다.
+// steamcommunity.com/profiles/7656… 는 고유 번호, steamcommunity.com/id/이름 은 사용자 지정 주소다.
 function parseSteam_(v) {
   const s = String(v == null ? '' : v).trim();
   let m = s.match(/^(?:https?:\/\/)?(?:www\.)?steamcommunity\.com\/profiles\/(7656\d{13})\/?(?:[?#].*)?$/i) || s.match(/^(7656\d{13})$/);
-  if (m) return { key: 's:' + m[1], url: 'https://steamcommunity.com/profiles/' + m[1] };
+  if (m) return { id: m[1], vanity: '' };
   m = s.match(/^(?:https?:\/\/)?(?:www\.)?steamcommunity\.com\/id\/([A-Za-z0-9_-]{2,64})\/?(?:[?#].*)?$/i);
-  if (m) return { key: 'id:' + m[1].toLowerCase(), url: 'https://steamcommunity.com/id/' + m[1] };
+  if (m) return { id: '', vanity: m[1] };
   fail_('스팀 프로필 주소를 확인해 주세요. 예) https://steamcommunity.com/profiles/76561197990650432', 'steam');
+}
+
+// 같은 사람을 가리키는 키는 언제나 스팀 고유 번호로 만든다.
+// 사용자 지정 주소는 본인이 스팀에서 바꿀 수 있어서, 그대로 키로 쓰면 링크가 끊기거나 같은 계정이 두 번 등록될 수 있다.
+function resolveSteam_(p) {
+  const found = lookupSteamId_(p.id ? 'profiles/' + p.id : 'id/' + p.vanity);
+  if (found === '') fail_('스팀에서 이 프로필을 찾지 못했습니다. 주소를 다시 확인해 주세요.', 'steam');
+  if (found === null && !p.id)
+    fail_('스팀에서 프로필을 확인하지 못했습니다. 잠시 후 다시 시도하거나 steamcommunity.com/profiles/숫자 모양의 주소를 넣어 주세요.', 'steam');
+  const id = found || p.id;                              // 스팀이 답하지 않아도 숫자 주소는 그대로 받는다
+  return {
+    key: 's:' + id,
+    url: 'https://steamcommunity.com/profiles/' + id,
+    legacyKey: p.vanity ? 'id:' + p.vanity.toLowerCase() : ''
+  };
+}
+
+// 스팀 공개 프로필에서 고유 번호(steamID64)를 읽는다. 돌려주는 값: 고유 번호, 그런 프로필이 없으면 '', 스팀이 답하지 않으면 null
+function lookupSteamId_(path) {
+  const cache = CacheService.getScriptCache();
+  const cacheKey = 'steam:' + path.toLowerCase();
+  const hit = cache.get(cacheKey);
+  if (hit) return hit === 'none' ? '' : hit;
+  let text;
+  try {
+    const res = UrlFetchApp.fetch('https://steamcommunity.com/' + path + '/?xml=1', { muteHttpExceptions: true });
+    if (res.getResponseCode() !== 200) return null;
+    text = res.getContentText();
+  } catch (err) {
+    console.warn('스팀 조회 실패: ' + err);
+    return null;
+  }
+  const m = text.match(/<steamID64>(7656\d{13})<\/steamID64>/);
+  if (!m && !/<error>/.test(text)) return null;          // 점검 화면처럼 알 수 없는 답
+  try { cache.put(cacheKey, m ? m[1] : 'none', m ? 600 : 120); } catch (err) { /* 캐시는 없어도 된다 */ }
+  return m ? m[1] : '';
+}
+
+// 예전에는 사용자 지정 주소(steamcommunity.com/id/이름)를 그대로 키로 저장했다. 그런 줄을 스팀 고유 번호로 바꾼다. setup 이 부른다.
+function migrateSteamKeys_() {
+  const out = { changed: 0, failed: [], duplicates: [] };
+  withLock_(() => {
+    const sheet = getSheet_();
+    readRows_(sheet).forEach(r => {
+      if (r.steamKey.indexOf('id:') !== 0) return;
+      const id = lookupSteamId_('id/' + r.steamKey.slice(3));
+      if (!id) { out.failed.push(r.nickname); return; }
+      sheet.getRange(r.rowNumber, COL['스팀프로필'] + 1, 1, 2)
+        .setValues([[text_('https://steamcommunity.com/profiles/' + id), text_('s:' + id)]]);
+      out.changed++;
+    });
+    const seen = {};
+    readRows_(sheet).forEach(r => {
+      if (!r.steamKey) return;
+      if (seen[r.steamKey]) out.duplicates.push(seen[r.steamKey] + ' / ' + r.nickname);
+      else seen[r.steamKey] = r.nickname;
+    });
+  });
+  return out;
 }
 
 // 디스코드 사용자명(영문 소문자·숫자·밑줄·마침표) 또는 숫자로 된 사용자 ID를 받는다

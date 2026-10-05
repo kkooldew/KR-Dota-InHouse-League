@@ -27,7 +27,18 @@ function makeEnv(){
     }
   };
   const props = {}, cache = {}, files = {};
+  // 가짜 스팀: vanity 는 사용자 지정 주소 → 고유 번호, missing 은 없는 번호, down 이면 답하지 않는다
+  const steam = { vanity: {}, missing: new Set(), down: false, calls: 0 };
   const env = {
+    UrlFetchApp: { fetch: url => {
+      steam.calls++;
+      if (steam.down) throw new Error('timeout');
+      const m = url.match(/^https:\/\/steamcommunity\.com\/(profiles|id)\/([^/]+)\/\?xml=1$/);
+      const id = !m ? '' : m[1] === 'profiles' ? (steam.missing.has(m[2]) ? '' : m[2]) : (steam.vanity[m[2].toLowerCase()] || '');
+      const body = id ? '<profile><steamID64>' + id + '</steamID64></profile>'
+        : '<response><error><![CDATA[The specified profile could not be found.]]></error></response>';
+      return { getResponseCode: () => 200, getContentText: () => body };
+    } },
     SpreadsheetApp: { getActiveSpreadsheet: () => ({ getSheetByName: () => sheet, insertSheet: () => sheet }) },
     PropertiesService: { getScriptProperties: () => ({ getProperty: k => (k in props ? props[k] : null), setProperty: (k, v) => { props[k] = String(v); } }) },
     CacheService: { getScriptCache: () => ({ get: k => cache[k] ?? null, put: (k, v) => { cache[k] = v; } }) },
@@ -43,6 +54,6 @@ function makeEnv(){
   };
   vm.createContext(env);
   vm.runInContext(code, env);
-  return { env, grid, props, cache, files };
+  return { env, grid, props, cache, files, steam };
 }
 module.exports = makeEnv;

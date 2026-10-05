@@ -25,19 +25,25 @@
 .field.has-err input{border-color:var(--dire)}
 .field .body{padding-left:24px}
 
-/* 포지션 순서 */
-.chips{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;max-width:440px}
-.chip{position:relative;background:var(--ink);border:1px solid var(--line);border-radius:4px;padding:14px 6px 12px;
-  display:flex;flex-direction:column;align-items:center;gap:3px;min-height:72px}
-.chip .nm{font-weight:700;font-size:15.5px}
-.chip .sub{font-size:11.5px;color:var(--bone-dim)}
-.chip .rk{position:absolute;top:6px;right:7px;font-family:var(--num);font-size:13px;color:var(--faint)}
-.chip:hover{border-color:var(--bone-dim)}
-.chip[aria-pressed="true"]{border-color:var(--gold);background:#2b2616}
-.chip[aria-pressed="true"] .rk{color:var(--gold);font-size:15px}
+/* 포지션 순서: 끌어서 위아래로 옮긴다. 맨 위가 1지망 */
+.ranks{list-style:none;margin:0;padding:0;max-width:440px;display:flex;flex-direction:column;gap:8px;position:relative;
+  counter-reset:rank;user-select:none;-webkit-user-select:none}
+.rank{counter-increment:rank;display:flex;align-items:center;gap:10px;min-height:52px;padding:0 4px 0 14px;
+  background:var(--ink);border:1px solid var(--line);border-radius:4px;cursor:grab}
+.rank .rk{font-family:var(--num);font-size:14px;color:var(--faint);min-width:44px}
+.rank .rk::before{content:counter(rank) "지망"}
+.rank .nm{font-weight:700;font-size:15.5px}
+.rank .sub{font-size:12px;color:var(--bone-dim)}
+.rank .grip{margin-left:auto;width:44px;height:44px;display:grid;place-items:center;background:none;border:0;border-radius:3px;
+  color:var(--faint);cursor:grab;touch-action:none}
+.rank:hover{border-color:var(--bone-dim)}
+.rank:hover .grip{color:var(--bone-dim)}
+.rank:first-child{border-color:var(--gold);background:#2b2616}
+.rank:first-child .rk{color:var(--gold)}
+.rank.dragging{position:relative;z-index:2;cursor:grabbing;border-color:var(--gold);background:#2b2616;box-shadow:0 8px 22px rgba(0,0,0,.45)}
+.rank.dragging .grip{cursor:grabbing;color:var(--gold)}
 .order{display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px;margin-top:12px;font-size:14px;min-height:26px}
-.order .step{display:inline-flex;gap:6px;align-items:baseline}
-.order .step b{font-family:var(--num);font-weight:500;color:var(--gold)}
+.order .set{color:var(--rad)}
 .order .empty{color:var(--faint)}
 .linkbtn{background:none;border:0;padding:0;color:var(--bone-dim);text-decoration:underline;text-underline-offset:3px;font-size:13px}
 .linkbtn:hover{color:var(--bone)}
@@ -55,7 +61,6 @@
 @media (max-width:640px){
   .help,.ok-line,.err{margin-left:0}
   .field .body{padding-left:0}
-  .chip{min-height:64px;padding:12px 4px 10px}
 }
 </style>
 </head>
@@ -65,7 +70,7 @@
 <main class="wrap">
   <div class="reg">
     <h1 class="page-title">선수 등록</h1>
-    <p class="page-lead">시즌에 참가하려면 아래 다섯 가지를 입력해 주세요. 같은 스팀 프로필로 다시 제출하면 기존 정보가 고쳐집니다.</p>
+    <p class="page-lead">시즌에 참가하려면 아래 다섯 가지를 입력해 주세요. 운영진이 승인하기 전까지는 같은 스팀 프로필로 다시 제출해 정보를 고칠 수 있습니다.</p>
     <p class="state-line" id="stateLine" hidden></p>
 
     <div class="notice" id="loading">등록 상태를 확인하고 있습니다.</div>
@@ -112,8 +117,8 @@
       <div class="field" data-f="prefs">
         <div class="label" id="prefsLabel"><span class="no">5</span>포지션 순서</div>
         <div class="body">
-          <p class="help" style="margin:0 0 12px">하고 싶은 포지션부터 차례로 누르세요. 서폿은 4번과 5번을 함께 뜻하며, 둘 중 어디를 맡을지는 팀을 짤 때 정해집니다.</p>
-          <div class="chips" role="group" aria-labelledby="prefsLabel" id="chips"></div>
+          <p class="help" style="margin:0 0 12px">하고 싶은 포지션이 위로 오도록 끌어서 순서를 바꾸세요. 맨 위가 1지망입니다. 휴대폰에서는 오른쪽 손잡이를 잡고 끕니다. 서폿은 4번과 5번을 함께 뜻하며, 둘 중 어디를 맡을지는 팀을 짤 때 정해집니다.</p>
+          <ol class="ranks" id="ranks" aria-labelledby="prefsLabel"></ol>
           <div class="order" id="order" aria-live="polite"></div>
         </div>
         <p class="err" hidden></p>
@@ -137,7 +142,7 @@
     <section class="panel done" id="done" hidden>
       <h2 id="doneTitle">등록을 마쳤습니다</h2>
       <p>운영진이 확인한 뒤 디스코드에서 참가 역할을 드립니다. 내전 모집 공지는 디스코드로만 나가니 서버에 들어와 알림을 켜 두세요.</p>
-      <p>정보가 바뀌면 같은 스팀 프로필로 다시 제출하면 됩니다.</p>
+      <p>승인 전에는 같은 스팀 프로필로 다시 제출해 정보를 고칠 수 있습니다. 승인된 뒤에 바꿀 내용이 생기면 운영진에게 알려 주세요.</p>
       <div class="actions">
         <a class="btn gold" id="doneInvite" target="_blank" rel="noopener" hidden>디스코드 서버 들어가기</a>
         <button class="btn ghost" type="button" id="again">입력한 정보 고치기</button>
@@ -156,45 +161,116 @@
   const $ = s => document.querySelector(s);
   mountChrome('register');
 
-  /* ---------- 포지션 순서 ---------- */
+  /* ---------- 포지션 순서: 끌어서 위아래로 옮긴다 ---------- */
   const SUB = ['', '1번', '2번', '3번', '4·5번'];
-  let order = [];                       // 고른 순서대로 지망 번호(1~4)
-  function renderPrefs(){
-    $('#chips').innerHTML = [1,2,3,4].map(n => {
-      const k = order.indexOf(n);
-      const label = PREF_LABEL[n] + (k >= 0 ? ', ' + (k + 1) + '지망' : ', 아직 고르지 않음');
-      return '<button type="button" class="chip" data-n="' + n + '" aria-pressed="' + (k >= 0) + '" aria-label="' + label + '">' +
-        '<span class="rk" aria-hidden="true">' + (k >= 0 ? k + 1 : '') + '</span>' +
-        '<span class="nm">' + PREF_LABEL[n] + '</span><span class="sub">' + SUB[n] + '</span></button>';
-    }).join('');
-    $('#order').innerHTML = order.length
-      ? order.map((n, i) => '<span class="step"><b>' + (i + 1) + '</b>' + PREF_LABEL[n] + '</span>').join('') +
-        ' <button type="button" class="linkbtn" id="resetPrefs">다시 고르기</button>'
-      : '<span class="empty">아직 고르지 않았습니다</span>';
-    const r = $('#resetPrefs');
-    if(r) r.addEventListener('click', () => { order = []; renderPrefs(); clearErr('prefs'); $('#chips button').focus(); });
+  const GRIP = '<svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">' +
+    [3, 8, 13].map(y => '<circle cx="5" cy="' + y + '" r="1.4"/><circle cx="11" cy="' + y + '" r="1.4"/>').join('') + '</svg>';
+  const ranks = $('#ranks');
+  const calm = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  let order = [1, 2, 3, 4];             // 위에서부터 지망 순서대로 포지션 번호(1~4)
+  let orderSet = false;                 // 한 번이라도 옮겼거나 "그대로 할게요"를 눌렀는지. 처음 순서가 무심코 제출되는 것을 막는다
+
+  ranks.innerHTML = order.map(n =>
+    '<li class="rank" data-n="' + n + '"><span class="rk" aria-hidden="true"></span>' +
+    '<span class="nm">' + PREF_LABEL[n] + '</span><span class="sub">' + SUB[n] + '</span>' +
+    '<button type="button" class="grip" title="끌어서 옮기기">' + GRIP + '</button></li>').join('');
+
+  function syncPrefs(){
+    order = [...ranks.children].map(li => Number(li.dataset.n));
+    [...ranks.children].forEach((li, i) => li.querySelector('.grip').setAttribute('aria-label',
+      PREF_LABEL[order[i]] + ', 지금 ' + (i + 1) + '지망. 위아래 화살표 키로 순서를 바꿉니다'));
+    $('#order').innerHTML = orderSet
+      ? '<span class="set">' + order.map((n, i) => (i + 1) + '지망 ' + PREF_LABEL[n]).join(', ') + '</span>'
+      : '<span class="empty">아직 순서를 정하지 않았습니다.</span> <button type="button" class="linkbtn" id="keepOrder">지금 순서 그대로 할게요</button>';
   }
-  $('#chips').addEventListener('click', e => {
-    const b = e.target.closest('.chip');
-    if(!b) return;
-    const n = Number(b.dataset.n);
-    const k = order.indexOf(n);
-    if(k >= 0) order.splice(k, 1);                  // 다시 누르면 빠지고 뒤의 순서가 하나씩 당겨진다
-    else order.push(n);
-    if(order.length === 3) order.push([1,2,3,4].find(x => !order.includes(x)));   // 마지막 하나는 저절로 채운다
-    renderPrefs();
+  function settle(){
+    orderSet = true;
+    syncPrefs();
     clearErr('prefs');
-    const again = $('#chips .chip[data-n="' + n + '"]');
-    if(again) again.focus();
+  }
+  $('#order').addEventListener('click', e => {
+    if(e.target.id !== 'keepOrder') return;
+    settle();
+    ranks.querySelector('.grip').focus();
+  });
+
+  // 줄을 옮긴 뒤, 자리가 바뀐 줄들이 순간 이동하지 않고 미끄러지게 한다. skip은 손에 잡혀 있는 줄
+  function reflow(move, skip){
+    const rows = [...ranks.children].filter(li => li !== skip);
+    const from = rows.map(li => li.getBoundingClientRect().top);
+    move();
+    if(calm) return;
+    const moved = rows.filter((li, i) => {
+      const dy = from[i] - li.getBoundingClientRect().top;
+      if(!dy) return false;
+      li.style.transition = 'none';
+      li.style.transform = 'translateY(' + dy + 'px)';
+      return true;
+    });
+    ranks.offsetHeight;                 // 옮기기 전 위치를 한 번 그려 놓아야 아래 변화가 움직임으로 보인다
+    moved.forEach(li => { li.style.transition = 'transform .14s'; li.style.transform = ''; });
+  }
+
+  let drag = null;
+  ranks.addEventListener('pointerdown', e => {
+    const row = e.target.closest('.rank');
+    // 터치는 손잡이를 잡았을 때만 끈다. 줄의 다른 곳을 쓸면 화면이 그대로 스크롤된다
+    if(!row || e.button !== 0 || (e.pointerType !== 'mouse' && !e.target.closest('.grip'))) return;
+    e.preventDefault();
+    if(drag) drop({pointerId: drag.id});          // 앞선 끌기가 끝나지 않은 채 남아 있으면 먼저 정리한다
+    drag = {row, id: e.pointerId, grab: e.clientY - row.getBoundingClientRect().top, was: order.join()};
+    try{ ranks.setPointerCapture(e.pointerId); }catch(err){ /* 잡지 못해도 목록 안에서는 그대로 끌 수 있다 */ }
+    row.style.transition = 'none';
+    row.classList.add('dragging');
+  });
+  ranks.addEventListener('pointermove', e => {
+    if(!drag || e.pointerId !== drag.id) return;
+    const row = drag.row, h = row.offsetHeight;
+    const y = Math.max(0, Math.min(ranks.clientHeight - h, e.clientY - ranks.getBoundingClientRect().top - drag.grab));
+    // 잡힌 줄의 가장자리가 옆 줄의 가운데를 넘으면 자리를 바꾼다. 빨리 끌면 한 번에 여러 줄을 지나갈 수 있다.
+    // 잡힌 줄은 그대로 두고 옆 줄을 옮긴다
+    for(;;){
+      const next = row.nextElementSibling, prev = row.previousElementSibling;
+      if(next && y + h > next.offsetTop + next.offsetHeight / 2) reflow(() => ranks.insertBefore(next, row), row);
+      else if(prev && y < prev.offsetTop + prev.offsetHeight / 2) reflow(() => ranks.insertBefore(prev, row.nextElementSibling), row);
+      else break;
+    }
+    row.style.transform = 'translateY(' + (y - row.offsetTop) + 'px)';
+  });
+  function drop(e){
+    if(!drag || e.pointerId !== drag.id) return;
+    const row = drag.row, changed = drag.was !== [...ranks.children].map(li => li.dataset.n).join();
+    drag = null;
+    row.classList.remove('dragging');
+    row.style.transition = calm ? 'none' : 'transform .12s';
+    row.style.transform = '';
+    if(changed) settle();
+  }
+  ranks.addEventListener('pointerup', drop);
+  ranks.addEventListener('pointercancel', e => {
+    // 끌다가 끊기면(전화가 오는 등) 끌기 전 순서로 되돌린다
+    if(drag && e.pointerId === drag.id) drag.was.split(',').forEach(n => ranks.appendChild(ranks.querySelector('[data-n="' + n + '"]')));
+    drop(e);
+  });
+  ranks.addEventListener('keydown', e => {
+    const row = e.target.closest('.grip') && e.target.closest('.rank');
+    if(!row || (e.key !== 'ArrowUp' && e.key !== 'ArrowDown')) return;
+    e.preventDefault();
+    const prev = row.previousElementSibling, next = row.nextElementSibling;
+    // 초점이 손잡이에 그대로 남도록, 누른 줄이 아니라 옆 줄을 옮긴다
+    if(e.key === 'ArrowUp' && prev) reflow(() => ranks.insertBefore(prev, next));
+    else if(e.key === 'ArrowDown' && next) reflow(() => ranks.insertBefore(next, row));
+    else return;
+    settle();
   });
 
   /* ---------- 입력 확인 (서버와 같은 기준) ---------- */
   function parseSteam(v){
     const s = v.trim();
     let m = s.match(/^(?:https?:\/\/)?(?:www\.)?steamcommunity\.com\/profiles\/(7656\d{13})\/?(?:[?#].*)?$/i) || s.match(/^(7656\d{13})$/);
-    if(m) return {text: '숫자 ID ' + m[1] + ' 확인'};
+    if(m) return {text: '숫자 ID ' + m[1] + ' 주소입니다. 등록할 때 스팀에서 확인합니다.'};
     m = s.match(/^(?:https?:\/\/)?(?:www\.)?steamcommunity\.com\/id\/([A-Za-z0-9_-]{2,64})\/?(?:[?#].*)?$/i);
-    if(m) return {text: '사용자 지정 주소 ' + m[1] + ' 확인'};
+    if(m) return {text: '사용자 지정 주소 ' + m[1] + '입니다. 등록할 때 스팀에서 확인합니다.'};
     return null;
   }
   const normDiscord = v => v.trim().replace(/^@/, '').toLowerCase();
@@ -220,6 +296,8 @@
     const p = f.querySelector('.err');
     p.textContent = msg; p.hidden = !msg;
     f.classList.toggle('has-err', !!msg);
+    const ok = f.querySelector('.ok-line');
+    if(ok && msg) ok.hidden = true;     // 오류와 "확인합니다" 안내가 함께 보이지 않게
     const input = f.querySelector('input');
     if(input){
       if(msg){ input.setAttribute('aria-invalid', 'true'); }
@@ -260,9 +338,9 @@
       setErr(name, msg);
       if(msg && !first) first = document.getElementById(name);
     });
-    if(order.length !== 4){
-      setErr('prefs', '네 포지션을 모두 순서대로 골라 주세요');
-      if(!first) first = $('#chips .chip');
+    if(!orderSet){
+      setErr('prefs', '포지션 순서를 정해 주세요. 지금 순서가 맞으면 "지금 순서 그대로 할게요"를 눌러 주세요.');
+      if(!first) first = $('#ranks .grip');
     }
     if(first){ first.focus(); return; }
     if(!$('#mine').checked){
@@ -291,7 +369,7 @@
       if(err.code === 'closed'){ block('<p>지금은 선수 등록 기간이 아닙니다.</p>' + inviteHtml()); return; }
       if(['nickname','steam','discord','mmr','prefs'].includes(err.code)){
         setErr(err.code, err.message);
-        const el = err.code === 'prefs' ? $('#chips .chip') : document.getElementById(err.code);
+        const el = err.code === 'prefs' ? $('#ranks .grip') : document.getElementById(err.code);
         el.focus();
       }else{
         $('#formErr').innerHTML = '<p>' + Site.esc(err.message) + '</p>';
@@ -305,7 +383,7 @@
 
   /* ---------- 시작 ---------- */
   if(L.discordInvite){ $('#doneInvite').href = L.discordInvite; $('#doneInvite').hidden = false; }
-  renderPrefs();
+  syncPrefs();
   if(!api.ready){
     block('<p>등록 서버가 아직 연결되지 않았습니다.</p><p class="dim">운영진: config.js의 apiUrl에 Apps Script 웹 앱 주소를 넣어 주세요.</p>');
     return;
