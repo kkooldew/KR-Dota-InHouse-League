@@ -24,8 +24,8 @@ assets/site.js        공용: 설정 기본값, 머리·꼬리, 서버 요청(ap
 records.json          서버 미연결 시 순위 페이지가 읽는 기록 (지금은 빈 기록)
 apps-script/Code.gs   구글 시트에 붙는 서버 (Google Apps Script 웹 앱)
 manager/InhouseLeagueManager_v0_18.html   리그 매니저 v0.18 (팀 편성·경기 기록, 단일 파일, 약 190KB)
-bot/bot.py            디스코드 내전 모집 봇 (discord.py)
-tests/                Apps Script 로직 테스트 (Node, 의존성 없음)
+bot/bot.py            디스코드 내전 모집 봇 (discord.py). 윈도우에서는 bot/run_bot.bat 더블클릭으로 켠다
+tests/                Apps Script 로직 테스트 (Node, 의존성 없음), 봇 로직 테스트 (Python, discord.py 필요)
 ```
 
 GitHub Pages(공개 저장소)로 배포한다. 등록 정보처럼 비공개여야 하는 데이터는 저장소에 두지 않고, 운영진 구글 계정의 구글 시트에 Apps Script로 저장한다.
@@ -92,12 +92,14 @@ discord.py 단일 파일. 설정은 같은 폴더의 `config.json`(저장소에 
 ## 테스트
 
 - 서버 로직: `node tests/apps-script.test.js` (구글 시트·캐시·드라이브를 흉내 낸 환경에서 39가지 확인). 서버를 고치면 테스트도 고치고 돌린다.
-- 페이지: 로컬 정적 서버(`python -m http.server`)로 열고, `config.js`의 `apiUrl`을 가짜 주소로 바꾼 뒤 그 주소 요청을 `tests/gas-harness.js`로 연결해 끝까지 돌려 봤다(Playwright). 실제 구글 배포와 실제 디스코드 연결은 아직 확인하지 않았다.
+- 페이지: 로컬 정적 서버(`python -m http.server`)로 열고, `config.js`의 `apiUrl`을 가짜 주소로 바꾼 뒤 그 주소 요청을 `tests/gas-harness.js`로 연결해 끝까지 돌려 봤다(Playwright).
+- 봇 로직: `python tests/bot.test.py` (가짜 디스코드 객체로 생성·참여·마감·연장·취소, 포럼/일반 채널, 켤 때 확인 등 72가지). 봇을 고치면 테스트도 고치고 돌린다.
+- 실제 배포(2026-10-06): GitHub Pages(`https://kkooldew.github.io/KR-Dota-InHouse-League/`)의 등록·순위 페이지가 실제 Apps Script 서버의 `status`·`records`를 읽는 것과 틀린 운영진 키가 거절되는 것을 확인했다. 봇은 실제 디스코드 서버에서 로그인, 채널·권한 확인, `/내전생성`부터 `/취소`까지의 흐름을 운영자가 확인했다. 실제 등록 제출, 운영진 페이지의 승인·명단 받기, 매니저의 공개 기록 올리기는 아직 확인하지 않았다.
 - 매니저: 파일을 브라우저로 열어 명단 불러오기 → 디스코드 명단 붙여넣기 → 팀 짜기 → 결과 기록 → 공개 페이지 반영 → 기록 저장·되살리기를 확인했다.
 
 ## 다음 할 일 후보
 
 - 운영진 페이지에서 승인하면 봇이 디스코드 역할을 자동으로 주기 (봇이 서버의 승인 명단을 주기적으로 읽거나, 승인 시 봇에 알림).
-- 실제 Apps Script 배포 후 등록·운영진·순위 페이지 동작 확인.
+- 실제 등록 제출, 운영진 페이지의 승인·명단 받기, 매니저의 공개 기록 올리기를 실제 배포에서 확인.
 - 봇 `/참여` 때 등록하지 않은 사람에게 등록 페이지 안내.
 - 시즌 종료 처리(지난 시즌 기록 보관, 새 시즌 시작).
