@@ -28,7 +28,7 @@ from discord import app_commands
 
 # ── 설정 불러오기 ─────────────────────────────────────────────
 CONFIG_PATH = Path(__file__).with_name("config.json")
-with CONFIG_PATH.open(encoding="utf-8") as f:
+with CONFIG_PATH.open(encoding="utf-8-sig") as f:  # 메모장이 파일 앞에 붙이는 표시(BOM)가 있어도 읽는다
     config = json.load(f)
 
 TOKEN = config["token"]
@@ -85,6 +85,7 @@ class InhouseBot(discord.Client):
 
     async def on_ready(self) -> None:
         print(f"로그인 완료: {self.user} (ID: {self.user.id})")
+        await check_setup()
 
 
 bot = InhouseBot()
@@ -96,6 +97,24 @@ async def get_channel(channel_id: int):
     if channel is None:
         channel = await bot.fetch_channel(channel_id)
     return channel
+
+
+async def check_setup() -> None:
+    """켤 때 채널 ID와 봇 권한을 확인해서, 고칠 곳이 있으면 모집을 시작하기 전에 알려 준다."""
+    for label, channel_id in (("관리자 채널", ADMIN_CHANNEL_ID), ("참여 신청 채널", SIGNUP_CHANNEL_ID)):
+        try:
+            channel = await get_channel(channel_id)
+        except discord.HTTPException as e:
+            print(f"[확인 필요] {label}({channel_id})을 찾지 못했습니다. ID가 맞는지, 봇이 그 채널을 볼 수 있는지 확인하세요. ({e})")
+            continue
+        forum = isinstance(channel, discord.ForumChannel)
+        wanted = {"view_channel": "채널 보기", "send_messages": "글 올리기" if forum else "메시지 보내기"}
+        if forum:
+            wanted.update(send_messages_in_threads="스레드에서 메시지 보내기", manage_threads="스레드 관리(글 잠그기)")
+        perms = channel.permissions_for(channel.guild.me)
+        missing = [name for attr, name in wanted.items() if not getattr(perms, attr)]
+        print(f"{label}: #{channel.name} ({'포럼' if forum else '일반 채널'})"
+              + (f" [확인 필요] 봇에 없는 권한: {', '.join(missing)}" if missing else " - 권한 확인"))
 
 
 def is_admin(user: discord.abc.User) -> bool:
