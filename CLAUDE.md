@@ -1,0 +1,91 @@
+# 도타 2 인하우스 리그 — 프로젝트 안내 (Claude Code용)
+
+한국인 대상 도타 2 인하우스 리그를 시즌 단위로 운영하기 위한 도구 모음이다. 운영자는 비개발자에 가까우니 설명과 화면 문구는 쉬운 한국어로 쓴다. 이 파일은 claude.ai 대화에서 만든 작업을 이어받기 위한 요약이다.
+
+## 리그 운영 방식
+
+1. 시즌이 열리면 선수가 등록 페이지에서 닉네임, 스팀 프로필, 디스코드, MMR, 포지션 순서(캐리/미드/오프/서폿 1~4지망)를 낸다.
+2. 운영진이 운영진 페이지에서 승인하고, 승인한 명단을 리그 매니저로 불러온다. 등록 MMR이 인하우스 MMR의 출발점이다.
+3. 내전 때마다 운영진이 디스코드에서 `/내전생성` → 참가자가 `/참여` → 5분 뒤 봇이 명단을 낸다.
+4. 매니저에 명단을 넣어 팀을 짜고(10명 넘으면 매니저가 출전자를 고름), 결과를 기록하면 MMR이 바뀐다.
+5. 기록은 공개 순위 페이지에 반영된다. 시즌 동안 승수가 가장 많은 선수가 선물을 받는다.
+
+포지션: 지망은 네 갈래(1 캐리, 2 미드, 3 오프, 4 서폿). 서폿은 4번과 5번을 함께 뜻하고, 4번·5번 배정은 매니저가 팀을 짤 때 정한다.
+
+## 구성
+
+```
+index.html            선수 등록 (공개)
+ranking.html          순위와 경기 기록 (공개)
+admin.html            운영진: 등록 명단·승인·등록 열고 닫기·매니저용 명단 받기 (운영진 키 필요)
+config.js             공개 설정 (apiUrl, 디스코드 초대 링크 등). 비밀 값 금지
+assets/site.css       세 페이지 공용 스타일 (색·글꼴 토큰은 매니저와 같음)
+assets/site.js        공용: 설정 기본값, 머리·꼬리, 서버 요청(api.get / api.post), toast
+records.json          서버 미연결 시 순위 페이지가 읽는 기록 (지금은 빈 기록)
+apps-script/Code.gs   구글 시트에 붙는 서버 (Google Apps Script 웹 앱)
+manager/InhouseLeagueManager_v0_18.html   리그 매니저 v0.18 (팀 편성·경기 기록, 단일 파일, 약 190KB)
+bot/bot.py            디스코드 내전 모집 봇 (discord.py)
+tests/                Apps Script 로직 테스트 (Node, 의존성 없음)
+```
+
+GitHub Pages(공개 저장소)로 배포한다. 등록 정보처럼 비공개여야 하는 데이터는 저장소에 두지 않고, 운영진 구글 계정의 구글 시트에 Apps Script로 저장한다.
+
+## 데이터 흐름
+
+- 등록: `index.html` → `POST {action:'register'}` → 시트 `선수등록` 탭에 한 줄. 같은 스팀 키면 그 줄을 고친다.
+- 운영진: `admin.html` → 운영진 키로 `adminList`, `adminSetStatus`(대기/승인/제외), `adminConfig`(등록 열기·닫기, 시즌 이름) → **매니저용 명단 받기**로 `{"players":[{name, baseMMR, prefs, discord, steam}]}` 파일 생성.
+- 매니저: 그 파일을 선수단 탭 "CSV 파일 고르기"로 불러온다. 같은 선수 판단은 디스코드 → 스팀 키 → 이름 순서.
+- 봇: 마감 시 관리자 채널에 "매니저 붙여넣기용" 코드 블록(`사용자ID 사용자명 별명` 한 줄씩)을 올리고, `sync_url`/`sync_key`가 있으면 `pushRoster`로 서버에도 올린다.
+- 매니저: 팀 편성 탭 "디스코드 참가 명단으로 고르기"에 붙여넣거나 `adminRoster`로 받아와 참가자를 고른다.
+- 매니저: 저장할 때마다(설정 시) `publishRecords`로 공개 기록을 올린다 → 서버가 드라이브 파일에 저장 → `ranking.html`이 `GET ?action=records`로 읽는다.
+
+## 서버 (apps-script/Code.gs)
+
+- `doGet`: `status`(등록 열림 여부, 시즌, 등록 수, 공개 기록 시각), `records`(공개 기록).
+- `doPost`: 본문은 JSON 문자열, 헤더는 `text/plain`. Apps Script가 OPTIONS 요청을 받지 못해서 프리플라이트가 생기지 않게 이렇게 보낸다. 바꾸지 말 것.
+- 운영진 동작은 본문의 `key`를 스크립트 속성 `ADMIN_KEY`와 비교한다. 키는 URL에 넣지 않는다.
+- 시트 칸: `등록시각, 수정시각, 상태, 닉네임, 스팀프로필, 스팀키, 디스코드, MMR, 1지망~4지망`. 지망 칸에는 `캐리/미드/오프/서폿` 글자로 저장한다. 이 머리글은 매니저의 표 읽기(`parseTable`)로도 바로 읽힌다.
+- 글자 칸은 앞에 `'`를 붙여 쓴다(`text_()`): 닉네임이 `=`로 시작해도 수식이 되지 않고, 긴 디스코드 ID가 숫자로 반올림되지 않게. 읽을 때는 `getDisplayValues()`.
+- 스팀 키: `s:7656…`(숫자 ID) 또는 `id:소문자이름`(사용자 지정 주소).
+- 등록 규칙: 같은 스팀은 처음 등록한 디스코드로만 수정, 디스코드 하나에 스팀 하나, 닉네임은 공백·대소문자 무시하고 중복 금지, 스팀 키당 30초 제한, 숨김 칸(`website`)이 차 있으면 성공한 척만 한다.
+- 공개 기록은 `sanitizeRecords_`가 허용한 칸만 남긴다(디스코드·스팀·설정·정산 규칙 제외). 매니저의 `publicRecords()`도 같은 일을 한다. 둘 다 고칠 것.
+- 공개 기록 저장은 드라이브 파일(`RECORDS_FILE_ID`) + 캐시. 봇 명단은 스크립트 속성 `ROSTER`(최대 60명).
+- 코드를 고치면 운영자가 **배포 관리 → 새 버전**으로 다시 배포해야 반영된다. 웹 앱 주소는 그대로.
+
+## 리그 매니저 (manager/InhouseLeagueManager_v0_18.html)
+
+다른 Claude 계정에서 v0.17까지 만들어진 파일을 이어받아 v0.18로 고쳤다. 프레임워크 없는 단일 HTML. 상태는 `state = {players, matches, settings}` 하나이고, 브라우저 `localStorage`(키 `dota_inhouse_v1`)와 Claude 아티팩트 저장소(`window.storage`, 있을 때만)에 자동 저장한다. "기록 저장" 버튼이 같은 JSON을 파일로 내보낸다.
+
+JS 구역(주석 배너로 나뉨): 기본 값과 저장 → 선수 만들기 / 표 읽기 → 팀 편성 → 경기 결과와 MMR → 그리기 → 동작 연결 → 디스코드 참가 명단과 공개 페이지 연결(v0.18) → 시작.
+
+- 선수: `{id, name, baseMMR, mmr, prefs[4], wins, losses, streak, roleCount[5], discord, steam}`.
+- 경기: 최신이 배열 맨 앞(`unshift`). `{id, at(UTC ISO), winner:'r'|'d', rule:{k, spreadRatio, doubleGap, roleWeights, prefPenalty}, rows:[{id, name, side, role, rank, before, delta}]}`. `rule`은 기록 당시 정산 규칙이라 설정을 바꿔도 지난 경기는 그대로다.
+- 팀 편성 `bestMatch`: 126가지 팀 나누기 × 팀당 120가지 자리 배치. 1순위 지망 등급 → 2순위 라인 균형(같은 자리끼리 차이 합, 사이드 라인 합 차이, `balanceTol` 허용 범위) → 3순위 팀 평균 차이. 진영은 래디언트/다이어 쏠림이 줄어드는 쪽.
+- 출전자 선택 `chooseTen`: 판수 적은 사람 우선, 동률은 조합 비교 또는 지역 탐색.
+- 정산 `computeDeltas`: 자리 배율·지망 감소 반영 팀 평균 → 기대 승률(밑 2, `doubleGap`) → `k × (결과 − 기대)` → `spreadRatio`로 다섯 명에게 분배.
+- 중간 경기 삭제는 `openingBalance` + `replayMatches`로 이후 경기를 각자의 `rule`로 재계산.
+- 서버 주소와 운영진 키는 `localStorage`의 `dota_inhouse_sync`에 따로 둔다. 기록 파일로 내보내지지 않게 하려는 것이니 `state`에 넣지 말 것.
+
+선수·경기 칸을 바꿀 때 함께 고칠 곳: `backupProblem`(검사, 엄격해서 하나라도 어긋나면 파일 전체 거부), `normPlayer`/`stateFrom`(정리), `upgradeSettings`/`stampRules`(예전 버전 변환), `publicRecords`와 서버 `sanitizeRecords_`(공개 칸), `ranking.html`의 `prepare`(읽는 쪽).
+
+## 규칙
+
+- 빌드 도구 없음. 순수 HTML/CSS/JS. 페이지는 GitHub Pages에서 그대로 열려야 한다.
+- 사용자 입력과 서버 데이터는 화면에 넣기 전에 반드시 `esc()`로 감싼다.
+- 화면 문구는 존댓말 평서문, 짧게. 오류는 무엇이 잘못됐고 어떻게 고치는지 말한다.
+- 디자인 토큰: 배경 `#141a20`, 패널 `#212b34`, 선 `#38454f`, 글자 `#dcd6c8`, 금색 `#d8ab3f`, 래디언트 `#79a63c`, 다이어 `#bd4438`. 글꼴 Noto Sans KR, 숫자 Oswald. 공개 페이지와 매니저가 같은 색을 쓴다.
+- 비밀 값(봇 토큰, 운영진 키)은 저장소에 절대 넣지 않는다. `bot/config.json`은 `.gitignore`에 있다. 매니저 파일에는 데이터나 키가 들어 있지 않아 공개돼도 괜찮다.
+- 시간은 저장할 때 UTC ISO, 보여 줄 때 `Asia/Seoul`.
+
+## 테스트
+
+- 서버 로직: `node tests/apps-script.test.js` (구글 시트·캐시·드라이브를 흉내 낸 환경에서 39가지 확인). 서버를 고치면 테스트도 고치고 돌린다.
+- 페이지: 로컬 정적 서버(`python -m http.server`)로 열고, `config.js`의 `apiUrl`을 가짜 주소로 바꾼 뒤 그 주소 요청을 `tests/gas-harness.js`로 연결해 끝까지 돌려 봤다(Playwright). 실제 구글 배포와 실제 디스코드 연결은 아직 확인하지 않았다.
+- 매니저: 파일을 브라우저로 열어 명단 불러오기 → 디스코드 명단 붙여넣기 → 팀 짜기 → 결과 기록 → 공개 페이지 반영 → 기록 저장·되살리기를 확인했다.
+
+## 다음 할 일 후보
+
+- 운영진 페이지에서 승인하면 봇이 디스코드 역할을 자동으로 주기 (봇이 서버의 승인 명단을 주기적으로 읽거나, 승인 시 봇에 알림).
+- 실제 Apps Script 배포 후 등록·운영진·순위 페이지 동작 확인.
+- 봇 `/참여` 때 등록하지 않은 사람에게 등록 페이지 안내.
+- 시즌 종료 처리(지난 시즌 기록 보관, 새 시즌 시작).

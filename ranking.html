@@ -1,0 +1,565 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>순위와 경기 기록 | 도타 2 인하우스 리그</title>
+<meta name="description" content="도타 2 인하우스 리그 시즌 순위와 경기 기록">
+<meta name="theme-color" content="#141a20">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Oswald:wght@400;500;600&family=Noto+Sans+KR:wght@400;500;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/site.css">
+<style>
+.status{font-size:13px;color:var(--bone-dim);display:flex;flex-wrap:wrap;gap:4px 16px;align-items:center;margin-bottom:6px}
+.status .warn{color:var(--dire)}
+.lead{margin:18px 0 4px;font-size:19px;line-height:1.5;max-width:60ch}
+.lead strong{font-weight:700}
+.prize{margin:0 0 24px;font-size:13.5px;color:var(--bone-dim)}
+.search{background:var(--ink-2);border:1px solid var(--line);border-radius:3px;padding:7px 10px;min-width:0;flex:1 1 160px;max-width:240px}
+.empty-box{border:1px dashed var(--line);border-radius:4px;padding:28px 24px;max-width:640px}
+.empty-box h2{margin:0 0 6px;font-size:18px}
+.empty-box p{margin:0;color:var(--bone-dim)}
+/* 탭 */
+.tabs{display:flex;gap:4px;border-bottom:1px solid var(--line);margin-bottom:18px}
+.tabs button{background:none;border:0;border-bottom:2px solid transparent;margin-bottom:-1px;
+  padding:10px 14px;color:var(--bone-dim);font-size:15px;font-weight:500}
+.tabs button:hover{color:var(--bone)}
+.tabs button[aria-selected="true"]{color:var(--gold);border-bottom-color:var(--gold)}
+
+/* 조작 */
+.controls{display:flex;flex-wrap:wrap;gap:10px 14px;align-items:center;margin-bottom:10px}
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:3px;overflow:hidden}
+.seg button{background:var(--ink);border:0;padding:7px 12px;font-size:13.5px;color:var(--bone-dim)}
+.seg button + button{border-left:1px solid var(--line)}
+.seg button:hover{color:var(--bone)}
+.seg button[aria-pressed="true"]{background:var(--panel);color:var(--bone)}
+.search{background:var(--ink-2);border:1px solid var(--line);border-radius:3px;padding:7px 10px;min-width:0;flex:1 1 160px;max-width:240px}
+.search::placeholder{color:#6d7a84}
+.rule{margin:0 0 14px;font-size:12.5px;color:var(--bone-dim)}
+
+/* 순위표 */
+.scroll{overflow-x:auto;-webkit-overflow-scrolling:touch}
+table.board{width:100%;border-collapse:collapse;min-width:640px}
+.board th{text-align:left;font-size:12px;font-weight:500;color:var(--bone-dim);padding:0 10px 8px;
+  border-bottom:1px solid var(--line);white-space:nowrap}
+.board td{padding:11px 10px;border-bottom:1px solid var(--line-soft);vertical-align:middle}
+.board th.n,.board td.n{text-align:right}
+.board tr.row:hover td{background:var(--ink-2)}
+.board tr.row.is-open td{background:var(--ink-2);border-bottom-color:transparent}
+
+.c-rank{width:44px;font-family:var(--num);font-size:17px;color:var(--bone-dim)}
+.c-rank.is-top{color:var(--gold)}
+.who{background:none;border:0;padding:0;text-align:left;display:flex;flex-direction:column;gap:2px}
+.who .nm{font-weight:500;font-size:15.5px}
+.who:hover .nm{color:var(--gold)}
+.prefs{display:flex;gap:6px;font-size:12px;color:var(--bone-dim)}
+.prefs .first{color:var(--bone)}
+.num{font-family:var(--num);font-variant-numeric:tabular-nums;font-weight:500}
+.c-w,.c-l,.c-rate{font-family:var(--num);font-size:16px;font-variant-numeric:tabular-nums}
+.c-l,.c-rate{color:var(--bone-dim)}
+.c-mmr .v{font-family:var(--num);font-size:16px;font-variant-numeric:tabular-nums}
+.c-mmr .d{font-family:var(--num);font-size:12.5px;margin-left:7px}
+.up{color:var(--rad)}
+.down{color:var(--dire)}
+
+/* 지금 정렬 기준인 숫자를 가장 크게 */
+.board.by-wins .c-w{font-size:24px;color:var(--gold);line-height:1}
+.board.by-mmr .c-mmr .v{font-size:22px;color:var(--gold);line-height:1}
+
+.form{display:inline-flex;gap:3px;vertical-align:middle}
+.chip{width:20px;height:20px;border-radius:2px;display:inline-grid;place-items:center;font-size:11px;font-weight:700}
+.chip.w{background:var(--rad-deep);color:#cfe3a8}
+.chip.l{background:var(--dire-deep);color:#f1b6ad}
+.c-streak{white-space:nowrap;font-size:13.5px}
+.dim{color:var(--bone-dim)}
+tr.idle .c-name .nm,tr.idle td{color:var(--bone-dim)}
+.none{padding:28px 10px;text-align:center;color:var(--bone-dim)}
+
+/* 펼친 선수 정보 */
+tr.detail td{background:var(--ink-2);padding:4px 10px 20px}
+.detail-grid{display:grid;grid-template-columns:minmax(200px,260px) 1fr;gap:18px 32px}
+.detail-grid h4{margin:6px 0 8px;font-size:12.5px;font-weight:500;color:var(--bone-dim)}
+.facts{margin:0;display:grid;grid-template-columns:auto 1fr;gap:4px 14px;font-size:13.5px}
+.facts dt{color:var(--bone-dim)}
+.facts dd{margin:0}
+.roles{list-style:none;margin:12px 0 0;padding:0;display:grid;grid-template-columns:repeat(5,1fr);gap:4px}
+.roles li{border:1px solid var(--line);border-radius:3px;padding:5px 4px;text-align:center;font-size:11.5px;color:var(--bone-dim)}
+.roles b{display:block;font-family:var(--num);font-size:16px;font-weight:500;color:var(--bone)}
+table.hist{border-collapse:collapse;font-size:13.5px}
+.board .hist td{padding:5px 18px 5px 0;border-bottom:1px solid var(--line-soft);background:none;white-space:nowrap}
+.hist .r{color:var(--rad)}
+.hist .d{color:var(--dire)}
+.note{font-size:12.5px;color:var(--bone-dim);margin:8px 0 0}
+
+/* 경기 기록 */
+.match{border:1px solid var(--line);border-radius:4px;margin-bottom:14px;overflow:hidden}
+.mh{display:flex;flex-wrap:wrap;gap:4px 14px;align-items:baseline;padding:10px 14px;background:var(--ink-2);border-bottom:1px solid var(--line)}
+.mh time{font-size:13.5px;color:var(--bone-dim)}
+.mh .result{font-weight:700;font-size:14px}
+.mh .result.r{color:var(--rad)}
+.mh .result.d{color:var(--dire)}
+.face{display:grid;grid-template-columns:1fr 92px 1fr}
+.face > div{padding:8px 14px;border-bottom:1px solid var(--line-soft)}
+.face > div:nth-last-child(-n+3){border-bottom:0}
+.sh{font-size:13px;font-weight:700;display:flex;gap:8px;align-items:baseline}
+.sh.r{color:var(--rad);border-top:3px solid var(--rad)}
+.sh.d{color:var(--dire);border-top:3px solid var(--dire);justify-content:flex-end}
+.sh .avg{font-weight:400;color:var(--bone-dim);font-size:12px}
+.sh-mid{border-top:3px solid var(--line)}
+.pl{display:flex;gap:8px;align-items:baseline;min-width:0}
+.pl.d{justify-content:flex-end;text-align:right}
+.pl .nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pl .dl{font-family:var(--num);font-size:13px}
+.lost .nm{color:var(--bone-dim)}
+.rl{text-align:center;font-size:12px;color:var(--bone-dim);white-space:nowrap}
+.rl b{font-family:var(--num);font-weight:500;color:var(--bone);font-size:14px;margin-right:3px}
+.more{display:block;margin:6px auto 0;background:var(--ink);border:1px solid var(--line);border-radius:3px;padding:8px 16px;color:var(--bone-dim)}
+.more:hover{color:var(--bone);border-color:var(--bone-dim)}
+
+
+@media (max-width:640px){
+  .lead{font-size:17px}
+  .c-streak,.c-rate{display:none}
+  table.board{min-width:470px}
+  .board td{padding:10px 7px}
+  .board th{padding:0 7px 8px}
+  .detail-grid{grid-template-columns:1fr}
+  .face{grid-template-columns:1fr 64px 1fr}
+  .face > div{padding:8px 8px}
+  .rl small{display:none}
+}
+@media (prefers-reduced-motion:no-preference){
+  .who .nm,.tabs button,.seg button{transition:color .12s}
+}
+</style>
+</head>
+<body>
+<header id="site-head"></header>
+
+<main class="wrap">
+  <h1 class="page-title">순위와 경기 기록</h1>
+  <div class="status" id="status" aria-live="polite"></div>
+
+  <div id="main" hidden>
+    <p class="lead" id="lead"></p>
+    <p class="prize" id="prize"></p>
+
+    <div class="tabs" role="tablist" aria-label="보기 선택">
+      <button role="tab" id="tab-rank" aria-controls="panel-rank" aria-selected="true">순위</button>
+      <button role="tab" id="tab-matches" aria-controls="panel-matches" aria-selected="false" tabindex="-1">경기 기록</button>
+    </div>
+
+    <section id="panel-rank" role="tabpanel" aria-labelledby="tab-rank">
+      <div class="controls">
+        <div class="seg" role="group" aria-label="정렬 기준" id="sortSeg">
+          <button data-sort="wins" aria-pressed="true">승수</button>
+          <button data-sort="mmr" aria-pressed="false">인하우스 MMR</button>
+        </div>
+        <div class="seg" role="group" aria-label="1지망 포지션" id="posSeg">
+          <button data-pos="0" aria-pressed="true">전체</button>
+          <button data-pos="1" aria-pressed="false">캐리</button>
+          <button data-pos="2" aria-pressed="false">미드</button>
+          <button data-pos="3" aria-pressed="false">오프</button>
+          <button data-pos="4" aria-pressed="false">서폿</button>
+        </div>
+        <input type="search" class="search" id="q" placeholder="선수 이름 찾기" aria-label="선수 이름으로 찾기">
+      </div>
+      <p class="rule" id="rule"></p>
+      <div class="scroll">
+        <table class="board by-wins" id="board">
+          <thead>
+            <tr>
+              <th scope="col">순위</th>
+              <th scope="col">선수</th>
+              <th scope="col" class="n">승</th>
+              <th scope="col" class="n">패</th>
+              <th scope="col" class="n c-rate">승률</th>
+              <th scope="col">인하우스 MMR</th>
+              <th scope="col" title="오른쪽이 가장 최근 경기">최근 다섯 판</th>
+              <th scope="col" class="c-streak">연속</th>
+            </tr>
+          </thead>
+          <tbody id="boardBody"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="panel-matches" role="tabpanel" aria-labelledby="tab-matches" hidden>
+      <div id="matchList"></div>
+    </section>
+  </div>
+
+  <section class="empty-box" id="empty">
+    <h2 id="emptyTitle">기록을 불러오는 중입니다</h2>
+    <p id="emptyText"></p>
+  </section>
+</main>
+
+<footer id="site-foot"></footer>
+
+<script src="config.js"></script>
+<script src="assets/site.js"></script>
+<script>
+const {L, api, mountChrome, setSeason, esc} = window.Site;
+const $ = s => document.querySelector(s);
+const REFRESH = Math.max(30, Number(L.refreshSeconds) || 120);
+mountChrome('ranking');
+
+const ROLE_LABEL = ['', '캐리', '미드', '오프', '4번 서폿', '5번 서폿'];
+const PREF_LABEL = ['', '캐리', '미드', '오프', '서폿'];   // 지망은 네 갈래. 4·5번은 서폿 하나로 묶는다
+const SIDE_LABEL = {r:'래디언트', d:'다이어'};
+
+const ui = {tab:'rank', sort:'wins', pos:0, q:'', open:new Set(), matchLimit:20};
+let model = null;          // 화면에 쓰는 정리된 기록
+let lastText = null;       // 마지막으로 읽은 내용(바뀌었을 때만 다시 그린다)
+let lastChecked = null;
+let stale = false;
+let timer = null;
+const int = v => { const n = Math.round(Number(v)); return Number.isFinite(n) ? n : 0; };
+const safeId = s => String(s).replace(/[^\w-]/g, '_');
+const signed = n => (n > 0 ? '+' : '') + n;
+
+function fmtTime(iso, short){
+  const d = new Date(iso);
+  if(isNaN(d)) return '시간 기록 없음';
+  return d.toLocaleString('ko-KR', short
+    ? {timeZone:'Asia/Seoul', month:'numeric', day:'numeric', hour:'2-digit', minute:'2-digit', hour12:false}
+    : {timeZone:'Asia/Seoul', month:'long', day:'numeric', hour:'numeric', minute:'2-digit'});
+}
+const fmtClock = d => d.toLocaleTimeString('ko-KR', {timeZone:'Asia/Seoul', hour:'numeric', minute:'2-digit'});
+
+/* =========================================================
+   기록 정리
+   ========================================================= */
+function prepare(data){
+  if(!data || !Array.isArray(data.players)) throw new Error('선수 목록이 없는 파일입니다');
+  const players = data.players.filter(p => p && p.id != null).map(p => ({
+    id: String(p.id),
+    name: String(p.name ?? '이름 없음'),
+    mmr: int(p.mmr),
+    base: p.baseMMR == null ? int(p.mmr) : int(p.baseMMR),
+    wins: int(p.wins),
+    losses: int(p.losses),
+    streak: int(p.streak),
+    prefs: Array.isArray(p.prefs) ? p.prefs.map(int).filter(v => v >= 1 && v <= 4) : [],
+    roleCount: Array.isArray(p.roleCount) && p.roleCount.length === 5 ? p.roleCount.map(int) : [0,0,0,0,0],
+    history: []                                        // 최근 경기부터
+  }));
+  const byId = new Map(players.map(p => [p.id, p]));
+  const time = m => { const t = new Date(m.at).getTime(); return Number.isFinite(t) ? t : 0; };
+  const matches = (Array.isArray(data.matches) ? data.matches : [])
+    .filter(m => m && Array.isArray(m.rows) && (m.winner === 'r' || m.winner === 'd'))
+    .map((m, i) => ({m, i}))
+    .sort((a, b) => (time(b.m) - time(a.m)) || (a.i - b.i))   // 최근 경기부터. 시간이 같으면 파일 순서를 따른다
+    .map(x => x.m);
+  for(const m of matches){
+    for(const r of m.rows){
+      const p = byId.get(String(r.id));
+      if(p) p.history.push({m, r, won: r.side === m.winner});
+    }
+  }
+  return {players, matches};
+}
+
+// 순위를 매긴다. 승수 기준: 승이 많은 순, 같으면 패가 적은 순, 승패가 같으면 공동 순위.
+// 경기를 치르지 않은 선수는 맨 아래에 순위 없이 둔다.
+function ranked(players, mode){
+  const played = p => p.wins + p.losses > 0;
+  const list = players.slice();
+  let keyOf;
+  if(mode === 'mmr'){
+    list.sort((a,b) => (b.mmr - a.mmr) || (b.wins - a.wins) || a.name.localeCompare(b.name, 'ko'));
+    keyOf = p => String(p.mmr);
+  }else{
+    list.sort((a,b) => (played(b) - played(a)) || (b.wins - a.wins) || (a.losses - b.losses) ||
+      (b.mmr - a.mmr) || a.name.localeCompare(b.name, 'ko'));
+    keyOf = p => played(p) ? p.wins + ':' + p.losses : null;
+  }
+  let rank = 0, prev;
+  return list.map((p, i) => {
+    const key = keyOf(p);
+    if(key === null) return {p, rank:null};
+    if(key !== prev){ rank = i + 1; prev = key; }
+    return {p, rank};
+  });
+}
+
+/* =========================================================
+   그리기
+   ========================================================= */
+function renderAll(){
+  $('#main').hidden = false;
+  $('#empty').hidden = true;
+  renderLead();
+  renderStatus();
+  renderBoard();
+  renderMatches();
+}
+
+function renderLead(){
+  const top = ranked(model.players, 'wins').filter(x => x.rank === 1).map(x => x.p);
+  let html;
+  if(!top.length){
+    html = '아직 치른 경기가 없습니다. 첫 경기 결과가 올라오면 순위가 생깁니다.';
+  }else if(top.length === 1){
+    const p = top[0];
+    html = '<strong>' + esc(p.name) + '</strong> 선수가 ' + p.wins + '승 ' + p.losses + '패로 선두입니다.';
+  }else{
+    const names = top.slice(0, 3).map(p => '<strong>' + esc(p.name) + '</strong>').join(', ');
+    const rest = top.length > 3 ? ' 외 ' + (top.length - 3) + '명' : '';
+    html = names + rest + ' 선수가 ' + top[0].wins + '승 ' + top[0].losses + '패로 공동 선두입니다.';
+  }
+  $('#lead').innerHTML = html;
+}
+
+function renderStatus(){
+  const latest = model.matches[0];
+  const parts = [];
+  parts.push('<span>선수 ' + model.players.length + '명, 경기 ' + model.matches.length + '판</span>');
+  if(latest) parts.push('<span>마지막 경기 ' + esc(fmtTime(latest.at)) + '</span>');
+  parts.push('<span>' + (lastChecked ? fmtClock(lastChecked) + '에 확인, ' : '') + REFRESH + '초마다 자동 갱신</span>');
+  if(stale) parts.push('<span class="warn">새 기록을 불러오지 못해 이전 기록을 보여 주고 있습니다</span>');
+  $('#status').innerHTML = parts.join('');
+}
+
+function prefTags(p){
+  if(!p.prefs.length) return '';
+  return '<span class="prefs">' + p.prefs.slice(0, 2).map((v, i) =>
+    '<span class="' + (i === 0 ? 'first' : '') + '">' + PREF_LABEL[v] + '</span>').join('') + '</span>';
+}
+
+function formChips(p){
+  const last = p.history.slice(0, 5).reverse();        // 왼쪽이 오래된 경기, 오른쪽이 가장 최근 경기
+  if(!last.length) return '<span class="dim">–</span>';
+  const label = '최근 경기 결과, 오래된 순서로 ' + last.map(h => h.won ? '승' : '패').join(' ');
+  return '<span class="form" role="img" aria-label="' + label + '">' +
+    last.map(h => '<span class="chip ' + (h.won ? 'w' : 'l') + '">' + (h.won ? '승' : '패') + '</span>').join('') + '</span>';
+}
+
+function streakText(s){
+  if(s > 0) return '<span class="up">' + s + '연승</span>';
+  if(s < 0) return '<span class="down">' + (-s) + '연패</span>';
+  return '<span class="dim">–</span>';
+}
+
+function detailHtml(p){
+  const games = p.wins + p.losses;
+  const sides = {r:0, d:0};
+  p.history.forEach(h => { sides[h.r.side === 'd' ? 'd' : 'r']++; });
+  const missing = games - p.history.length;
+  const pref = p.prefs.length ? p.prefs.map(v => PREF_LABEL[v]).join(', ') : '적지 않음';
+
+  const facts =
+    '<dl class="facts">' +
+      '<dt>시작 MMR</dt><dd class="num">' + p.base + '</dd>' +
+      '<dt>지금 MMR</dt><dd class="num">' + p.mmr + ' <span class="' + (p.mmr - p.base >= 0 ? 'up' : 'down') + '">' +
+        (p.mmr !== p.base ? signed(p.mmr - p.base) : '') + '</span></dd>' +
+      '<dt>지망 순서</dt><dd>' + esc(pref) + '</dd>' +
+      '<dt>진영</dt><dd>래디언트 ' + sides.r + '판, 다이어 ' + sides.d + '판</dd>' +
+    '</dl>' +
+    '<ul class="roles" aria-label="자리별 판수">' +
+      p.roleCount.map((c, i) => '<li><b>' + c + '</b>' + (i + 1) + ' ' + ROLE_LABEL[i + 1].replace(/^\d번 /, '') + '</li>').join('') +
+    '</ul>';
+
+  let hist;
+  if(!p.history.length){
+    hist = '<p class="note">기록된 경기가 아직 없습니다.</p>';
+  }else{
+    hist = '<table class="hist"><tbody>' + p.history.slice(0, 10).map(h =>
+      '<tr><td class="dim">' + esc(fmtTime(h.m.at, true)) + '</td>' +
+      '<td class="' + (h.r.side === 'd' ? 'd' : 'r') + '">' + SIDE_LABEL[h.r.side === 'd' ? 'd' : 'r'] + '</td>' +
+      '<td>' + int(h.r.role) + ' ' + (ROLE_LABEL[int(h.r.role)] || '') .replace(/^\d번 /, '') + '</td>' +
+      '<td class="' + (h.won ? 'up' : 'down') + '">' + (h.won ? '승' : '패') + '</td>' +
+      '<td class="num ' + (int(h.r.delta) >= 0 ? 'up' : 'down') + '">' + signed(int(h.r.delta)) + '</td>' +
+      '<td class="num">' + (int(h.r.before) + int(h.r.delta)) + '</td></tr>').join('') +
+      '</tbody></table>' +
+      (p.history.length > 10 ? '<p class="note">최근 10경기만 보여 줍니다.</p>' : '');
+  }
+  if(missing > 0) hist += '<p class="note">전적 중 ' + missing + '판은 이전에 불러온 기록이라 경기 목록에 없습니다.</p>';
+
+  return '<div class="detail-grid"><div><h4>선수 정보</h4>' + facts + '</div><div><h4>최근 경기</h4>' + hist + '</div></div>';
+}
+
+function renderBoard(){
+  const table = $('#board');
+  table.className = 'board by-' + ui.sort;
+  $('#rule').textContent = ui.sort === 'wins'
+    ? '승수가 많은 순서입니다. 승수가 같으면 패가 적은 선수가 위이고, 승패가 모두 같으면 공동 순위입니다.'
+    : '인하우스 MMR이 높은 순서입니다. 경기를 치르기 전에는 등록한 MMR로 시작합니다.';
+
+  const q = ui.q.trim().toLowerCase();
+  const list = ranked(model.players, ui.sort)
+    .filter(x => (!ui.pos || x.p.prefs[0] === ui.pos) && (!q || x.p.name.toLowerCase().includes(q)));
+
+  if(!list.length){
+    $('#boardBody').innerHTML = '<tr><td colspan="8" class="none">' +
+      (model.players.length ? '조건에 맞는 선수가 없습니다. 검색어나 포지션을 바꿔 보세요.' : '등록된 선수가 없습니다.') + '</td></tr>';
+    return;
+  }
+
+  $('#boardBody').innerHTML = list.map(({p, rank}) => {
+    const games = p.wins + p.losses;
+    const open = ui.open.has(p.id);
+    const did = 'd-' + safeId(p.id);
+    const delta = p.mmr - p.base;
+    return '<tr class="row' + (games ? '' : ' idle') + (open ? ' is-open' : '') + '">' +
+        '<td class="c-rank' + (rank === 1 ? ' is-top' : '') + '">' + (rank ?? '–') + '</td>' +
+        '<td class="c-name"><button class="who" type="button" data-id="' + esc(p.id) + '" aria-expanded="' + open + '" aria-controls="' + did + '">' +
+          '<span class="nm">' + esc(p.name) + '</span>' + prefTags(p) + '</button></td>' +
+        '<td class="c-w n">' + p.wins + '</td>' +
+        '<td class="c-l n">' + p.losses + '</td>' +
+        '<td class="c-rate n">' + (games ? Math.round(p.wins / games * 100) + '%' : '–') + '</td>' +
+        '<td class="c-mmr"><span class="v">' + p.mmr + '</span>' +
+          (delta ? '<span class="d ' + (delta > 0 ? 'up' : 'down') + '">' + signed(delta) + '</span>' : '') + '</td>' +
+        '<td class="c-form">' + formChips(p) + '</td>' +
+        '<td class="c-streak">' + streakText(p.streak) + '</td>' +
+      '</tr>' +
+      '<tr class="detail" id="' + did + '"' + (open ? '' : ' hidden') + '><td colspan="8">' + (open ? detailHtml(p) : '') + '</td></tr>';
+  }).join('');
+}
+
+function matchCard(m){
+  const at = (side, role) => m.rows.find(r => r.side === side && int(r.role) === role);
+  const avg = side => {
+    const rows = m.rows.filter(r => r.side === side);
+    return rows.length ? Math.round(rows.reduce((s, r) => s + int(r.before), 0) / rows.length) : '–';
+  };
+  const cell = (r, side) => {
+    if(!r) return '<div class="pl ' + side + '"><span class="dim">–</span></div>';
+    const d = int(r.delta);
+    const dl = '<span class="dl ' + (d >= 0 ? 'up' : 'down') + '">' + signed(d) + '</span>';
+    const nm = '<span class="nm" title="' + esc(r.name) + '">' + esc(r.name) + '</span>';
+    return '<div class="pl ' + side + (side === m.winner ? '' : ' lost') + '">' + (side === 'r' ? nm + dl : dl + nm) + '</div>';
+  };
+  let rows = '';
+  for(let role = 1; role <= 5; role++){
+    rows += cell(at('r', role), 'r') +
+      '<div class="rl"><b>' + role + '</b><small>' + ROLE_LABEL[role].replace(/^\d번 /, '') + '</small></div>' +
+      cell(at('d', role), 'd');
+  }
+  return '<article class="match">' +
+    '<div class="mh"><time datetime="' + esc(m.at) + '">' + esc(fmtTime(m.at)) + '</time>' +
+      '<span class="result ' + m.winner + '">' + SIDE_LABEL[m.winner] + ' 승리</span></div>' +
+    '<div class="face">' +
+      '<div class="sh r">래디언트 <span class="avg">평균 ' + avg('r') + '</span></div>' +
+      '<div class="sh-mid" aria-hidden="true"></div>' +
+      '<div class="sh d"><span class="avg">평균 ' + avg('d') + '</span> 다이어</div>' +
+      rows +
+    '</div></article>';
+}
+
+function renderMatches(){
+  const box = $('#matchList');
+  if(!model.matches.length){
+    box.innerHTML = '<p class="none">아직 기록된 경기가 없습니다.</p>';
+    return;
+  }
+  const shown = model.matches.slice(0, ui.matchLimit);
+  const left = model.matches.length - shown.length;
+  box.innerHTML = shown.map(matchCard).join('') +
+    (left > 0 ? '<button class="more" type="button" id="moreMatches">이전 경기 ' + Math.min(left, 20) + '판 더 보기</button>' : '');
+  const more = $('#moreMatches');
+  if(more) more.addEventListener('click', () => { ui.matchLimit += 20; renderMatches(); });
+}
+
+function showEmpty(title, text){
+  $('#main').hidden = true;
+  $('#empty').hidden = false;
+  $('#emptyTitle').textContent = title;
+  $('#emptyText').textContent = text;
+}
+
+/* =========================================================
+   불러오기: 서버가 연결돼 있으면 서버의 공개 기록을, 아니면 같은 폴더의 records.json을 읽는다
+   ========================================================= */
+async function fetchRecords(){
+  if(api.ready){
+    const j = await api.get('records');
+    return JSON.stringify(j.records || {players:[], matches:[]});
+  }
+  const res = await fetch('records.json?v=' + Date.now(), {cache:'no-store'});
+  if(!res.ok) throw new Error('HTTP ' + res.status);
+  return await res.text();
+}
+
+async function load(){
+  try{
+    const text = await fetchRecords();
+    lastChecked = new Date();
+    stale = false;
+    if(text !== lastText){
+      const ids = new Set();
+      model = prepare(JSON.parse(text));
+      lastText = text;
+      model.players.forEach(p => ids.add(p.id));
+      ui.open.forEach(id => { if(!ids.has(id)) ui.open.delete(id); });
+      renderAll();
+    }else renderStatus();
+  }catch(err){
+    if(model){ stale = true; renderStatus(); return; }
+    showEmpty('기록을 불러오지 못했습니다', err.message || '잠시 후 다시 시도해 주세요.');
+  }
+  if(!timer) timer = setInterval(() => { if(document.visibilityState === 'visible') load(); }, REFRESH * 1000);
+}
+document.addEventListener('visibilitychange', () => { if(document.visibilityState === 'visible' && model) load(); });
+
+/* =========================================================
+   조작
+   ========================================================= */
+function selectTab(name, focus){
+  ui.tab = name;
+  ['rank', 'matches'].forEach(t => {
+    const on = t === name;
+    const btn = $('#tab-' + t);
+    btn.setAttribute('aria-selected', String(on));
+    btn.tabIndex = on ? 0 : -1;
+    $('#panel-' + t).hidden = !on;
+    if(on && focus) btn.focus();
+  });
+}
+$('#tab-rank').addEventListener('click', () => selectTab('rank'));
+$('#tab-matches').addEventListener('click', () => selectTab('matches'));
+document.querySelector('.tabs').addEventListener('keydown', e => {
+  if(e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+  selectTab(ui.tab === 'rank' ? 'matches' : 'rank', true);
+});
+
+function bindSeg(sel, attr, apply){
+  $(sel).addEventListener('click', e => {
+    const b = e.target.closest('button');
+    if(!b) return;
+    $(sel).querySelectorAll('button').forEach(x => x.setAttribute('aria-pressed', String(x === b)));
+    apply(b.dataset[attr]);
+    if(model) renderBoard();
+  });
+}
+bindSeg('#sortSeg', 'sort', v => { ui.sort = v; });
+bindSeg('#posSeg', 'pos', v => { ui.pos = Number(v); });
+$('#q').addEventListener('input', e => { ui.q = e.target.value; if(model) renderBoard(); });
+
+$('#boardBody').addEventListener('click', e => {
+  const b = e.target.closest('.who');
+  if(!b) return;
+  const id = b.dataset.id;
+  const open = !ui.open.has(id);
+  if(open) ui.open.add(id); else ui.open.delete(id);
+  const row = b.closest('tr');
+  const detail = document.getElementById(b.getAttribute('aria-controls'));
+  const p = model.players.find(x => x.id === id);
+  b.setAttribute('aria-expanded', String(open));
+  row.classList.toggle('is-open', open);
+  if(open && p) detail.querySelector('td').innerHTML = detailHtml(p);
+  detail.hidden = !open;
+});
+
+/* =========================================================
+   시작
+   ========================================================= */
+$('#prize').textContent = L.prizeNote || '';
+$('#prize').hidden = !L.prizeNote;
+if(api.ready) api.get('status').then(s => setSeason(s.season)).catch(() => {});
+load();
+</script>
+</body>
+</html>

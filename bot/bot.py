@@ -1,0 +1,306 @@
+"""
+도타 2 인하우스 내전 모집 봇
+
+- 관리자 채널에서 /내전생성  → 참여 신청 채널에 공지를 올리고 모집 시작
+- 참여 신청 채널에서 /참여, /참여취소
+- 모집 시간(기본 5분)이 끝나면 참여 명단을 자동으로 공지
+- 관리자 채널에는 리그 매니저에 붙여넣을 명단(디스코드 ID·사용자명·별명)을 함께 올림
+- 서버 주소(sync_url)와 운영진 키(sync_key)를 적어 두면, 명단을 리그 서버에도 올려
+  매니저의 "봇이 올린 명단 불러오기"로 바로 받을 수 있음
+
+설정은 같은 폴더의 config.json 에서 바꿉니다. (config.example.json 을 복사해 만드세요)
+"""
+from __future__ import annotations
+
+import asyncio
+import json
+import time
+from pathlib import Path
+
+import aiohttp
+import discord
+from discord import app_commands
+
+# ── 설정 불러오기 ─────────────────────────────────────────────
+CONFIG_PATH = Path(__file__).with_name("config.json")
+with CONFIG_PATH.open(encoding="utf-8") as f:
+    config = json.load(f)
+
+TOKEN = config["token"]
+GUILD = discord.Object(id=int(config["guild_id"]))
+ADMIN_CHANNEL_ID = int(config["admin_channel_id"])
+SIGNUP_CHANNEL_ID = int(config["signup_channel_id"])
+ADMIN_ROLE_ID = int(config.get("admin_role_id", 0))
+SIGNUP_SECONDS = int(float(config.get("signup_minutes", 5)) * 60)
+ANNOUNCEMENT = config["announcement"]
+SYNC_URL = str(config.get("sync_url", "")).strip()
+SYNC_KEY = str(config.get("sync_key", "")).strip()
+PLAYERS_NEEDED = 10  # 5 vs 5
+
+
+# ── 모집 상태 ────────────────────────────────────────────────
+class Recruitment:
+    """진행 중인 내전 모집 1건"""
+
+    def __init__(self, host: discord.abc.User, end_ts: int) -> None:
+        self.host = host
+        self.end_ts = end_ts
+        # user_id -> {"name": 서버 별명, "username": 디스코드 사용자명}
+        # dict 는 넣은 순서를 유지하므로 신청 순서가 보존됨
+        self.participants: dict[int, dict[str, str]] = {}
+        self.message: discord.Message | None = None
+        self.task: asyncio.Task | None = None
+        self.closed = False
+        self.edit_lock = asyncio.Lock()
+
+
+class InhouseBot(discord.Client):
+    def __init__(self) -> None:
+        super().__init__(intents=discord.Intents.default())
+        self.tree = app_commands.CommandTree(self)
+        self.current: Recruitment | None = None
+
+    async def setup_hook(self) -> None:
+        # 서버 단위로 등록하면 슬래시 명령어가 즉시 반영됨
+        await self.tree.sync(guild=GUILD)
+
+    async def on_ready(self) -> None:
+        print(f"로그인 완료: {self.user} (ID: {self.user.id})")
+
+
+bot = InhouseBot()
+
+
+# ── 유틸 ────────────────────────────────────────────────────
+async def get_channel(channel_id: int):
+    channel = bot.get_channel(channel_id)
+    if channel is None:
+        channel = await bot.fetch_channel(channel_id)
+    return channel
+
+
+def is_admin(user: discord.abc.User) -> bool:
+    if not isinstance(user, discord.Member):
+        return False
+    if user.guild_permissions.administrator:
+        return True
+    if ADMIN_ROLE_ID == 0:
+        # 운영진 역할을 지정하지 않았으면 관리자 채널 접근 권한만으로 판단
+        return True
+    return any(role.id == ADMIN_ROLE_ID for role in user.roles)
+
+
+def safe_name(name: str) -> str:
+    """닉네임에 들어간 마크다운/멘션 문자가 공지를 깨뜨리지 않게 처리"""
+    return discord.utils.escape_mentions(discord.utils.escape_markdown(name))
+
+
+def announcement_text(rec: Recruitment) -> str:
+    count = len(rec.participants)
+    names = ", ".join(safe_name(v["name"]) for v in rec.participants.values()) or "아직 없음"
+    if rec.closed:
+        status = f"🔒 **모집 마감** — 최종 {count}명"
+    else:
+        status = (
+            f"⏰ 마감: <t:{rec.end_ts}:R> (<t:{rec.end_ts}:T>)\n"
+            f"👉 이 채널에서 `/참여` 를 입력하세요. 취소는 `/참여취소`"
+        )
+    return f"{ANNOUNCEMENT}\n\n{status}\n👥 참여자 ({count}명): {names}"
+
+
+async def refresh_announcement(rec: Recruitment) -> None:
+    """공지 메시지의 참여자 현황을 최신 상태로 수정"""
+    if rec.message is None:
+        return
+    async with rec.edit_lock:  # 동시에 여러 명이 참여해도 마지막 상태가 반영되도록 순서대로 수정
+        try:
+            await rec.message.edit(content=announcement_text(rec))
+        except discord.HTTPException as e:
+            print(f"공지 수정 실패: {e}")
+
+
+async def close_after(rec: Recruitment) -> None:
+    await asyncio.sleep(SIGNUP_SECONDS)
+    await close_recruitment(rec)
+
+
+async def close_recruitment(rec: Recruitment) -> None:
+    if rec.closed:
+        return
+    rec.closed = True
+    if bot.current is rec:
+        bot.current = None
+
+    await refresh_announcement(rec)
+
+    roster = list(rec.participants)
+    count = len(roster)
+    lines = [f"{i}. <@{uid}>" for i, uid in enumerate(roster, start=1)]
+
+    if count == 0:
+        summary = "참여자가 없어서 이번 내전은 열리지 않아요."
+    elif count < PLAYERS_NEEDED:
+        summary = f"⚠️ {PLAYERS_NEEDED}명에서 {PLAYERS_NEEDED - count}명 부족해요."
+    else:
+        summary = "✅ 인원이 모였어요! 로비 안내를 기다려 주세요."
+
+    roster_text = f"📋 **내전 참여 명단** (총 {count}명)\n"
+    if lines:
+        roster_text += "\n".join(lines) + "\n"
+    roster_text += f"\n{summary}"
+
+    # 참여 신청 채널: 참여자들에게 알림(멘션)이 가도록 전송
+    try:
+        signup = await get_channel(SIGNUP_CHANNEL_ID)
+        await signup.send(roster_text)
+    except discord.HTTPException as e:
+        print(f"명단 공지 실패: {e}")
+
+    # 관리자 채널: 같은 명단을 알림 없이 전송하고, 리그 매니저에 붙여넣을 명단을 따로 올린다
+    synced = await push_roster(rec) if roster else None
+    try:
+        admin = await get_channel(ADMIN_CHANNEL_ID)
+        await admin.send(
+            f"[모집 종료] 주최: {rec.host.mention}\n{roster_text}",
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+        if roster:
+            for chunk in manager_blocks(rec):
+                await admin.send(chunk, allowed_mentions=discord.AllowedMentions.none())
+        if synced is not None:
+            await admin.send("리그 서버에 명단을 올렸습니다. 매니저에서 '봇이 올린 명단 불러오기'를 누르세요."
+                             if synced else "리그 서버에 명단을 올리지 못했습니다. 위 명단을 복사해 붙여넣어 주세요.")
+    except discord.HTTPException as e:
+        print(f"관리자 채널 전송 실패: {e}")
+
+
+def manager_blocks(rec: Recruitment) -> list[str]:
+    """리그 매니저 '디스코드 참가 명단으로 고르기'에 붙여넣을 글. 한 줄에 '사용자ID 사용자명 별명'."""
+    lines = []
+    for uid, v in rec.participants.items():
+        name = v["name"].replace("`", "'").replace("\n", " ")
+        lines.append(f"{uid} {v['username']} {name}")
+    # 디스코드 메시지는 2000자까지라 길면 나눠 보낸다
+    blocks, cur = [], []
+    for line in lines:
+        if sum(len(x) + 1 for x in cur) + len(line) > 1800:
+            blocks.append(cur)
+            cur = []
+        cur.append(line)
+    if cur:
+        blocks.append(cur)
+    head = "매니저 붙여넣기용 (코드 블록 안을 복사하세요)\n"
+    return [(head if i == 0 else "") + "```\n" + "\n".join(b) + "\n```" for i, b in enumerate(blocks)]
+
+
+async def push_roster(rec: Recruitment) -> bool | None:
+    """리그 서버(Apps Script)에 명단을 올린다. 설정이 없으면 None, 성공하면 True."""
+    if not (SYNC_URL and SYNC_KEY):
+        return None
+    payload = {
+        "action": "pushRoster",
+        "key": SYNC_KEY,
+        "roster": {"entries": [
+            {"id": str(uid), "username": v["username"], "name": v["name"]} for uid, v in rec.participants.items()
+        ]},
+    }
+    try:
+        timeout = aiohttp.ClientTimeout(total=30)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            # Apps Script 는 결과를 다른 주소로 넘겨 주므로 리다이렉트를 따라간다
+            async with session.post(SYNC_URL, data=json.dumps(payload),
+                                    headers={"Content-Type": "text/plain;charset=utf-8"}) as resp:
+                text = await resp.text()
+        result = json.loads(text)
+        if not result.get("ok"):
+            print(f"리그 서버가 명단을 받지 않았습니다: {result.get('error')}")
+            return False
+        return True
+    except Exception as e:  # 서버 문제로 모집 마감이 멈추면 안 된다
+        print(f"리그 서버에 명단을 올리지 못했습니다: {e!r}")
+        return False
+
+
+# ── 슬래시 명령어 ────────────────────────────────────────────
+@bot.tree.command(name="내전생성", description="내전 참여자 모집을 시작합니다 (운영진 전용)", guild=GUILD)
+async def create_inhouse(interaction: discord.Interaction) -> None:
+    if interaction.channel_id != ADMIN_CHANNEL_ID:
+        await interaction.response.send_message("이 명령어는 관리자 채널에서만 쓸 수 있어요.", ephemeral=True)
+        return
+    if not is_admin(interaction.user):
+        await interaction.response.send_message("운영진만 내전을 생성할 수 있어요.", ephemeral=True)
+        return
+    if bot.current is not None:
+        await interaction.response.send_message(
+            f"이미 모집 중인 내전이 있어요. (마감 <t:{bot.current.end_ts}:R>)", ephemeral=True
+        )
+        return
+
+    rec = Recruitment(host=interaction.user, end_ts=int(time.time()) + SIGNUP_SECONDS)
+    bot.current = rec  # 중복 생성을 막기 위해 공지 전에 먼저 등록
+    await interaction.response.defer()
+
+    try:
+        signup = await get_channel(SIGNUP_CHANNEL_ID)
+        rec.message = await signup.send(announcement_text(rec))
+    except discord.HTTPException as e:
+        bot.current = None
+        await interaction.followup.send(f"공지를 올리지 못했어요. 봇 권한과 채널 ID를 확인해 주세요. ({e})")
+        return
+
+    rec.task = asyncio.create_task(close_after(rec))
+    await interaction.followup.send(f"✅ 모집을 시작했어요! {rec.message.jump_url}\n마감: <t:{rec.end_ts}:R>")
+
+
+@bot.tree.command(name="참여", description="진행 중인 내전 모집에 참여합니다", guild=GUILD)
+async def join(interaction: discord.Interaction) -> None:
+    if interaction.channel_id != SIGNUP_CHANNEL_ID:
+        await interaction.response.send_message(f"<#{SIGNUP_CHANNEL_ID}> 채널에서 입력해 주세요.", ephemeral=True)
+        return
+    rec = bot.current
+    if rec is None or rec.closed:
+        await interaction.response.send_message("지금은 모집 중인 내전이 없어요.", ephemeral=True)
+        return
+
+    uid = interaction.user.id
+    if uid in rec.participants:
+        order = list(rec.participants).index(uid) + 1
+        await interaction.response.send_message(f"이미 참여했어요! ({order}번째)", ephemeral=True)
+        return
+
+    rec.participants[uid] = {"name": interaction.user.display_name, "username": interaction.user.name}
+    await interaction.response.send_message(
+        f"✅ 참여 완료! {len(rec.participants)}번째 참여자예요. 마감 <t:{rec.end_ts}:R>", ephemeral=True
+    )
+    await refresh_announcement(rec)
+
+
+@bot.tree.command(name="참여취소", description="내전 참여 신청을 취소합니다", guild=GUILD)
+async def leave(interaction: discord.Interaction) -> None:
+    if interaction.channel_id != SIGNUP_CHANNEL_ID:
+        await interaction.response.send_message(f"<#{SIGNUP_CHANNEL_ID}> 채널에서 입력해 주세요.", ephemeral=True)
+        return
+    rec = bot.current
+    if rec is None or rec.closed:
+        await interaction.response.send_message("지금은 모집 중인 내전이 없어요.", ephemeral=True)
+        return
+    if rec.participants.pop(interaction.user.id, None) is None:
+        await interaction.response.send_message("참여 신청 기록이 없어요.", ephemeral=True)
+        return
+
+    await interaction.response.send_message("참여를 취소했어요.", ephemeral=True)
+    await refresh_announcement(rec)
+
+
+@bot.tree.error
+async def on_app_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError) -> None:
+    print(f"명령어 오류: {error!r}")
+    msg = "명령어 처리 중 오류가 발생했어요. 운영진에게 알려 주세요."
+    if interaction.response.is_done():
+        await interaction.followup.send(msg, ephemeral=True)
+    else:
+        await interaction.response.send_message(msg, ephemeral=True)
+
+
+if __name__ == "__main__":
+    bot.run(TOKEN)

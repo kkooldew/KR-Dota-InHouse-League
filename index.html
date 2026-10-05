@@ -1,0 +1,325 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>선수 등록 | 도타 2 인하우스 리그</title>
+<meta name="description" content="도타 2 인하우스 리그 시즌 참가 선수 등록">
+<meta name="theme-color" content="#141a20">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Oswald:wght@400;500;600&family=Noto+Sans+KR:wght@400;500;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/site.css">
+<style>
+.reg{max-width:640px}
+.state-line{margin:-14px 0 22px;font-size:14px;color:var(--bone-dim)}
+.field{padding:18px 0;border-top:1px solid var(--line-soft)}
+.field:first-of-type{border-top:0;padding-top:4px}
+.field > label,.field > .label{display:flex;align-items:baseline;gap:10px;font-weight:700;font-size:15.5px;margin-bottom:8px}
+.field .no{font-family:var(--num);font-weight:500;color:var(--gold);font-size:16px;min-width:14px}
+.field input[type=text],.field input[type=url],.field input[type=number]{width:100%;font-size:16px;padding:11px 12px}
+.field input.mmr{max-width:180px}
+.help{margin:7px 0 0 24px;font-size:13px;color:var(--bone-dim)}
+.ok-line{margin:7px 0 0 24px;font-size:13px;color:var(--rad)}
+.err{margin:7px 0 0 24px;font-size:13.5px;color:#e58b80}
+.field.has-err input{border-color:var(--dire)}
+.field .body{padding-left:24px}
+
+/* 포지션 순서 */
+.chips{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;max-width:440px}
+.chip{position:relative;background:var(--ink);border:1px solid var(--line);border-radius:4px;padding:14px 6px 12px;
+  display:flex;flex-direction:column;align-items:center;gap:3px;min-height:72px}
+.chip .nm{font-weight:700;font-size:15.5px}
+.chip .sub{font-size:11.5px;color:var(--bone-dim)}
+.chip .rk{position:absolute;top:6px;right:7px;font-family:var(--num);font-size:13px;color:var(--faint)}
+.chip:hover{border-color:var(--bone-dim)}
+.chip[aria-pressed="true"]{border-color:var(--gold);background:#2b2616}
+.chip[aria-pressed="true"] .rk{color:var(--gold);font-size:15px}
+.order{display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px;margin-top:12px;font-size:14px;min-height:26px}
+.order .step{display:inline-flex;gap:6px;align-items:baseline}
+.order .step b{font-family:var(--num);font-weight:500;color:var(--gold)}
+.order .empty{color:var(--faint)}
+.linkbtn{background:none;border:0;padding:0;color:var(--bone-dim);text-decoration:underline;text-underline-offset:3px;font-size:13px}
+.linkbtn:hover{color:var(--bone)}
+
+.confirm{display:flex;gap:10px;align-items:flex-start;margin:20px 0 0;padding:14px 16px;border:1px solid var(--line);border-radius:4px;background:var(--ink-2);cursor:pointer}
+.confirm input{margin-top:5px;width:17px;height:17px;accent-color:var(--gold);flex:none}
+.actions{display:flex;flex-wrap:wrap;gap:12px;align-items:center;margin-top:20px}
+.actions .btn.gold{padding:12px 26px;font-size:16px}
+.form-err{margin-top:16px}
+.hp{position:absolute;left:-9999px;width:1px;height:1px;overflow:hidden}
+
+.done h2{font-size:20px;margin:0 0 8px}
+.done p{margin:0 0 10px;color:var(--bone-dim);max-width:56ch}
+.done .actions{margin-top:18px}
+@media (max-width:640px){
+  .help,.ok-line,.err{margin-left:0}
+  .field .body{padding-left:0}
+  .chip{min-height:64px;padding:12px 4px 10px}
+}
+</style>
+</head>
+<body>
+<header id="site-head"></header>
+
+<main class="wrap">
+  <div class="reg">
+    <h1 class="page-title">선수 등록</h1>
+    <p class="page-lead">시즌에 참가하려면 아래 다섯 가지를 입력해 주세요. 같은 스팀 프로필로 다시 제출하면 기존 정보가 고쳐집니다.</p>
+    <p class="state-line" id="stateLine" hidden></p>
+
+    <div class="notice" id="loading">등록 상태를 확인하고 있습니다.</div>
+    <div class="notice bad" id="blocked" hidden></div>
+
+    <form class="panel" id="form" novalidate hidden>
+      <div class="field" data-f="nickname">
+        <label for="nickname"><span class="no">1</span>닉네임</label>
+        <div class="body">
+          <input type="text" id="nickname" name="nickname" maxlength="20" autocomplete="nickname" required>
+        </div>
+        <p class="help">순위표와 팀 편성에 이 이름으로 나옵니다. 도타 2에서 쓰는 닉네임을 권합니다.</p>
+        <p class="err" hidden></p>
+      </div>
+
+      <div class="field" data-f="steam">
+        <label for="steam"><span class="no">2</span>스팀 프로필 주소</label>
+        <div class="body">
+          <input type="url" id="steam" name="steam" inputmode="url" autocomplete="off" placeholder="https://steamcommunity.com/profiles/7656…" required>
+        </div>
+        <p class="help">스팀에서 내 프로필을 열고 주소를 복사해 붙여넣으세요. 앱에서는 프로필 화면 빈 곳을 오른쪽 클릭해 "페이지 URL 복사"를 고르면 됩니다.</p>
+        <p class="ok-line" hidden></p>
+        <p class="err" hidden></p>
+      </div>
+
+      <div class="field" data-f="discord">
+        <label for="discord"><span class="no">3</span>디스코드 사용자명</label>
+        <div class="body">
+          <input type="text" id="discord" name="discord" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="예) dota_kim" required>
+        </div>
+        <p class="help">디스코드에서 내 프로필을 누르면 보이는 영문 사용자명입니다. 서버에서 보이는 별명과 다를 수 있습니다. 숫자로 된 사용자 ID를 넣어도 됩니다.</p>
+        <p class="err" hidden></p>
+      </div>
+
+      <div class="field" data-f="mmr">
+        <label for="mmr"><span class="no">4</span>현재 MMR</label>
+        <div class="body">
+          <input type="number" class="mmr num" id="mmr" name="mmr" inputmode="numeric" min="0" max="15000" step="1" required>
+        </div>
+        <p class="help">도타 2 랭크 게임 화면에 보이는 지금 MMR을 그대로 넣어 주세요.</p>
+        <p class="err" hidden></p>
+      </div>
+
+      <div class="field" data-f="prefs">
+        <div class="label" id="prefsLabel"><span class="no">5</span>포지션 순서</div>
+        <div class="body">
+          <p class="help" style="margin:0 0 12px">하고 싶은 포지션부터 차례로 누르세요. 서폿은 4번과 5번을 함께 뜻하며, 둘 중 어디를 맡을지는 팀을 짤 때 정해집니다.</p>
+          <div class="chips" role="group" aria-labelledby="prefsLabel" id="chips"></div>
+          <div class="order" id="order" aria-live="polite"></div>
+        </div>
+        <p class="err" hidden></p>
+      </div>
+
+      <label class="confirm">
+        <input type="checkbox" id="mine">
+        <span>부계정이나 다른 사람 계정이 아닌, 본인 메인 계정 정보입니다.</span>
+      </label>
+
+      <div class="hp" aria-hidden="true">
+        <label>웹사이트 <input type="text" id="website" tabindex="-1" autocomplete="off"></label>
+      </div>
+
+      <div class="notice bad form-err" id="formErr" hidden></div>
+      <div class="actions">
+        <button class="btn gold" type="submit" id="submit">등록하기</button>
+      </div>
+    </form>
+
+    <section class="panel done" id="done" hidden>
+      <h2 id="doneTitle">등록을 마쳤습니다</h2>
+      <p>운영진이 확인한 뒤 디스코드에서 참가 역할을 드립니다. 내전 모집 공지는 디스코드로만 나가니 서버에 들어와 알림을 켜 두세요.</p>
+      <p>정보가 바뀌면 같은 스팀 프로필로 다시 제출하면 됩니다.</p>
+      <div class="actions">
+        <a class="btn gold" id="doneInvite" target="_blank" rel="noopener" hidden>디스코드 서버 들어가기</a>
+        <button class="btn ghost" type="button" id="again">입력한 정보 고치기</button>
+      </div>
+    </section>
+  </div>
+</main>
+
+<footer id="site-foot"></footer>
+
+<script src="config.js"></script>
+<script src="assets/site.js"></script>
+<script>
+(function(){
+  const {L, api, mountChrome, setSeason, PREF_LABEL} = window.Site;
+  const $ = s => document.querySelector(s);
+  mountChrome('register');
+
+  /* ---------- 포지션 순서 ---------- */
+  const SUB = ['', '1번', '2번', '3번', '4·5번'];
+  let order = [];                       // 고른 순서대로 지망 번호(1~4)
+  function renderPrefs(){
+    $('#chips').innerHTML = [1,2,3,4].map(n => {
+      const k = order.indexOf(n);
+      const label = PREF_LABEL[n] + (k >= 0 ? ', ' + (k + 1) + '지망' : ', 아직 고르지 않음');
+      return '<button type="button" class="chip" data-n="' + n + '" aria-pressed="' + (k >= 0) + '" aria-label="' + label + '">' +
+        '<span class="rk" aria-hidden="true">' + (k >= 0 ? k + 1 : '') + '</span>' +
+        '<span class="nm">' + PREF_LABEL[n] + '</span><span class="sub">' + SUB[n] + '</span></button>';
+    }).join('');
+    $('#order').innerHTML = order.length
+      ? order.map((n, i) => '<span class="step"><b>' + (i + 1) + '</b>' + PREF_LABEL[n] + '</span>').join('') +
+        ' <button type="button" class="linkbtn" id="resetPrefs">다시 고르기</button>'
+      : '<span class="empty">아직 고르지 않았습니다</span>';
+    const r = $('#resetPrefs');
+    if(r) r.addEventListener('click', () => { order = []; renderPrefs(); clearErr('prefs'); $('#chips button').focus(); });
+  }
+  $('#chips').addEventListener('click', e => {
+    const b = e.target.closest('.chip');
+    if(!b) return;
+    const n = Number(b.dataset.n);
+    const k = order.indexOf(n);
+    if(k >= 0) order.splice(k, 1);                  // 다시 누르면 빠지고 뒤의 순서가 하나씩 당겨진다
+    else order.push(n);
+    if(order.length === 3) order.push([1,2,3,4].find(x => !order.includes(x)));   // 마지막 하나는 저절로 채운다
+    renderPrefs();
+    clearErr('prefs');
+    const again = $('#chips .chip[data-n="' + n + '"]');
+    if(again) again.focus();
+  });
+
+  /* ---------- 입력 확인 (서버와 같은 기준) ---------- */
+  function parseSteam(v){
+    const s = v.trim();
+    let m = s.match(/^(?:https?:\/\/)?(?:www\.)?steamcommunity\.com\/profiles\/(7656\d{13})\/?(?:[?#].*)?$/i) || s.match(/^(7656\d{13})$/);
+    if(m) return {text: '숫자 ID ' + m[1] + ' 확인'};
+    m = s.match(/^(?:https?:\/\/)?(?:www\.)?steamcommunity\.com\/id\/([A-Za-z0-9_-]{2,64})\/?(?:[?#].*)?$/i);
+    if(m) return {text: '사용자 지정 주소 ' + m[1] + ' 확인'};
+    return null;
+  }
+  const normDiscord = v => v.trim().replace(/^@/, '').toLowerCase();
+  const checks = {
+    nickname: v => !v.trim() ? '닉네임을 넣어 주세요' : v.trim().length > 20 ? '닉네임은 20자 이내로 넣어 주세요' : '',
+    steam: v => !v.trim() ? '스팀 프로필 주소를 넣어 주세요' : parseSteam(v) ? '' :
+      'steamcommunity.com/profiles/숫자 또는 steamcommunity.com/id/이름 모양의 주소를 넣어 주세요',
+    discord: v => {
+      const s = normDiscord(v);
+      if(!s) return '디스코드 사용자명을 넣어 주세요';
+      if(/^\d{17,20}$/.test(s) || (/^[a-z0-9_.]{2,32}$/.test(s) && !/\.\./.test(s)) || /^[^#\s]{2,32}#\d{4}$/.test(s)) return '';
+      return '영문 소문자, 숫자, 밑줄(_), 마침표(.)로 된 사용자명을 넣어 주세요. 서버 별명이 아니라 프로필의 사용자명입니다.';
+    },
+    mmr: v => {
+      if(String(v).trim() === '') return 'MMR을 넣어 주세요';
+      const n = Number(v);
+      return Number.isInteger(n) && n >= 0 && n <= 15000 ? '' : 'MMR은 0부터 15000 사이의 정수로 넣어 주세요';
+    }
+  };
+  function fieldEl(name){ return document.querySelector('.field[data-f="' + name + '"]'); }
+  function setErr(name, msg){
+    const f = fieldEl(name);
+    const p = f.querySelector('.err');
+    p.textContent = msg; p.hidden = !msg;
+    f.classList.toggle('has-err', !!msg);
+    const input = f.querySelector('input');
+    if(input){
+      if(msg){ input.setAttribute('aria-invalid', 'true'); }
+      else input.removeAttribute('aria-invalid');
+    }
+  }
+  const clearErr = name => setErr(name, '');
+  Object.keys(checks).forEach(name => {
+    const input = document.getElementById(name);
+    input.addEventListener('blur', () => { if(input.value) setErr(name, checks[name](input.value)); });
+    input.addEventListener('input', () => { if(fieldEl(name).classList.contains('has-err')) setErr(name, checks[name](input.value)); });
+  });
+  $('#steam').addEventListener('input', () => {
+    const r = parseSteam($('#steam').value);
+    const ok = fieldEl('steam').querySelector('.ok-line');
+    ok.textContent = r ? r.text : ''; ok.hidden = !r;
+  });
+
+  /* ---------- 보내기 ---------- */
+  function showForm(){
+    $('#loading').hidden = true; $('#blocked').hidden = true;
+    $('#done').hidden = true; $('#form').hidden = false;
+  }
+  function block(html){
+    $('#loading').hidden = true; $('#form').hidden = true; $('#done').hidden = true;
+    $('#blocked').innerHTML = html; $('#blocked').hidden = false;
+  }
+  function inviteHtml(){
+    return L.discordInvite ? '<p><a href="' + Site.esc(L.discordInvite) + '" target="_blank" rel="noopener">디스코드 서버 들어가기</a></p>' : '';
+  }
+
+  $('#form').addEventListener('submit', async e => {
+    e.preventDefault();
+    $('#formErr').hidden = true;
+    let first = null;
+    Object.keys(checks).forEach(name => {
+      const msg = checks[name](document.getElementById(name).value);
+      setErr(name, msg);
+      if(msg && !first) first = document.getElementById(name);
+    });
+    if(order.length !== 4){
+      setErr('prefs', '네 포지션을 모두 순서대로 골라 주세요');
+      if(!first) first = $('#chips .chip');
+    }
+    if(first){ first.focus(); return; }
+    if(!$('#mine').checked){
+      $('#formErr').innerHTML = '<p>본인 메인 계정 정보인지 확인하는 칸에 표시해 주세요.</p>';
+      $('#formErr').hidden = false; $('#mine').focus();
+      return;
+    }
+
+    const btn = $('#submit');
+    btn.disabled = true; btn.textContent = '보내는 중';
+    try{
+      const r = await api.post({
+        action: 'register',
+        nickname: $('#nickname').value.trim(),
+        steam: $('#steam').value.trim(),
+        discord: normDiscord($('#discord').value),
+        mmr: Number($('#mmr').value),
+        prefs: order.slice(),
+        website: $('#website').value
+      });
+      $('#doneTitle').textContent = r.updated ? '등록 정보를 고쳤습니다' : '등록을 마쳤습니다';
+      $('#form').hidden = true; $('#done').hidden = false;
+      $('#done').scrollIntoView({block: 'start', behavior: 'smooth'});
+      $('#doneTitle').setAttribute('tabindex', '-1'); $('#doneTitle').focus({preventScroll: true});
+    }catch(err){
+      if(err.code === 'closed'){ block('<p>지금은 선수 등록 기간이 아닙니다.</p>' + inviteHtml()); return; }
+      if(['nickname','steam','discord','mmr','prefs'].includes(err.code)){
+        setErr(err.code, err.message);
+        const el = err.code === 'prefs' ? $('#chips .chip') : document.getElementById(err.code);
+        el.focus();
+      }else{
+        $('#formErr').innerHTML = '<p>' + Site.esc(err.message) + '</p>';
+        $('#formErr').hidden = false;
+      }
+    }finally{
+      btn.disabled = false; btn.textContent = '등록하기';
+    }
+  });
+  $('#again').addEventListener('click', () => { showForm(); $('#nickname').focus(); });
+
+  /* ---------- 시작 ---------- */
+  if(L.discordInvite){ $('#doneInvite').href = L.discordInvite; $('#doneInvite').hidden = false; }
+  renderPrefs();
+  if(!api.ready){
+    block('<p>등록 서버가 아직 연결되지 않았습니다.</p><p class="dim">운영진: config.js의 apiUrl에 Apps Script 웹 앱 주소를 넣어 주세요.</p>');
+    return;
+  }
+  api.get('status').then(s => {
+    setSeason(s.season);
+    if(!s.open){ block('<p>지금은 선수 등록 기간이 아닙니다. 다음 시즌 등록이 열리면 디스코드에서 알려 드립니다.</p>' + inviteHtml()); return; }
+    $('#stateLine').textContent = (s.season ? s.season + ' ' : '') + '선수 등록을 받고 있습니다. 지금까지 ' + s.registered + '명이 등록했습니다.';
+    $('#stateLine').hidden = false;
+    showForm();
+  }).catch(err => {
+    block('<p>' + Site.esc(err.message) + '</p>');
+  });
+})();
+</script>
+</body>
+</html>
