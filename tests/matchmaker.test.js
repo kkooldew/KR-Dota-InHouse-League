@@ -68,3 +68,47 @@ assert(r.ok && benched(r) === 'p8,p9', '오늘 뛴 사람끼리는 총 판수가
 // 순번이 같아 다 넣을 수 없으면 균형으로 고른다 (누가 빠지든 열 명이 들어가고 두 명이 쉰다)
 r = run(twelve());
 assert(r.ok && r.bench.length === 2 && new Set(playing(r)).size === 10, '순번이 모두 같으면 균형이 맞는 열 명을 고른다');
+
+// ── 경기 결과 정산과 되돌리기 (봇의 /승리, /승리취소) ──
+assert(['function applyResult', 'function computeDeltas', 'function dropLatest', 'function recalcStreak', 'let seq = 0'].every(s => engine.includes(s)),
+  '매니저 파일에서 정산 로직도 읽는다');
+const settings = { k: 200, balanceTol: 500 };
+const before = { players: ten(), matches: [], settings };
+const made = run(before.players, { settings });
+const lanes = made.lanes.map(l => ({ r: l.r.id, d: l.d.id }));
+const copy = o => JSON.parse(JSON.stringify(o));
+const settle = (league, winner, extra = {}) => makeMatch({ mode: 'result', league: copy(league), lanes, winner, now: NOW, ...extra });
+const of = (league, id) => league.players.find(p => p.id === id);
+
+r = settle(before, 'r');
+const radiant = lanes.map(l => l.r), dire = lanes.map(l => l.d);
+assert(r.ok && r.league.matches.length === 1 && r.match.winner === 'r' && r.match.at === new Date(NOW).toISOString() && /^m[a-z0-9]+$/.test(r.match.id), '결과를 기록하면 경기가 하나 생긴다');
+assert(radiant.every(id => of(r.league, id).wins === 1 && of(r.league, id).losses === 0 && of(r.league, id).streak === 1 && of(r.league, id).mmr > of(before, id).mmr), '이긴 팀은 1승과 MMR 상승');
+assert(dire.every(id => of(r.league, id).wins === 0 && of(r.league, id).losses === 1 && of(r.league, id).streak === -1 && of(r.league, id).mmr < of(before, id).mmr), '진 팀은 1패와 MMR 하락');
+assert(r.changes.length === 10 && r.changes.every(c => c.after === of(r.league, c.id).mmr && c.before === of(before, c.id).mmr && c.after === c.before + c.delta), '선수별 변동이 실제 MMR과 맞다');
+const sumOf = side => r.changes.filter(c => c.side === side).reduce((s, c) => s + c.delta, 0);
+assert(sumOf('r') > 0 && Math.abs(sumOf('r') + sumOf('d')) <= 10, '두 팀이 주고받은 점수가 맞먹는다: +' + sumOf('r') + ' / ' + sumOf('d'));
+assert(lanes.every((l, i) => of(r.league, l.r).roleCount[i] === 1 && of(r.league, l.d).roleCount[i] === 1), '자리별 판수가 올라간다');
+const m0 = r.league.matches[0];
+assert(m0.rows.length === 10 && m0.rule.k === 200 && Array.isArray(m0.rule.roleWeights) && m0.rows.every(x => Number.isInteger(x.rank)), '경기에 그때의 정산 규칙과 지망 순위를 적는다');
+assert(JSON.stringify(r.league.settings) === JSON.stringify(settings), '설정은 받은 그대로 돌려준다');
+const dWin = settle(before, 'd');
+assert(dWin.ok && dire.every(id => of(dWin.league, id).wins === 1) && radiant.every(id => of(dWin.league, id).losses === 1), '다이어 승리도 기록한다');
+
+// 되돌리기: 기록 전과 완전히 같아진다
+let u = makeMatch({ mode: 'undo', league: copy(r.league), matchId: r.match.id });
+assert(u.ok && JSON.stringify(u.league) === JSON.stringify(before) && u.match.id === r.match.id && u.changes.length === 10, '되돌리면 기록 전과 똑같아진다');
+const two = settle(r.league, 'd', { now: NOW + 3600e3 });
+assert(two.ok && two.league.matches.length === 2 && of(two.league, radiant[0]).streak === -1 && of(two.league, dire[0]).streak === 1, '두 번째 경기를 이어서 기록한다');
+u = makeMatch({ mode: 'undo', league: copy(two.league), matchId: two.match.id });
+assert(u.ok && JSON.stringify(u.league) === JSON.stringify(r.league), '두 번째 경기만 되돌리면 첫 경기 뒤의 상태가 된다');
+u = makeMatch({ mode: 'undo', league: copy(two.league), matchId: r.match.id });
+assert(!u.ok && /다른 경기가 기록돼/.test(u.error), '마지막 경기가 아니면 되돌리지 않는다');
+u = makeMatch({ mode: 'undo', league: copy(before) });
+assert(!u.ok && /되돌릴 경기가 없습니다/.test(u.error), '경기가 없으면 되돌릴 것이 없다');
+
+// 기록할 수 없는 경우
+const fewer = copy(before); fewer.players = fewer.players.filter(p => p.id !== radiant[0]);
+assert(!settle(fewer, 'r').ok && /선수단에 없습니다/.test(settle(fewer, 'r').error), '팀에 있던 선수가 선수단에서 빠졌으면 기록하지 않는다');
+assert(!makeMatch({ mode: 'result', league: copy(before), lanes: lanes.slice(0, 4), winner: 'r' }).ok, '다섯 자리가 다 차지 않은 편성은 기록하지 않는다');
+assert(!settle(before, 'x').ok, '이긴 팀이 잘못 적혔으면 기록하지 않는다');

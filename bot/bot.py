@@ -8,6 +8,8 @@
 - 모집 글(일반 채널이면 그 채널)에서 /참여, /참여취소
 - 마감 시각이 되면 참여 명단을 공지하고, 리그 매니저와 같은 로직으로 팀을 짜서 알림 (matchmaker.js, Node 필요)
 - 관리자 채널에서 /마감 (지금 인원으로 바로 마감), /연장 (마감을 5분 뒤로, 마감한 뒤에도 가능), /취소 (내전 취소)
+- 경기가 끝나면 관리자 채널에서 /승리 (이긴 팀을 골라 결과 기록과 MMR 정산), /승리취소 (방금 기록한 결과 되돌리기)
+  · 정산도 리그 매니저의 로직 그대로 한다. 리그 기록의 원본은 서버에 있고, 봇은 받아서 고친 뒤 다시 올린다
 - 관리자 채널에는 리그 매니저에 붙여넣을 명단(디스코드 ID·사용자명·별명)을 함께 올림
 - 서버 주소(sync_url)와 운영진 키(sync_key)를 적어 두면, 명단과 짠 팀을 리그 서버에도 올려
   매니저의 "봇이 올린 명단 불러오기", "봇이 짠 팀 불러오기"로 바로 받을 수 있음
@@ -312,8 +314,8 @@ async def close_when_due(rec: Recruitment) -> None:
 def save_state() -> None:
     """진행 중인 모집과 오늘 짠 팀을 파일에 적는다. 실패해도 모집은 계속한다."""
     cur = bot.current
-    start = day_start()
-    bot.lineups = [x for x in bot.lineups if x.get("at", 0) >= start]
+    keep_from = time.time() - 2 * 86400  # 결과를 다음 날 기록하는 일도 있어 이틀 치를 남긴다
+    bot.lineups = [x for x in bot.lineups if x.get("at", 0) >= keep_from]
     try:
         data = {"current": cur.to_dict() if cur is not None and cur.message is not None else None, "lineups": bot.lineups}
         tmp = STATE_PATH.with_suffix(".tmp")
@@ -465,6 +467,14 @@ def manager_blocks(rec: Recruitment) -> list[str]:
 
 
 # ── 리그 서버 ────────────────────────────────────────────────
+class ServerError(RuntimeError):
+    """리그 서버가 요청을 받지 않았다. code 는 서버가 붙인 까닭('conflict' 등)"""
+
+    def __init__(self, message: str, code: str = "") -> None:
+        super().__init__(message)
+        self.code = code
+
+
 async def call_server(payload: dict) -> dict:
     """리그 서버(Apps Script)에 운영진 요청을 보낸다. 실패하면 예외를 낸다."""
     timeout = aiohttp.ClientTimeout(total=40)
@@ -475,7 +485,7 @@ async def call_server(payload: dict) -> dict:
             text = await resp.text()
     result = json.loads(text)
     if not result.get("ok"):
-        raise RuntimeError(result.get("error") or "서버가 요청을 처리하지 못했습니다")
+        raise ServerError(result.get("error") or "서버가 요청을 처리하지 못했습니다", result.get("code") or "")
     return result
 
 
@@ -562,8 +572,8 @@ async def auto_match(rec: Recruitment) -> None:
         await tell_admins("리그 서버에서 기록을 받지 못해 팀을 자동으로 짜지 못했습니다. 매니저에서 직접 짜 주세요.")
         return
     if not league or not league.get("players"):
-        await tell_admins("리그 매니저가 서버에 올린 기록이 없어 팀을 자동으로 짜지 못했습니다. "
-                          "매니저의 데이터 · 설정 탭에서 **지금 올리기**를 누른 뒤 `/연장` → `/마감` 하면 다시 짭니다.")
+        await tell_admins("서버에 리그 기록이 없어 팀을 자동으로 짜지 못했습니다. "
+                          "리그 매니저의 데이터 · 설정 탭에서 리그 서버에 연결하고 **지금 올리기**를 누른 뒤 `/연장` → `/마감` 하면 다시 짭니다.")
         return
 
     who, missing = match_players(rec, league["players"])
@@ -571,7 +581,7 @@ async def auto_match(rec: Recruitment) -> None:
         await post(rec, f"⚠️ 선수 등록이 확인된 참가자가 {len(who)}명이라 팀을 자동으로 짜지 못했어요. 운영진의 안내를 기다려 주세요.", quiet=True)
         await tell_admins(f"선수단과 맞는 참가자가 {len(who)}명이라 팀을 자동으로 짜지 못했습니다. 선수단에 없는 참가자: "
                           + (" ".join(f"<@{uid}>" for uid in missing) or "없음")
-                          + "\n승인한 선수를 매니저에 불러와 **지금 올리기**를 했는지, 등록한 디스코드 사용자명이 맞는지 확인해 주세요.")
+                          + "\n승인한 선수를 리그 매니저에 불러왔는지, 등록한 디스코드 사용자명이 맞는지 확인해 주세요.")
         return
 
     start = day_start()
@@ -587,19 +597,26 @@ async def auto_match(rec: Recruitment) -> None:
 
     text = lineup_text(result, who, missing)
     await post(rec, text, quiet=True)  # 방금 명단 공지로 알림이 갔으니 한 번 더 울리지 않는다
-    playing = [l[side]["id"] for l in result["lanes"] for side in ("r", "d")]
+    lanes = [{"role": l["role"], "r": l["r"]["id"], "d": l["d"]["id"]} for l in result["lanes"]]
     rec.lineup = True
-    bot.lineups.append({"at": time.time(), "ids": playing, "message_id": rec.message.id if rec.message else 0})
+    bot.lineups.append({
+        "at": time.time(),
+        "ids": [l[side] for l in lanes for side in ("r", "d")],
+        "message_id": rec.message.id if rec.message else 0,
+        "place_id": rec.place_id,  # 결과를 알릴 곳 (모집 글)
+        "lanes": lanes,
+        "who": who,
+        "result": None,  # /승리 로 기록하면 {"winner", "match_id"}
+    })
+    note = ("경기가 끝나면 `/승리` 로 이긴 팀을 골라 결과를 기록하세요. MMR이 정산되고 순위 페이지에 반영됩니다.\n"
+            "대타가 뛰었거나 자리를 바꿔 뛰었다면 `/승리` 대신 리그 매니저의 **봇이 짠 팀 불러오기**로 편성을 올린 뒤 고쳐서 기록하세요.")
     try:
         await call_server({"action": "pushLineup", "lineup": {
-            "post": getattr(rec.message, "jump_url", ""),
-            "lanes": [{"role": l["role"], "r": l["r"]["id"], "d": l["d"]["id"]} for l in result["lanes"]],
-            "bench": [p["id"] for p in result["bench"]],
+            "post": getattr(rec.message, "jump_url", ""), "lanes": lanes, "bench": [p["id"] for p in result["bench"]],
         }})
-        note = "매니저의 팀 편성 탭에서 **봇이 짠 팀 불러오기**를 누르면 이 편성이 그대로 올라옵니다. 경기가 끝나면 이긴 팀만 눌러 주세요."
     except Exception as e:
         print(f"짠 팀을 리그 서버에 올리지 못했습니다: {e!r}")
-        note = "짠 팀을 리그 서버에 올리지 못했습니다. 매니저에서 위 편성대로 자리를 맞춰 주세요."
+        note += "\n짠 팀을 리그 서버에 올리지 못해서, 매니저의 **봇이 짠 팀 불러오기**는 이번 판에 쓸 수 없습니다."
     await tell_admins(f"{text}\n\n{note}")
 
 
@@ -614,6 +631,64 @@ async def drop_lineup(rec: Recruitment) -> None:
         await call_server({"action": "pushLineup", "lineup": None})
     except Exception as e:
         print(f"리그 서버의 팀 편성을 비우지 못했습니다: {e!r}")
+
+
+# ── 경기 결과 정산 ────────────────────────────────────────────
+def lineup_of(rec: Recruitment) -> dict | None:
+    """이 모집으로 짠 팀"""
+    message_id = rec.message.id if rec.message else 0
+    return next((x for x in bot.lineups if x.get("message_id") == message_id and x.get("lanes")), None)
+
+
+def settled(rec: Recruitment) -> bool:
+    """이 모집으로 짠 팀의 결과를 이미 기록했는지"""
+    entry = lineup_of(rec)
+    return bool(entry and entry.get("result"))
+
+
+async def change_league(payload: dict) -> dict:
+    """서버의 리그 기록을 받아 matchmaker.js 로 고친 뒤 다시 올린다.
+    받아 온 사이에 매니저가 기록을 바꿨으면 서버가 받지 않으므로, 새 기록으로 한 번 더 한다."""
+    for attempt in (1, 2):
+        got = await call_server({"action": "adminLeague"})
+        if not got.get("league"):
+            raise RuntimeError("서버에 리그 기록이 없습니다")
+        result = await run_matchmaker({**payload, "league": got["league"], "now": int(time.time() * 1000)})
+        if not result.get("ok"):
+            raise RuntimeError(result.get("error") or "알 수 없는 문제")
+        try:
+            await call_server({"action": "saveLeague", "league": result["league"], "baseRev": got.get("rev", 0)})
+            return result
+        except ServerError as e:
+            if e.code != "conflict" or attempt == 2:
+                raise
+    raise RuntimeError("기록을 올리지 못했습니다")  # 여기까지 오지 않는다
+
+
+def result_text(winner: str, changes: list[dict], who: dict) -> str:
+    """모집 글에 올릴 경기 결과. 선수마다 MMR이 어떻게 바뀌었는지 보여 준다. who 는 {선수 id: 디스코드 사용자 ID}"""
+    def line(c: dict) -> str:
+        uid = who.get(c["id"])
+        return (f"`{c['role']} {ROLE_NAMES[c['role'] - 1]}` {safe_name(c['name'])}" + (f" <@{uid}>" if uid else "")
+                + f"  {c['before']} → **{c['after']}** ({'+' if c['delta'] >= 0 else '−'}{abs(c['delta'])})")
+
+    def team(side: str) -> str:
+        return "\n".join(line(c) for c in sorted((c for c in changes if c["side"] == side), key=lambda c: c["role"]))
+
+    return (
+        f"🏆 **{'래디언트' if winner == 'r' else '다이어'} 승리!** MMR을 정산했어요.\n\n"
+        f"🟢 **래디언트**{' · 승' if winner == 'r' else ''}\n{team('r')}\n\n"
+        f"🔴 **다이어**{' · 승' if winner == 'd' else ''}\n{team('d')}"
+    )
+
+
+async def send_to(place_id: int, text: str) -> None:
+    """모집 글(또는 채널)에 알림을 울리지 않고 메시지를 보낸다. 실패해도 넘어간다."""
+    try:
+        place = await get_channel(place_id)
+        await place.send(text, allowed_mentions=discord.AllowedMentions.none())
+    except discord.HTTPException as e:
+        print(f"결과 공지 실패: {e}")
 
 
 # ── 슬래시 명령어: 운영진 ─────────────────────────────────────
@@ -668,8 +743,10 @@ async def create_inhouse(interaction: discord.Interaction, deadline: Optional[st
         rec.task = asyncio.create_task(close_when_due(rec))
         save_state()
 
+    waiting = any(x.get("lanes") and not x.get("result") for x in bot.lineups)
     await interaction.followup.send(
         f"✅ 모집을 시작했어요! {rec.message.jump_url}\n마감: {when(rec.end_ts)} (<t:{rec.end_ts}:R>)"
+        + ("\n⚠️ 결과를 아직 기록하지 않은 판이 있어요. 끝났다면 `/승리` 로 기록해 주세요." if waiting else "")
     )
 
 
@@ -701,6 +778,9 @@ async def extend(interaction: discord.Interaction) -> None:
         if rec is None or rec.cancelled:
             await interaction.followup.send("연장할 내전이 없어요. `/내전생성` 으로 새로 모집해 주세요.")
             return
+        if settled(rec):
+            await interaction.followup.send("이미 경기 결과를 기록한 내전이에요. 새로 모집하려면 `/내전생성` 을 쓰세요.")
+            return
         reopened = rec.closed
         await extend_recruitment(rec)
     await interaction.followup.send(
@@ -719,8 +799,67 @@ async def cancel(interaction: discord.Interaction) -> None:
         if rec is None or rec.cancelled:
             await interaction.followup.send("취소할 내전이 없어요.")
             return
+        if settled(rec):
+            await interaction.followup.send("이미 경기 결과를 기록한 내전이에요. 결과를 되돌리려면 `/승리취소` 를 쓰세요.")
+            return
         await cancel_recruitment(rec)
     await interaction.followup.send("❌ 내전을 취소했어요." + (f" {rec.message.jump_url}" if rec.message else ""))
+
+
+@bot.tree.command(name="승리", description="봇이 짠 팀의 경기 결과를 기록하고 MMR을 정산합니다 (운영진 전용)", guild=GUILD)
+@app_commands.rename(team="팀")
+@app_commands.describe(team="이긴 팀")
+@app_commands.choices(team=[app_commands.Choice(name="래디언트", value="r"), app_commands.Choice(name="다이어", value="d")])
+async def record_win(interaction: discord.Interaction, team: str) -> None:
+    if not await admin_only(interaction):
+        return
+    await interaction.response.defer()
+    async with bot.lock:
+        # 결과를 기다리는 팀 가운데 가장 먼저 짠 것 (보통은 방금 끝난 판 하나뿐이다)
+        entry = next((x for x in bot.lineups if x.get("lanes") and not x.get("result")), None)
+        if entry is None:
+            recorded = any(x.get("result") for x in bot.lineups)
+            await interaction.followup.send(
+                "결과를 기다리는 팀이 없어요. 이미 기록한 결과를 고치려면 `/승리취소` 로 되돌린 뒤 다시 기록하세요." if recorded
+                else "결과를 기록할 팀이 없어요. 봇이 팀을 짜서 알린 뒤에 쓸 수 있어요."
+            )
+            return
+        try:
+            result = await change_league({"mode": "result", "lanes": entry["lanes"], "winner": team})
+        except Exception as e:
+            print(f"결과 기록 실패: {e!r}")
+            await interaction.followup.send(f"결과를 기록하지 못했어요. 리그 매니저에서 기록해 주세요. ({e})")
+            return
+        entry["result"] = {"winner": team, "match_id": result["match"]["id"]}
+        save_state()
+        text = result_text(team, result["changes"], entry.get("who") or {})
+        await send_to(entry["place_id"], text)
+    await interaction.followup.send(
+        f"{text}\n\n순위 페이지와 구글 시트에 반영했어요. 잘못 기록했다면 `/승리취소` 로 되돌릴 수 있어요.",
+        allowed_mentions=discord.AllowedMentions.none(),
+    )
+
+
+@bot.tree.command(name="승리취소", description="/승리 로 기록한 마지막 결과를 되돌립니다 (운영진 전용)", guild=GUILD)
+async def undo_win(interaction: discord.Interaction) -> None:
+    if not await admin_only(interaction):
+        return
+    await interaction.response.defer()
+    async with bot.lock:
+        entry = next((x for x in reversed(bot.lineups) if x.get("result")), None)  # 가장 최근에 결과를 기록한 팀
+        if entry is None:
+            await interaction.followup.send("되돌릴 결과가 없어요. `/승리` 로 기록한 결과만 되돌릴 수 있어요.")
+            return
+        try:
+            await change_league({"mode": "undo", "matchId": entry["result"]["match_id"]})
+        except Exception as e:
+            print(f"결과 되돌리기 실패: {e!r}")
+            await interaction.followup.send(f"결과를 되돌리지 못했어요. 리그 매니저에서 고쳐 주세요. ({e})")
+            return
+        entry["result"] = None
+        save_state()
+        await send_to(entry["place_id"], "↩️ **경기 결과 기록을 취소했어요.** MMR과 전적을 기록하기 전으로 되돌렸어요.")
+    await interaction.followup.send("↩️ 결과 기록을 취소하고 MMR을 되돌렸어요. 다시 기록하려면 `/승리` 를 쓰세요.")
 
 
 # ── 슬래시 명령어: 참가자 ─────────────────────────────────────

@@ -87,14 +87,27 @@ class World:
             return sync
 
         self.league = league
+        self.rev = 1              # 서버의 리그 기록 번호
         self.server = []          # 리그 서버로 보낸 요청
         self.fail = set()         # 실패하게 만들 요청 이름
+        self.conflicts = 0        # 이 횟수만큼, 봇이 받아 간 사이에 매니저가 기록을 바꾼 것처럼 군다
 
         async def call_server(payload):
             self.server.append(payload)
-            if payload["action"] in self.fail:
+            action = payload["action"]
+            if action in self.fail:
                 raise RuntimeError("서버 오류")
-            return {"ok": True, "league": self.league} if payload["action"] == "adminLeague" else {"ok": True}
+            if action == "adminLeague":
+                return {"ok": True, "league": self.league, "rev": self.rev}
+            if action == "saveLeague":
+                if self.conflicts > 0:
+                    self.conflicts -= 1
+                    self.rev += 1
+                if payload.get("baseRev") != self.rev:
+                    raise mod.ServerError("서버에 더 새로운 기록이 있습니다", "conflict")
+                self.rev += 1
+                self.league = payload["league"]
+            return {"ok": True}
 
         mod.get_channel = get_channel
         mod.push_roster = push_roster
@@ -462,6 +475,17 @@ async def main():
 
     async def fake_matchmaker(payload):
         asked.append(payload)
+        league = payload["league"]
+        if payload.get("mode") == "result":                  # 이긴 팀은 +20, 진 팀은 −20
+            mid = "m%d" % (len(league["matches"]) + 1)
+            gain = lambda side: 20 if side == payload["winner"] else -20
+            changes = [{"id": l[side], "name": side.upper() + l[side], "side": side, "role": k + 1, "before": 3000, "delta": gain(side), "after": 3000 + gain(side)}
+                       for k, l in enumerate(payload["lanes"]) for side in ("r", "d")]
+            return {"ok": True, "league": dict(league, matches=[{"id": mid}] + league["matches"]), "match": {"id": mid, "at": "", "winner": payload["winner"]}, "changes": changes}
+        if payload.get("mode") == "undo":
+            if not league["matches"] or league["matches"][0]["id"] != payload["matchId"]:
+                return {"ok": False, "error": "그 뒤에 다른 경기가 기록돼 있어 되돌리지 않았습니다"}
+            return {"ok": True, "league": dict(league, matches=league["matches"][1:]), "match": league["matches"][0], "changes": []}
         ids = payload["participants"]
         return fake_result(ids[:10], ids[10:])
 
@@ -510,7 +534,7 @@ async def main():
     w.league = None
     await gather(w, 10)
     await run(mod.close_now, 100, ADMIN)
-    check(len(asked) == n and any("서버에 올린 기록이 없어" in x for x in w.texts(w.admin.send)) and not any("팀 편성" in x for x in w.texts(w.thread.send)), "매니저가 기록을 올린 적이 없으면 관리자에게 알린다")
+    check(len(asked) == n and any("서버에 리그 기록이 없어" in x for x in w.texts(w.admin.send)) and not any("팀 편성" in x for x in w.texts(w.thread.send)), "서버에 리그 기록이 없으면 관리자에게 알린다")
 
     w = World(mod, forum=True, league=league_of(12))
     w.fail.add("adminLeague")
@@ -522,7 +546,7 @@ async def main():
     w.fail.add("pushLineup")
     rec = await gather(w, 10)
     await run(mod.close_now, 100, ADMIN)
-    check(rec.lineup and any("리그 서버에 올리지 못했습니다" in x for x in w.texts(w.admin.send)) and w.texts(w.thread.send)[-1].startswith("⚔️"), "짠 팀을 서버에 못 올려도 디스코드에는 공지")
+    check(rec.lineup and any("리그 서버에 올리지 못해서" in x for x in w.texts(w.admin.send)) and w.texts(w.thread.send)[-1].startswith("⚔️"), "짠 팀을 서버에 못 올려도 디스코드에는 공지")
 
     async def broken(payload):
         raise RuntimeError("node 없음")
@@ -537,6 +561,91 @@ async def main():
     await gather(w, 9)
     await run(mod.close_now, 100, ADMIN)
     check(not any(p["action"] == "adminLeague" for p in w.server), "열 명이 안 되면 리그 기록도 묻지 않는다")
+
+    # ── 경기 결과 기록: /승리, /승리취소 ──
+    mod.run_matchmaker = fake_matchmaker
+    w = World(mod, forum=True, league=league_of(12))
+    t, _ = await run(mod.record_win, 100, ADMIN, "r")
+    check("결과를 기록할 팀이 없어요" in t and not any(p["action"] == "saveLeague" for p in w.server), "팀을 짜기 전의 /승리")
+    t, _ = await run(mod.undo_win, 100, ADMIN)
+    check("되돌릴 결과가 없어요" in t, "기록한 결과가 없을 때의 /승리취소")
+    t, _ = await run(mod.record_win, 300, ADMIN, "r")
+    check("관리자 채널에서만" in t, "다른 채널의 /승리 거절")
+    t, _ = await run(mod.undo_win, 300, ADMIN)
+    check("관리자 채널에서만" in t, "다른 채널의 /승리취소 거절")
+
+    rec = await gather(w, 10)
+    await run(mod.close_now, 100, ADMIN)
+    entry = mod.bot.lineups[0]
+    check(entry["lanes"][0] == {"role": 1, "r": "p0", "d": "p5"} and entry["who"]["p0"] == 100 and entry["place_id"] == 300 and entry["result"] is None, "짠 팀을 결과 기록에 쓸 수 있게 적어 둔다")
+    t, i = await run(mod.record_win, 100, ADMIN, "r")
+    check(asked[-1]["mode"] == "result" and asked[-1]["winner"] == "r" and asked[-1]["lanes"] == entry["lanes"] and len(asked[-1]["league"]["players"]) == 12, "/승리 → 공지한 팀 그대로 정산")
+    saves = [p for p in w.server if p["action"] == "saveLeague"]
+    check(len(saves) == 1 and saves[0]["baseRev"] == 1 and w.rev == 2 and w.league["matches"] == [{"id": "m1"}], "정산한 기록을 서버에 올린다 (보고 고친 번호와 함께)")
+    shown = w.texts(w.thread.send)[-1]
+    check(shown.startswith("🏆 **래디언트 승리!**") and "🟢 **래디언트** · 승\n" in shown and "🔴 **다이어**\n" in shown, "모집 글에 경기 결과")
+    check("`1 캐리` Rp0 <@100>  3000 → **3020** (+20)" in shown and "`5 서폿` Dp9 <@109>  3000 → **2980** (−20)" in shown, "선수별 MMR 변동")
+    check(w.thread.send.call_args.kwargs.get("allowed_mentions") is not None and shown in t and "/승리취소" in t and i.followup.send.call_args.kwargs.get("allowed_mentions") is not None,
+          "결과 공지는 알림을 울리지 않고, 운영진에게 되돌리는 방법도 알린다")
+    check(entry["result"] == {"winner": "r", "match_id": "m1"} and json.loads(mod.STATE_PATH.read_text(encoding="utf-8"))["lineups"][0]["result"]["winner"] == "r", "기록한 결과를 적어 둔다")
+    t, _ = await run(mod.record_win, 100, ADMIN, "d")
+    check("결과를 기다리는 팀이 없어요" in t and "/승리취소" in t and w.rev == 2, "같은 판을 두 번 기록하지 않는다")
+    t, _ = await run(mod.extend, 100, ADMIN)
+    check("이미 경기 결과를 기록한 내전" in t and rec.closed and rec.lineup, "결과를 기록한 내전은 다시 열지 않는다")
+    t, _ = await run(mod.cancel, 100, ADMIN)
+    check("이미 경기 결과를 기록한 내전" in t and not rec.cancelled, "결과를 기록한 내전은 취소하지 않는다")
+
+    t, _ = await run(mod.undo_win, 100, ADMIN)
+    check(asked[-1]["mode"] == "undo" and asked[-1]["matchId"] == "m1" and entry["result"] is None and w.rev == 3 and w.league["matches"] == [], "/승리취소 → 그 경기를 되돌려 서버에 올린다")
+    check("결과 기록을 취소" in t and "경기 결과 기록을 취소했어요" in w.texts(w.thread.send)[-1], "되돌린 것을 모집 글과 운영진에게 알린다")
+    t, _ = await run(mod.record_win, 100, ADMIN, "d")
+    check(t.startswith("🏆 **다이어 승리!**") and "🔴 **다이어** · 승" in t and entry["result"]["winner"] == "d" and "`1 캐리` Dp5 <@105>  3000 → **3020** (+20)" in t, "되돌린 뒤 다시 기록")
+
+    mod.bot.current, mod.bot.lineups = None, []              # 봇이 꺼졌다 켜져도 결과 기록 여부를 기억한다
+    await mod.restore_state()
+    check(len(mod.bot.lineups) == 1 and mod.bot.lineups[0]["result"]["winner"] == "d" and mod.bot.lineups[0]["who"]["p0"] == 100, "껐다 켜도 짠 팀과 기록한 결과를 기억한다")
+    t, _ = await run(mod.undo_win, 100, ADMIN)
+    check("결과 기록을 취소" in t and mod.bot.lineups[0]["result"] is None, "껐다 켠 뒤에도 /승리취소")
+    t, _ = await run(mod.record_win, 100, ADMIN, "r")
+    check(t.startswith("🏆 **래디언트 승리!**"), "껐다 켠 뒤에도 /승리")
+
+    w = World(mod, forum=True, league=league_of(12))         # 결과를 기록하지 않고 다음 판을 만들면 알려 준다
+    await gather(w, 10)
+    await run(mod.close_now, 100, ADMIN)
+    w.message.id = 301
+    t, _ = await run(mod.create_inhouse, 100, ADMIN)
+    check("결과를 아직 기록하지 않은 판" in t and "/승리" in t, "앞 판의 결과가 없으면 다음 /내전생성 때 알린다")
+    t, _ = await run(mod.record_win, 100, ADMIN, "r")
+    check(t.startswith("🏆") and mod.bot.lineups[0]["result"]["winner"] == "r", "다음 모집이 열려 있어도 앞 판의 결과를 기록한다")
+    await run(mod.cancel, 100, ADMIN)
+    t, _ = await run(mod.create_inhouse, 100, ADMIN)
+    check("결과를 아직 기록하지 않은 판" not in t, "결과를 모두 기록했으면 알리지 않는다")
+    await run(mod.cancel, 100, ADMIN)
+
+    w = World(mod, forum=True, league=league_of(12))         # 봇이 기록을 받아 간 사이에 매니저가 기록을 바꾼 경우
+    await gather(w, 10)
+    await run(mod.close_now, 100, ADMIN)
+    w.conflicts = 1
+    t, _ = await run(mod.record_win, 100, ADMIN, "r")
+    got = [p for p in w.server if p["action"] in ("adminLeague", "saveLeague")]
+    check(t.startswith("🏆") and [p["action"] for p in got[-4:]] == ["adminLeague", "saveLeague", "adminLeague", "saveLeague"] and got[-1]["baseRev"] == 2 and w.rev == 3,
+          "그사이 서버 기록이 바뀌었으면 새 기록을 받아 다시 정산한다")
+
+    w = World(mod, forum=True, league=league_of(12))
+    await gather(w, 10)
+    await run(mod.close_now, 100, ADMIN)
+    w.fail.add("saveLeague")
+    t, _ = await run(mod.record_win, 100, ADMIN, "r")
+    check("결과를 기록하지 못했어요" in t and "서버 오류" in t and mod.bot.lineups[0]["result"] is None and not w.texts(w.thread.send)[-1].startswith("🏆"), "서버에 올리지 못하면 기록하지 않은 것으로 둔다")
+    w.fail.clear()
+    w.league = dict(w.league, players=w.league["players"][:5])
+
+    async def refusing(payload):
+        return {"ok": False, "error": "팀에 있던 선수 5명이 지금 선수단에 없습니다. 매니저에서 기록해 주세요"}
+
+    mod.run_matchmaker = refusing
+    t, _ = await run(mod.record_win, 100, ADMIN, "r")
+    check("결과를 기록하지 못했어요" in t and "선수단에 없습니다" in t and mod.bot.lineups[0]["result"] is None, "정산할 수 없으면 까닭을 알린다")
 
     # 실제 Node 와 실제 매니저 파일로 끝까지
     mod.run_matchmaker = real_matchmaker
@@ -554,6 +663,21 @@ async def main():
         check([s[0] for s in seats] == list("12345") * 2 and all(int(s[3]) - 100 == int(s[2][2:]) for s in seats), "자리 순서와 디스코드 계정이 맞다")
         check(lineup.count("이번 판은 쉬어요") == 1 and len(re.findall(r"선수\d+ <@\d+>", lineup.split("쉬어요: ")[1].split("\n")[0])) == 2, "열두 명이면 두 명이 쉰다")
         check(len(w.server[-1]["lineup"]["lanes"]) == 5 and len(w.server[-1]["lineup"]["bench"]) == 2, "실제 편성을 서버에 올린다")
+
+        start = json.dumps(league_of(12), ensure_ascii=False, sort_keys=True)
+        entry = mod.bot.lineups[0]
+        t, _ = await run(mod.record_win, 100, ADMIN, "d")
+        after = w.league
+        mmr = {p["id"]: p for p in after["players"]}
+        won, lost = [l["d"] for l in entry["lanes"]], [l["r"] for l in entry["lanes"]]
+        check(t.startswith("🏆 **다이어 승리!**") and len(after["matches"]) == 1 and after["matches"][0]["winner"] == "d" and len(after["matches"][0]["rows"]) == 10, "실제 정산: 경기가 기록된다")
+        check(all(mmr[i]["wins"] == 3 and mmr[i]["mmr"] > 3000 + int(i[1:]) * 150 for i in won) and all(mmr[i]["losses"] == 3 and mmr[i]["mmr"] < 3000 + int(i[1:]) * 150 for i in lost),
+              "실제 정산: 이긴 팀은 승과 MMR이 오르고 진 팀은 패와 MMR이 내린다")
+        check(len(re.findall(r"\d+ → \*\*\d+\*\* \([+−]\d+\)", t)) == 10 and t.count("(+") == 5 and t.count("(−") == 5, "실제 정산: 열 명의 MMR 변동을 보여 준다")
+        bench = [p["id"] for p in after["players"] if p["id"] not in won + lost]
+        check(len(bench) == 2 and all(mmr[i]["wins"] == 2 and mmr[i]["losses"] == 2 for i in bench), "실제 정산: 쉰 사람의 전적은 그대로")
+        t, _ = await run(mod.undo_win, 100, ADMIN)
+        check("결과 기록을 취소" in t and json.dumps(w.league, ensure_ascii=False, sort_keys=True) == start, "실제 되돌리기: 기록하기 전과 똑같아진다")
 
     for task in asyncio.all_tasks() - {asyncio.current_task()}:
         task.cancel()

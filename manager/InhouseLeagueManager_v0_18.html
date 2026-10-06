@@ -538,7 +538,7 @@ ol.rules b{color:var(--bone);font-weight:500}
     <h3>리그 사이트·디스코드 봇과 함께 쓰기</h3>
     <p>리그 사이트에서 등록받은 선수는 운영진 페이지의 <b>매니저용 명단 받기</b>로 파일을 받아 선수단 탭의 <b>CSV 파일 고르기</b>로 불러옵니다. 디스코드와 스팀 정보가 함께 들어와, 다음에 다시 불러올 때 닉네임이 바뀌었어도 같은 선수로 이어집니다.</p>
     <p>디스코드 봇이 모집을 마감하면 관리자 채널에 <b>매니저 붙여넣기용</b> 명단이 올라옵니다. 팀 편성 탭의 <b>디스코드 봇의 참가 명단·짠 팀 불러오기</b>에 붙여넣으면 그 사람들이 참가자로 골라집니다. 데이터·설정 탭에서 공개 페이지를 연결해 두면 붙여넣지 않고 <b>봇이 올린 명단 불러오기</b>로 바로 받아올 수도 있습니다. 봇이 팀까지 짜서 공지했다면 <b>봇이 짠 팀 불러오기</b>를 누르세요. 공지된 편성이 그대로 보드에 올라와서, 경기가 끝난 뒤 이긴 팀만 누르면 됩니다.</p>
-    <p>공개 페이지를 연결하고 <b>자동으로 올리기</b>를 켜 두면, 경기를 기록하거나 되돌릴 때마다 몇 초 뒤 순위 페이지에 반영됩니다. 위쪽 <b>기록 저장</b>은 그대로 써서 파일 백업을 따로 받아 두세요.</p>
+    <p>데이터·설정 탭에서 리그 서버를 연결하고 <b>서버와 자동으로 맞추기</b>를 켜 두면, 여기서 고친 기록이 몇 초 뒤 서버에 올라가 순위 페이지와 구글 시트에 반영됩니다. 디스코드에서 봇에게 <b>/승리</b>로 경기 결과를 기록하면 그 결과도 서버를 거쳐 이 매니저로 들어옵니다. 위쪽 <b>기록 저장</b>은 그대로 써서 파일 백업을 따로 받아 두세요.</p>
 
     <h3>경기 한 판의 흐름</h3>
     <ul>
@@ -671,17 +671,22 @@ ol.rules b{color:var(--bone);font-weight:500}
   </div>
 
   <div class="panel">
-    <h2>공개 페이지 연결</h2>
-    <p class="hint">리그 사이트의 순위 페이지에 경기 기록을 올리고, 디스코드 봇이 올린 참가 명단을 받아옵니다. 서버 주소와 운영진 키는 이 브라우저에만 저장되며 기록 파일에는 들어가지 않습니다. 공개 페이지에는 이름·MMR·전적·경기 기록만 올라가고 디스코드와 스팀 정보는 빠집니다. 디스코드 봇이 팀을 자동으로 짤 수 있도록 선수단·경기 기록·설정 전체도 함께 올리는데, 이쪽은 공개되지 않고 운영진 키가 있어야만 읽을 수 있습니다. 봇이 최신 MMR과 판수로 팀을 짜려면 <b>기록이 바뀌면 자동으로 올리기</b>를 켜 두세요.</p>
+    <h2>리그 서버 연결</h2>
+    <p class="hint">리그 사이트와 디스코드 봇이 함께 쓰는 서버에 연결합니다. 연결하면 <b>기록의 원본이 서버</b>에 놓입니다. 이 매니저에서 고친 것은 서버에 올라가고, 봇이 <b>/승리</b>로 기록한 경기 결과는 서버에서 받아 옵니다. 서버는 받은 기록으로 순위 페이지와 구글 시트의 <b>순위</b>, <b>경기 기록</b> 탭을 다시 씁니다. <b>서버와 자동으로 맞추기</b>를 켜 두면 이 과정이 저절로 됩니다. 서버에 더 새로운 기록이 있을 때는 덮어쓰지 않고 먼저 불러옵니다. 서버 주소와 운영진 키는 이 브라우저에만 저장되며 기록 파일에는 들어가지 않습니다. 순위 페이지에는 이름·MMR·전적·경기 기록만 나가고 디스코드와 스팀 정보는 빠집니다.</p>
     <div class="row">
       <label class="field grow">서버 주소 (Apps Script 웹 앱)<input type="url" id="syncUrl" placeholder="https://script.google.com/macros/s/…/exec" spellcheck="false"></label>
       <label class="field grow">운영진 키<input type="password" id="syncKey" autocomplete="off" spellcheck="false"></label>
     </div>
     <div class="row" style="margin-top:12px">
-      <label class="checkline"><input type="checkbox" id="syncAuto"> 기록이 바뀌면 자동으로 올리기</label>
+      <label class="checkline"><input type="checkbox" id="syncAuto"> 서버와 자동으로 맞추기</label>
       <div class="spacer grow"></div>
       <button class="btn" id="btnSyncTest">연결 확인</button>
+      <button class="btn" id="btnSyncPull">서버에서 불러오기</button>
       <button class="btn gold" id="btnSyncNow">지금 올리기</button>
+    </div>
+    <div class="row" style="margin-top:10px" id="syncForceRow" hidden>
+      <div class="spacer grow"></div>
+      <button class="btn" id="btnSyncForce">이 기록으로 서버 덮어쓰기</button>
     </div>
     <p class="hint" id="syncInfo" style="margin:12px 0 0"></p>
   </div>
@@ -1002,7 +1007,9 @@ document.addEventListener('visibilitychange', ()=>{ if(document.visibilityState 
 /* =========================================================
    선수 만들기 / 표 읽기
    ========================================================= */
+/* @engine:start */
 let seq = 0;
+/* @engine:end */
 function newPlayer(name, mmr, prefs){
   const n = Number(mmr);
   const base = clamp(Math.round(Number.isFinite(n) ? n : 1000), 0, 15000);   // 0도 MMR이다. 숫자가 아닐 때만 1000으로 넣는다
@@ -1631,6 +1638,8 @@ function laneStats(){
 /* =========================================================
    경기 결과와 MMR
    ========================================================= */
+/* @engine:start — 봇의 /승리·/승리취소 도 이 구역의 applyResult, dropLatest 로 정산한다.
+   save·renderAll·toast 를 부르는 함수(recordResult, removeMatch, undoLast)는 매니저 화면에서만 쓴다 */
 // a팀이 b팀을 이길 기대 승률. 두 팀 평균이 doubleGap만큼 차이 나면 약팀 승리 몫이 강팀 승리 몫의 2배, 두 배로 벌어지면 4배가 된다.
 // 도타 MMR은 체스 레이팅보다 범위가 약 세 배 넓어서, 표준 Elo(약 120점에 2배)보다 세 배 완만한 360을 기본으로 쓴다.
 // doubleGap이 없는 예전 경기는 그때 쓰던 표준 Elo(400점에 10배) 그대로 계산한다.
@@ -1678,7 +1687,9 @@ function computeDeltas(R, D, radiantWon, roles, rule = ruleOf(), ranksR, ranksD)
   };
 }
 
-function recordResult(radiantWon){
+// 보드의 편성(lanes)대로 경기 결과를 기록에 넣고 선수의 MMR·전적을 바꾼다. 화면은 건드리지 않는다.
+// 매니저의 승리 버튼(recordResult)과 봇의 /승리 가 함께 쓴다. 넣은 경기를 돌려준다.
+function applyResult(radiantWon, at = new Date()){
   const {R, D, roles, ranksR, ranksD} = laneStats();
   const rule = ruleOf();
   const del = computeDeltas(R, D, radiantWon, roles, rule, ranksR, ranksD);
@@ -1700,13 +1711,18 @@ function recordResult(radiantWon){
     else{ dp.losses++; dp.streak = dp.streak <= 0 ? dp.streak-1 : -1; }
     dp.roleCount[l.role-1] = (dp.roleCount[l.role-1]||0) + 1;
   });
-  state.matches.unshift({
-    id:'m'+Date.now().toString(36)+(seq++).toString(36),
-    at: new Date().toISOString(),
+  const match = {
+    id:'m'+at.getTime().toString(36)+(seq++).toString(36),
+    at: at.toISOString(),
     winner: radiantWon ? 'r' : 'd',
     rule,
     rows
-  });
+  };
+  state.matches.unshift(match);
+  return match;
+}
+function recordResult(radiantWon){
+  const rows = applyResult(radiantWon).rows;
   clearDraft();
   save(); renderAll();
   const big = Math.max(...rows.map(r => Math.abs(r.delta)));   // 0점 아래로 막은 것까지 반영한 실제 이동
@@ -1820,6 +1836,7 @@ function recalcStreak(pid){
   }
   return st;
 }
+/* @engine:end */
 
 /* =========================================================
    그리기
@@ -2897,11 +2914,12 @@ $('#btnReset').addEventListener('click', async ()=>{
 });
 
 /* =========================================================
-   디스코드 참가 명단과 공개 페이지 연결 (v0.18)
+   디스코드 참가 명단과 리그 서버 연결 (v0.18, 서버가 원본이 된 것은 v0.20)
    ========================================================= */
 // 서버 주소와 운영진 키는 기록(state)과 따로 이 브라우저에만 둔다. 기록 파일로 내보내도 따라가지 않는다.
+// rev는 이 브라우저가 서버와 마지막으로 맞춘 기록 번호, hash는 그때의 기록 지문이다(v0.20).
 const SYNC_STORE = 'dota_inhouse_sync';
-let sync = {url:'', key:'', auto:false};
+let sync = {url:'', key:'', auto:false, rev:0, hash:''};
 try{ Object.assign(sync, JSON.parse(localStorage.getItem(SYNC_STORE) || '{}')); }catch(e){}
 const syncReady = () => /^https:\/\/script\.google(usercontent)?\.com\//.test(sync.url) && !!sync.key;
 function keepSync(){ try{ localStorage.setItem(SYNC_STORE, JSON.stringify(sync)); }catch(e){} }
@@ -2919,55 +2937,145 @@ async function syncPost(body){
   }finally{ clearTimeout(timer); }
   let j;
   try{ j = await res.json(); }catch(err){ throw new Error('서버 응답을 읽지 못했습니다. 웹 앱을 "모든 사용자"가 쓸 수 있게 배포했는지 확인하세요'); }
-  if(!j || !j.ok) throw new Error((j && j.error) || '서버가 요청을 처리하지 못했습니다');
+  if(!j || !j.ok){
+    const e = new Error((j && j.error) || '서버가 요청을 처리하지 못했습니다');
+    e.code = (j && j.code) || '';
+    throw e;
+  }
   return j;
 }
 
-// 공개 페이지에 올릴 기록. 디스코드·스팀 같은 개인 정보와 설정은 빼고 순위·경기 기록에 필요한 칸만 남긴다.
-function publicRecords(){
-  return {
-    players: state.players.map(p => ({id:p.id, name:p.name, baseMMR:p.baseMMR, mmr:p.mmr, prefs:p.prefs.slice(),
-      wins:p.wins, losses:p.losses, streak:p.streak, roleCount:p.roleCount.slice()})),
-    matches: state.matches.map(m => ({id:m.id, at:m.at, winner:m.winner,
-      rows: m.rows.map(r => ({id:r.id, name:r.name, side:r.side, role:r.role, rank:r.rank || 0, before:r.before, delta:r.delta}))}))
-  };
+/* ---- 기록의 원본은 서버에 둔다 (v0.20) ----
+   봇이 /승리 로 경기 결과를 기록하게 되면서, 기록의 원본을 이 브라우저에서 서버로 옮겼다.
+   매니저는 열 때와 켜 둔 동안 서버의 기록을 받아 오고, 고친 것은 서버에 올린다.
+   서버는 받은 기록으로 순위 페이지와 구글 시트의 순위·경기 기록 탭을 다시 쓴다(공개할 칸은 서버가 거른다).
+   올릴 때는 서버의 몇 번째 기록을 보고 고쳤는지(baseRev)를 함께 보낸다. 그사이 서버 기록이 바뀌었으면 서버가 받지 않고,
+   매니저는 덮어쓰는 대신 서버 기록을 먼저 불러온다. */
+const leagueOf = () => ({players: state.players, matches: state.matches, settings: state.settings});
+// 기록의 지문. 서버와 맞춘 뒤로 기록이 바뀌었는지 가리는 데 쓴다
+function fingerprint(){
+  const s = JSON.stringify(leagueOf());
+  let h = 2166136261;
+  for(let i=0;i<s.length;i++){ h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); }
+  return (h >>> 0).toString(36) + '.' + s.length;
 }
+const unsent = () => fingerprint() !== sync.hash;               // 서버에 아직 올리지 않은 변경이 있는지
+const hasRecords = () => state.players.length > 0 || state.matches.length > 0;
 const clock = d => d.toLocaleTimeString('ko-KR', {hour:'2-digit', minute:'2-digit'});
 function setSyncBadge(text, bad){
   const el = $('#statSync');
   el.textContent = text; el.hidden = !text;
   el.classList.toggle('bad', !!bad);
 }
-let pubTimer = null, pubBusy = false, pubAgain = false;
+function syncNote(text, bad){
+  const el = $('#syncInfo');
+  el.classList.toggle('bad', !!bad);
+  el.textContent = text;
+}
+const serverSays = err => /알 수 없는 요청/.test(err.message)
+  ? '서버가 예전 버전입니다. Apps Script 편집기에 새 Code.gs를 붙여넣고 새 버전으로 배포해 주세요' : err.message;
+
+let pubTimer = null, syncBusy = false, pubAgain = false;
+let syncStuck = false;           // 서버와 이 브라우저의 기록이 서로 달라 운영자의 선택을 기다리는 중
 function schedulePublish(){
-  if(loading || !sync.auto || !syncReady()) return;
+  if(loading || !sync.auto || !syncReady() || syncStuck) return;
   clearTimeout(pubTimer);
-  pubTimer = setTimeout(() => publishNow(false), 4000);       // 잇달아 바뀌는 것을 모았다가 한 번에 올린다
+  pubTimer = setTimeout(() => pushLeague(false), 4000);       // 잇달아 바뀌는 것을 모았다가 한 번에 올린다
 }
-async function publishNow(manual){
+// 이 브라우저의 기록을 서버에 올린다. force는 서버 기록이 더 새로워도 덮어쓴다(운영자가 그렇게 고른 때만 쓴다).
+async function pushLeague(manual, force){
   if(!syncReady()){ if(manual) toast('서버 주소와 운영진 키를 먼저 넣어 주세요'); return; }
-  if(pubBusy){ pubAgain = true; return; }
-  pubBusy = true;
-  setSyncBadge('공개 페이지에 올리는 중');
+  if(syncBusy){ pubAgain = true; return; }
+  if(!manual && !force && !unsent()) return;                  // 올릴 변경이 없다
+  syncBusy = true;
+  setSyncBadge('서버에 올리는 중');
+  const mark = fingerprint();
+  let conflict = false;
   try{
-    // league는 봇이 팀을 짤 때 읽는 기록 전체다(디스코드·설정 포함). 서버가 공개하지 않고 따로 둔다
-    const r = await syncPost({action:'publishRecords', records: publicRecords(),
-      league: {players: state.players, matches: state.matches, settings: state.settings}});
-    setSyncBadge('공개 페이지 반영 ' + clock(new Date()));
-    $('#syncInfo').classList.remove('bad');
-    $('#syncInfo').textContent = '선수 ' + r.players + '명, 경기 ' + r.matches + '건을 ' + clock(new Date()) + '에 공개 페이지에 올렸습니다.' +
-      (r.league ? ' 봇이 팀을 짤 때 쓸 기록도 함께 올렸습니다.' : ' 서버가 예전 버전이라 봇이 팀을 짤 때 쓸 기록은 올라가지 않았습니다.');
-    if(manual) toast('공개 페이지에 올렸습니다');
+    const r = await syncPost({action:'saveLeague', league: leagueOf(), baseRev: sync.rev || 0, force: !!force});
+    sync.rev = r.rev; sync.hash = mark; keepSync();
+    syncStuck = false; renderSyncForm();
+    setSyncBadge('서버에 저장 ' + clock(new Date()));
+    syncNote('선수 ' + r.players + '명, 경기 ' + r.matches + '건을 ' + clock(new Date()) + '에 서버에 올렸습니다. 순위 페이지와 구글 시트에도 반영됩니다.');
+    if(manual) toast('서버에 올렸습니다');
   }catch(err){
-    setSyncBadge('공개 페이지 반영 실패', true);
-    $('#syncInfo').classList.add('bad');
-    $('#syncInfo').textContent = '올리지 못했습니다: ' + err.message;
-    if(manual) toast('올리지 못했습니다 — ' + err.message);
+    conflict = err.code === 'conflict';
+    if(!conflict){
+      setSyncBadge('서버에 올리지 못함', true);
+      syncNote('올리지 못했습니다: ' + serverSays(err), true);
+      if(manual) toast('올리지 못했습니다 — ' + serverSays(err));
+    }
   }finally{
-    pubBusy = false;
-    if(pubAgain){ pubAgain = false; schedulePublish(); }
+    syncBusy = false;
   }
+  if(conflict) await pullLeague(manual);                      // 서버 기록이 그사이 바뀌었다. 덮어쓰지 않고 먼저 불러온다
+  else if(pubAgain){ pubAgain = false; schedulePublish(); }
 }
+// 서버의 기록을 받아 온다. 서버가 더 새로우면 이 브라우저의 기록을 그것으로 바꾼다.
+// 이 브라우저에 아직 올리지 않은 변경이 있는데 서버도 바뀌었으면, 어느 쪽을 남길지 운영자에게 묻는다.
+async function pullLeague(manual){
+  if(!syncReady()){ if(manual) toast('서버 주소와 운영진 키를 먼저 넣어 주세요'); return; }
+  if(syncBusy) return;
+  syncBusy = true;
+  let push = false;
+  try{
+    push = await pullStep(manual);
+  }catch(err){
+    setSyncBadge('서버 기록을 확인하지 못함', true);
+    syncNote('서버 기록을 확인하지 못했습니다: ' + serverSays(err), true);
+    if(manual) toast('서버 기록을 확인하지 못했습니다 — ' + serverSays(err));
+  }finally{
+    syncBusy = false;
+  }
+  if(push) await pushLeague(manual);                          // 서버가 뒤처져 있다. 이 브라우저의 기록을 올린다
+}
+// 서버의 기록을 보고 필요하면 이 브라우저의 기록을 바꾼다. 돌려주는 값: 이어서 이 브라우저의 기록을 올려야 하는지
+async function pullStep(manual){
+  const r = await syncPost({action:'adminLeague'});
+  const rev = r.rev || 0;
+  if(!r.league || !rev){                                      // 서버에 아직 기록이 없다. 이 브라우저의 기록이 첫 기록이 된다
+    if(!hasRecords() && manual) toast('서버에 아직 기록이 없습니다');
+    return hasRecords();
+  }
+  if(rev === (sync.rev || 0)){                                // 서버는 마지막으로 맞춘 그대로다
+    if(!unsent() && manual) toast('이미 서버와 같은 기록입니다');
+    return unsent();
+  }
+  if(hasRecords() && unsent() && !confirm('서버에 이 브라우저보다 새로운 기록이 있습니다.\n봇으로 경기 결과를 기록했거나 다른 컴퓨터에서 기록을 고친 경우입니다.\n\n' +
+      '[확인] 서버 기록을 불러옵니다. 이 브라우저에서 아직 올리지 않은 변경은 사라집니다.\n[취소] 이 브라우저의 기록을 그대로 둡니다.')){
+    syncStuck = true; renderSyncForm();
+    setSyncBadge('서버와 기록이 다름', true);
+    syncNote('서버에 더 새로운 기록이 있어 자동으로 맞추지 않고 있습니다. 서버 기록을 쓰려면 "서버에서 불러오기"를, 이 브라우저의 기록으로 서버를 덮어쓰려면 "이 기록으로 서버 덮어쓰기"를 누르세요.', true);
+    return false;
+  }
+  const bad = backupProblem(r.league);
+  if(bad){
+    setSyncBadge('서버 기록을 불러오지 못함', true);
+    syncNote('서버 기록을 불러오지 못했습니다: ' + bad, true);
+    return false;
+  }
+  state = stateFrom(r.league);
+  sync.rev = rev; sync.hash = fingerprint(); keepSync();
+  syncStuck = false;
+  picked = new Set([...picked].filter(id => byId(id)));        // 짜 둔 보드는 선수가 그대로 있으면 남긴다(renderBoard가 가린다)
+  selPlayer = null;
+  save(); renderAll(); renderSettings(); renderSyncForm();
+  setSyncBadge('서버 기록 불러옴 ' + clock(new Date()));
+  syncNote('서버의 기록을 불러왔습니다 (선수 ' + state.players.length + '명, 경기 ' + state.matches.length + '건).');
+  toast('서버의 새 기록을 불러왔습니다');
+  return false;
+}
+// 켜 둔 동안 서버 기록이 바뀌었는지 가볍게 확인한다(봇이 결과를 기록했을 수 있다)
+async function checkServer(){
+  if(loading || !sync.auto || !syncReady() || syncStuck || syncBusy || document.visibilityState !== 'visible') return;
+  try{
+    const r = await syncPost({action:'adminLeagueRev'});
+    if((r.rev || 0) !== (sync.rev || 0)) await pullLeague(false);
+    else if(unsent()) schedulePublish();
+  }catch(e){ /* 다음에 다시 본다 */ }
+}
+setInterval(checkServer, 60000);
+document.addEventListener('visibilitychange', () => { if(document.visibilityState === 'visible') checkServer(); });
 
 function renderSyncForm(){
   $('#syncUrl').value = sync.url || '';
@@ -2975,12 +3083,13 @@ function renderSyncForm(){
   $('#syncAuto').checked = !!sync.auto;
   $('#btnRosterPull').hidden = !syncReady();
   $('#btnLineupPull').hidden = !syncReady();
+  $('#syncForceRow').hidden = !syncStuck;
 }
 $('#syncUrl').addEventListener('change', e => { sync.url = e.target.value.trim(); keepSync(); renderSyncForm(); });
 $('#syncKey').addEventListener('change', e => { sync.key = e.target.value.trim(); keepSync(); renderSyncForm(); });
 $('#syncAuto').addEventListener('change', e => {
   sync.auto = e.target.checked; keepSync();
-  if(sync.auto) publishNow(false);
+  if(sync.auto) pullLeague(false);                            // 서버가 더 새로우면 받아 오고, 아니면 이 브라우저의 변경을 올린다
 });
 $('#btnSyncTest').addEventListener('click', async () => {
   sync.url = $('#syncUrl').value.trim(); sync.key = $('#syncKey').value.trim(); keepSync(); renderSyncForm();
@@ -2995,7 +3104,14 @@ $('#btnSyncTest').addEventListener('click', async () => {
 });
 $('#btnSyncNow').addEventListener('click', () => {
   sync.url = $('#syncUrl').value.trim(); sync.key = $('#syncKey').value.trim(); keepSync(); renderSyncForm();
-  publishNow(true);
+  pushLeague(true);
+});
+$('#btnSyncPull').addEventListener('click', () => {
+  sync.url = $('#syncUrl').value.trim(); sync.key = $('#syncKey').value.trim(); keepSync(); renderSyncForm();
+  pullLeague(true);
+});
+$('#btnSyncForce').addEventListener('click', () => {
+  if(confirm('서버의 기록을 이 브라우저의 기록으로 덮어씁니다.\n봇으로 기록한 경기 결과가 이 브라우저에 없다면 그 결과는 사라집니다. 계속할까요?')) pushLeague(true, true);
 });
 
 /* ---- 디스코드 참가 명단으로 참가자 고르기 ---- */
@@ -3093,6 +3209,8 @@ $('#btnLineupPull').addEventListener('click', async () => {
   renderSettings();
   renderNewPrefs();
   renderSyncForm();
+  // 서버가 더 새로운 기록을 갖고 있으면 화면을 풀기 전에 받아 온다. 서버가 느려도 오래 붙잡지는 않는다
+  if(!loading && sync.auto && syncReady()) await Promise.race([pullLeague(false), new Promise(r => setTimeout(r, 6000))]);
   document.body.classList.remove('is-loading');
   LOCK_AREAS.forEach(sel => { const el = $(sel); if(el) el.inert = false; });
 })();

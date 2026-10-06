@@ -11,7 +11,7 @@
  * 코드를 고친 뒤에는 배포 → 배포 관리 → 수정(연필) → 버전: 새 버전 → 배포 를 눌러야 반영됩니다.
  */
 
-const SERVER_VERSION = 4;                                 // 서버를 고칠 때마다 올린다. 상태 응답에 실려서 새 버전이 배포됐는지 밖에서 확인할 수 있다
+const SERVER_VERSION = 5;                                // 서버를 고칠 때마다 올린다. 상태 응답에 실려서 새 버전이 배포됐는지 밖에서 확인할 수 있다
 const SHEET_NAME = '선수등록';
 const HEADERS = ['등록시각', '수정시각', '상태', '닉네임', '스팀프로필', '스팀키', '디스코드', 'MMR', '1지망', '2지망', '3지망', '4지망'];
 const COL = HEADERS.reduce((o, h, i) => (o[h] = i, o), {});
@@ -21,7 +21,7 @@ const MAX_MMR = 15000;
 const MAX_ROWS = 3000;
 const ROSTER_MAX = 60;
 const STEAM_TRIES = 4;                                     // 스팀 조회를 몇 번까지 시도할지
-const LEAGUE_MAX = 8000000;                                // 봇에게 넘길 리그 기록의 최대 크기(글자 수)
+const LEAGUE_MAX = 8000000;                                // 리그 기록의 최대 크기(글자 수)
 
 /* =========================================================
    설치: 편집기에서 setup 을 한 번 실행하세요
@@ -82,6 +82,8 @@ function doPost(e) {
       case 'pushRoster': requireAdmin_(body); return pushRoster_(body);
       case 'adminRoster': requireAdmin_(body); return { roster: getRoster_() };
       case 'adminLeague': requireAdmin_(body); return getLeague_();
+      case 'adminLeagueRev': requireAdmin_(body); return { rev: leagueRev_() };
+      case 'saveLeague': requireAdmin_(body); return saveLeague_(body);
       case 'pushLineup': requireAdmin_(body); return pushLineup_(body);
       case 'adminLineup': requireAdmin_(body); return { lineup: getLineup_() };
       default: fail_('알 수 없는 요청입니다');
@@ -430,32 +432,38 @@ function sanitizeRecords_(r) {
   return { players, matches };
 }
 
+// 예전 방식: 매니저가 공개할 칸만 골라 올린다. 서버가 리그 기록의 원본을 갖게 된 뒤로는 받지 않는다.
+// 새로 고치지 않은 예전 매니저가 뒤처진 기록으로 순위 페이지를 덮어쓰는 것을 막기 위해서다.
 function publishRecords_(body) {
+  if (leagueRev_() > 0) fail_('리그 매니저가 예전 버전입니다. 매니저를 새로 고침해 주세요.', 'outdated');
   const clean = sanitizeRecords_(body.records);
-  const league = body.league == null ? '' : leagueText_(body.league);   // 형식이 틀리면 공개 기록도 바꾸지 않고 여기서 멈춘다
+  return withLock_(() => writePublic_(clean));
+}
+
+// 공개 기록을 드라이브 파일과 캐시에 쓴다 (잠금을 잡은 상태에서 부른다)
+function writePublic_(clean) {
   const at = new Date().toISOString();
   clean.publishedAt = at;
   const text = JSON.stringify(clean);
-  withLock_(() => {
-    const props = PropertiesService.getScriptProperties();
-    recordsFile_().setContent(text);
-    props.setProperty('RECORDS_AT', at);
-    putCache_('records', text);
-    if (league) {
-      driveFile_('LEAGUE_FILE_ID', '인하우스_리그기록_봇용.json').setContent(league);
-      props.setProperty('LEAGUE_AT', at);
-    }
-  });
-  return { publishedAt: at, players: clean.players.length, matches: clean.matches.length, league: !!league };
+  recordsFile_().setContent(text);
+  PropertiesService.getScriptProperties().setProperty('RECORDS_AT', at);
+  putCache_('records', text);
+  return { publishedAt: at, players: clean.players.length, matches: clean.matches.length };
 }
 
 /* =========================================================
-   봇의 자동 팀 편성
+   리그 기록 (원본)
    ========================================================= */
-// 리그 매니저의 기록 전체(선수의 디스코드·스팀과 설정 포함). 매니저가 공개 기록과 함께 올리고, 봇이 팀을 짤 때 읽는다.
-// 공개 기록과 달리 거르지 않고 그대로 두며, 운영진 키가 있어야만 돌려준다.
+// 선수의 인하우스 MMR·전적, 경기 기록, 설정 전체. 리그 매니저와 디스코드 봇이 함께 읽고 쓴다.
+// 공개 기록과 달리 거르지 않고 드라이브의 비공개 파일에 그대로 두며, 운영진 키가 있어야만 돌려준다.
+// 쓸 때마다 번호(rev)를 하나 올린다. 올리는 쪽은 자기가 보고 고친 번호(baseRev)를 함께 보내고, 그사이 번호가 바뀌었으면 받지 않는다.
+// 매니저와 봇이 서로의 변경을 모르고 덮어쓰는 일을 막기 위해서다.
+function leagueRev_() {
+  return Number(PropertiesService.getScriptProperties().getProperty('LEAGUE_REV')) || 0;
+}
+
 function leagueText_(league) {
-  if (typeof league !== 'object' || !Array.isArray(league.players) || !Array.isArray(league.matches)) fail_('리그 기록 형식이 잘못됐습니다');
+  if (!league || typeof league !== 'object' || !Array.isArray(league.players) || !Array.isArray(league.matches)) fail_('리그 기록 형식이 잘못됐습니다');
   const text = JSON.stringify({ players: league.players, matches: league.matches, settings: league.settings || {} });
   if (text.length > LEAGUE_MAX) fail_('리그 기록이 너무 큽니다');
   return text;
@@ -463,12 +471,112 @@ function leagueText_(league) {
 
 function getLeague_() {
   const props = PropertiesService.getScriptProperties();
+  const rev = leagueRev_();
   const id = props.getProperty('LEAGUE_FILE_ID');
-  if (!id) return { league: null, leagueAt: '' };
   let text = '';
-  try { text = DriveApp.getFileById(id).getBlob().getDataAsString('UTF-8') || ''; } catch (err) { /* 파일이 지워졌으면 없는 것으로 본다 */ }
-  return { league: text ? JSON.parse(text) : null, leagueAt: text ? (props.getProperty('LEAGUE_AT') || '') : '' };
+  if (rev && id) {
+    try { text = DriveApp.getFileById(id).getBlob().getDataAsString('UTF-8') || ''; } catch (err) { /* 파일이 지워졌으면 없는 것으로 본다 */ }
+  }
+  return { league: text ? JSON.parse(text) : null, rev, leagueAt: text ? (props.getProperty('LEAGUE_AT') || '') : '' };
 }
+
+// 리그 기록을 받아 원본으로 둔다. 받은 기록으로 공개 기록(순위 페이지)과 시트의 순위·경기 기록 탭도 다시 쓴다.
+function saveLeague_(body) {
+  const text = leagueText_(body.league);
+  const league = JSON.parse(text);
+  const clean = sanitizeRecords_(league);
+  const base = Number(body.baseRev) || 0;
+  return withLock_(() => {
+    const props = PropertiesService.getScriptProperties();
+    const rev = leagueRev_();
+    if (base !== rev && body.force !== true)
+      fail_('서버에 더 새로운 기록이 있습니다. 서버 기록을 먼저 불러와 주세요.', 'conflict');
+    const out = writePublic_(clean);
+    driveFile_('LEAGUE_FILE_ID', '인하우스_리그기록.json').setContent(text);
+    props.setProperty('LEAGUE_AT', out.publishedAt);
+    props.setProperty('LEAGUE_REV', String(rev + 1));
+    writeMirror_(league);
+    return Object.assign(out, { rev: rev + 1 });
+  });
+}
+
+/* ---- 시트의 순위·경기 기록 탭 ----
+   운영진이 시트에서 바로 볼 수 있게, 리그 기록이 바뀔 때마다 두 탭을 통째로 다시 쓴다. 원본은 위의 리그 기록이고 이 탭은 보기용이다.
+   MMR과 전적은 경기마다 이어서 계산한 값이라, 시트에서 숫자를 고치거나 줄을 지워도 다시 계산되지 않는다. 그래서 여기서는 읽기만 한다. */
+const MIRROR_NOTE = '이 탭은 봇이나 리그 매니저가 기록을 바꿀 때마다 자동으로 다시 씁니다. 여기서 고친 내용은 지워지니, 고칠 때는 리그 매니저를 쓰세요.';
+const ROLE_LABELS = ['캐리', '미드', '오프', '서폿', '서폿'];
+
+function writeMirror_(league) {
+  try {
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    mirrorTab_(ss, '순위', rankRows_(league));
+    mirrorTab_(ss, '경기 기록', matchRows_(league));
+  } catch (err) {                                          // 보기용 탭을 못 써도 기록 저장은 끝낸다
+    console.warn('시트의 순위·경기 기록 탭을 쓰지 못했습니다: ' + err);
+  }
+}
+
+// rows 의 첫 줄은 머리글이다. 맨 위에 안내 한 줄을 두고 그 아래에 쓴다.
+function mirrorTab_(ss, name, rows) {
+  let sheet = ss.getSheetByName(name);
+  if (!sheet) {
+    sheet = ss.insertSheet(name);
+    try { sheet.protect().setWarningOnly(true); } catch (err) { /* 고치려 할 때 경고만 띄운다. 못 걸어도 괜찮다 */ }
+  }
+  const width = rows[0].length;
+  const table = [[MIRROR_NOTE].concat(new Array(width - 1).fill(''))].concat(rows);
+  sheet.clearContents();
+  if (sheet.getMaxRows() < table.length) sheet.insertRowsAfter(sheet.getMaxRows(), table.length - sheet.getMaxRows());
+  if (sheet.getMaxColumns() < width) sheet.insertColumnsAfter(sheet.getMaxColumns(), width - sheet.getMaxColumns());
+  sheet.getRange(1, 1, table.length, width).setValues(table);
+  sheet.getRange(2, 1, 1, width).setFontWeight('bold');
+  sheet.setFrozenRows(2);
+}
+
+// 순위 페이지와 같은 순서: 승이 많은 순, 같으면 패가 적은 순, 승패가 같으면 공동 순위. 경기를 치르지 않은 선수는 순위 없이 아래에 둔다.
+function rankRows_(league) {
+  const n = v => Number(v) || 0;
+  const played = p => n(p.wins) + n(p.losses) > 0;
+  const list = league.players.slice().sort((a, b) => (played(b) - played(a)) || (n(b.wins) - n(a.wins)) || (n(a.losses) - n(b.losses)) ||
+    (n(b.mmr) - n(a.mmr)) || String(a.name).localeCompare(String(b.name), 'ko'));
+  const rows = [['순위', '닉네임', '인하우스 MMR', '시작 MMR', '변동', '승', '패', '승률', '연속', '1지망', '2지망', '3지망', '4지망',
+    '캐리 판수', '미드 판수', '오프 판수', '4번 서폿 판수', '5번 서폿 판수', '디스코드']];
+  let rank = 0, prev = '';
+  list.forEach((p, i) => {
+    const w = n(p.wins), l = n(p.losses), key = w + ':' + l;
+    if (played(p) && key !== prev) { rank = i + 1; prev = key; }
+    const base = p.baseMMR == null ? n(p.mmr) : n(p.baseMMR), streak = n(p.streak);
+    const prefs = Array.isArray(p.prefs) ? p.prefs : [], roles = Array.isArray(p.roleCount) ? p.roleCount : [];
+    rows.push([played(p) ? rank : '-', text_(p.name), n(p.mmr), base, n(p.mmr) - base, w, l,
+      played(p) ? Math.round(w / (w + l) * 100) + '%' : '-',
+      streak > 0 ? streak + '연승' : streak < 0 ? (-streak) + '연패' : '-']
+      .concat([0, 1, 2, 3].map(k => PREF_LABELS[prefs[k] - 1] || '-'))
+      .concat([0, 1, 2, 3, 4].map(k => n(roles[k])))
+      .concat([text_(p.discord || '')]));
+  });
+  return rows;
+}
+
+// 한 경기에 열 줄(래디언트 1~5번, 다이어 1~5번). 최근 경기가 위에 온다.
+function matchRows_(league) {
+  const n = v => Number(v) || 0;
+  const rows = [['경기 시각', '경기', '이긴 팀', '진영', '자리', '닉네임', '결과', '이전 MMR', '변동', '이후 MMR']];
+  const total = league.matches.length;
+  league.matches.forEach((m, i) => {
+    if (!m || !Array.isArray(m.rows)) return;
+    const when = text_(Utilities.formatDate(new Date(m.at), 'Asia/Seoul', 'yyyy-MM-dd HH:mm'));
+    m.rows.slice().sort((a, b) => (a.side === b.side ? n(a.role) - n(b.role) : a.side === 'r' ? -1 : 1)).forEach(r => {
+      rows.push([when, total - i, m.winner === 'r' ? '래디언트' : '다이어', r.side === 'r' ? '래디언트' : '다이어',
+        n(r.role) + '번 ' + (ROLE_LABELS[n(r.role) - 1] || ''), text_(r.name), r.side === m.winner ? '승' : '패',
+        n(r.before), n(r.delta), n(r.before) + n(r.delta)]);
+    });
+  });
+  return rows;
+}
+
+/* =========================================================
+   봇이 짠 팀
+   ========================================================= */
 
 // 봇이 짠 팀. 매니저가 불러와 그대로 보드에 올리고 결과를 기록한다. lineup 이 null 이면 비운다.
 function pushLineup_(body) {
