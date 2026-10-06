@@ -39,7 +39,7 @@ assert(top.lane === '탑' && top.rRoles.join() === '3,4' && top.dRoles.join() ==
   '탑 라인 합: 래디언트 3·4번 대 다이어 1·5번');
 assert(bot.lane === '봇' && bot.rRoles.join() === '1,5' && bot.dRoles.join() === '3,4' && bot.r === mmrAt(r, 'r', 1) + mmrAt(r, 'r', 5) && bot.d === mmrAt(r, 'd', 3) + mmrAt(r, 'd', 4),
   '봇 라인 합: 래디언트 1·5번 대 다이어 3·4번');
-assert(Math.abs(Math.abs(r.stats.sR - r.stats.sD) - r.stats.diff) <= 1 && (r.stats.lead === 'r' ? r.stats.sR >= r.stats.sD : r.stats.lead === 'd' ? r.stats.sD >= r.stats.sR : r.stats.diff === 0),
+assert(Math.abs(r.stats.sR - r.stats.sD) === r.stats.diff && (r.stats.lead === 'r' ? r.stats.sR >= r.stats.sD : r.stats.lead === 'd' ? r.stats.sD >= r.stats.sR : r.stats.diff === 0),
   '팀 평균 차이와 앞선 팀: ' + r.stats.sR + ' 대 ' + r.stats.sD + ', 차이 ' + r.stats.diff + ', 앞선 팀 ' + r.stats.lead);
 assert(Number.isInteger(r.stats.chanceR) && r.stats.chanceR > 0 && r.stats.chanceR < 100 && (r.stats.lead === 'r' ? r.stats.chanceR >= 50 : r.stats.chanceR <= 50),
   '기대 승률은 팀 평균이 높은 쪽이 높다: 래디언트 ' + r.stats.chanceR + '%');

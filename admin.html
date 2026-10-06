@@ -179,7 +179,7 @@ ol.steps li + li{margin-top:3px}
     const d = new Date(iso);
     return isNaN(d) ? '' : d.toLocaleString('ko-KR', {timeZone: 'Asia/Seoul', month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false});
   };
-  const adminPost = body => api.post(Object.assign({key}, body)).catch(err => {
+  const adminPost = (body, wait) => api.post(Object.assign({key}, body), wait).catch(err => {
     if(err.code === 'auth') lock('운영진 키가 맞지 않습니다. 다시 넣어 주세요.');
     throw err;
   });
@@ -249,7 +249,7 @@ ol.steps li + li{margin-top:3px}
     catch(err){ toast(err.message); }
   });
   $('#btnNewSeason').addEventListener('click', async () => {
-    const name = $('#newSeason').value.trim();
+    const name = $('#newSeason').value.replace(/\s+/g, ' ').trim().slice(0, 30);      // 서버가 이름을 다듬는 방식과 같게
     if(!name){ toast('새 시즌의 이름을 넣어 주세요'); $('#newSeason').focus(); return; }
     const old = status.season || '이름 없는 시즌';
     if(!confirm('"' + name + '" 시즌을 새로 시작할까요?\n\n' +
@@ -259,7 +259,14 @@ ol.steps li + li{margin-top:3px}
       '시작한 뒤에는 이전 시즌으로 되돌릴 수 없습니다.')) return;
     $('#btnNewSeason').disabled = true;
     try{
-      status = await adminPost({action: 'adminNewSeason', season: name});
+      // 새 탭을 만들고 기록을 보관하느라 다른 요청보다 오래 걸릴 수 있다
+      try{ status = await adminPost({action: 'adminNewSeason', season: name}, 90000); }
+      catch(err){
+        // 답을 받지 못했어도 서버에서는 끝났을 수 있다. 시즌이 바뀌었는지 한 번 물어본다
+        if(err.code) throw err;
+        status = await adminPost({action: 'ping'});
+        if(status.season !== name) throw err;
+      }
       $('#newSeason').value = '';
       renderStatus();
       await reload();

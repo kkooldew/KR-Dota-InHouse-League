@@ -10,9 +10,10 @@
 
   const NOT_JSON = '서버 응답을 읽지 못했습니다. Apps Script 웹 앱을 "모든 사용자"가 쓸 수 있게 배포했는지 확인해 주세요.';
 
-  async function call(url, init){
+  // wait: 답을 기다리는 시간(ms). 새 시즌 시작처럼 서버가 여러 일을 한꺼번에 하는 요청은 더 길게 준다
+  async function call(url, init, wait){
     const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), 20000);
+    const timer = setTimeout(() => ctrl.abort(), wait || 20000);
     let res;
     try{
       res = await fetch(url, Object.assign({signal: ctrl.signal, cache: 'no-store'}, init));
@@ -37,8 +38,8 @@
       return call(L.apiUrl + (L.apiUrl.includes('?') ? '&' : '?') + 'action=' + encodeURIComponent(action) + '&v=' + Date.now());
     },
     // text/plain으로 보내야 브라우저가 미리 묻는 요청 없이 바로 보낸다 (Apps Script는 그 요청을 받지 못한다)
-    post(body){
-      return call(L.apiUrl, {method: 'POST', headers: {'Content-Type': 'text/plain;charset=utf-8'}, body: JSON.stringify(body)});
+    post(body, wait){
+      return call(L.apiUrl, {method: 'POST', headers: {'Content-Type': 'text/plain;charset=utf-8'}, body: JSON.stringify(body)}, wait);
     }
   };
 

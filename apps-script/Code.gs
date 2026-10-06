@@ -287,6 +287,7 @@ function newSeason_(body) {
       cur.league = DriveApp.createFile('인하우스_리그기록_' + label + '.json', JSON.stringify(ended), 'application/json').getId();
     }
     cur.endedAt = new Date().toISOString();
+    delete cur.leaguePending;                                    // 끝나는 시즌에 남아 있던 표시는 더 볼 일이 없다 (남겨 두면 ready_ 가 요청마다 잠금을 잡는다)
 
     const sheet = ss.insertSheet(freeTabName_(ss, name), 0);     // 지금 시즌의 탭이 맨 앞에 오게 한다
     prepareSheet_(sheet);

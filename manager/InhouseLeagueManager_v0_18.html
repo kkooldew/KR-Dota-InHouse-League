@@ -2123,7 +2123,8 @@ function renderBoard(){
   '<div class="board">' +
     '<div class="board-head">' +
       '<div class="side-head r"><h3>래디언트</h3><span class="sum">'+Math.round(st.sR)+'</span><span class="lab">평균 MMR<br>그대로 계산하면 '+Math.round(st.rawR)+'</span></div>' +
-      '<div class="beam"><div class="diff">'+Math.round(st.diff)+'<small> 차이</small></div>' +
+      // 차이는 양옆에 보이는 두 평균(반올림한 값)을 뺀 것으로 보인다. 봇의 팀 편성 공지(bot/matchmaker.js)도 같은 값을 쓴다
+      '<div class="beam"><div class="diff">'+Math.abs(Math.round(st.sR) - Math.round(st.sD))+'<small> 차이</small></div>' +
         '<div class="track"><i></i><b style="'+(lead==='r'
           ? 'right:50%;width:'+w+'%;background:var(--rad)'
           : 'left:50%;width:'+w+'%;background:var(--dire)')+'"></b></div>' +
@@ -3034,6 +3035,9 @@ async function pullStep(manual){
   const r = await syncPost({action:'adminLeague'});
   const rev = r.rev || 0;
   if(!r.league || !rev){                                      // 서버에 아직 기록이 없다. 이 브라우저의 기록이 첫 기록이 된다
+    // 다른 서버에 맞춰 두었던 번호가 남아 있으면 이 서버의 번호로 바꾼다.
+    // 그대로 두면 올릴 때마다 서버가 거절하고, 다시 불러오고, 또 올리기를 끝없이 되풀이한다
+    if((sync.rev || 0) !== rev){ sync.rev = rev; sync.hash = ''; keepSync(); }
     if(!hasRecords() && manual) toast('서버에 아직 기록이 없습니다');
     return hasRecords();
   }

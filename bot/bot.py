@@ -69,6 +69,7 @@ ROLE_NAMES = ["캐리", "미드", "오프", "서폿", "서폿"]
 DEADLINE_FORMAT = re.compile(r"(\d{4})-(\d{2})-(\d{2})-(\d{2})-(\d{2})")
 DEADLINE_EXAMPLE = "`2026-10-07-21-30` (연-월-일-시-분, 한국 시간, 24시간제)"
 MESSAGE_LIMIT = 1900  # 디스코드 메시지는 2000자까지라 조금 남겨 두고 나눈다
+THREAD_ARCHIVED = 50083  # 디스코드 오류 번호: 보관된(접힌) 스레드에는 글을 올리거나 고칠 수 없다
 
 
 # ── 모집 상태 ────────────────────────────────────────────────
@@ -269,7 +270,15 @@ def post_title(ts: float | None = None) -> str:
 
 def announcement_text(rec: Recruitment) -> str:
     count = len(rec.participants)
-    names = ", ".join(safe_name(v["name"]) for v in rec.participants.values()) or "아직 없음"
+    # 본문은 메시지 하나라 2000자를 넘으면 고쳐지지 않는다. 참여자가 아주 많으면 이름은 앞에서부터 들어가는 만큼만 적는다
+    shown, used = [], 0
+    for v in rec.participants.values():
+        name = safe_name(v["name"])
+        if used + len(name) + 2 > 1200:
+            break
+        shown.append(name)
+        used += len(name) + 2
+    names = (", ".join(shown) + (f" 외 {count - len(shown)}명" if len(shown) < count else "")) or "아직 없음"
     if rec.cancelled:
         status = "❌ **이 내전은 취소됐어요.**"
     elif rec.closed:
@@ -283,13 +292,25 @@ def announcement_text(rec: Recruitment) -> str:
     return f"{ANNOUNCEMENT}\n\n{status}\n👥 참여자 ({count}명): {names}"
 
 
+async def awake(thread, action):
+    """포럼 글에 글을 올리거나 고친다. 글이 한동안 조용해서 접혀(보관돼) 있으면 다시 편 뒤에 한 번 더 한다.
+    잠근 글은 저절로 펴지지 않아서, 며칠 뒤가 마감인 모집이나 경기가 끝난 뒤의 결과 공지가 여기에 걸릴 수 있다."""
+    try:
+        return await action()
+    except discord.HTTPException as e:
+        if thread is None or getattr(e, "code", 0) != THREAD_ARCHIVED:
+            raise
+        await thread.edit(archived=False)
+        return await action()
+
+
 async def refresh_announcement(rec: Recruitment) -> None:
     """모집 글의 마감 시각과 참여자 현황을 최신 상태로 수정"""
     if rec.message is None:
         return
     async with rec.edit_lock:  # 동시에 여러 명이 참여해도 마지막 상태가 반영되도록 순서대로 수정
         try:
-            await rec.message.edit(content=announcement_text(rec))
+            await awake(rec.thread, lambda: rec.message.edit(content=announcement_text(rec)))
         except discord.HTTPException as e:
             print(f"공지 수정 실패: {e}")
 
@@ -312,11 +333,9 @@ async def post(rec: Recruitment, text: str, quiet: bool = False) -> None:
     글이 길면 여러 메시지로 나눠 보낸다."""
     try:
         place = rec.thread or await get_channel(SIGNUP_CHANNEL_ID)
+        options = {"allowed_mentions": discord.AllowedMentions.none()} if quiet else {}
         for chunk in split_message(text):
-            if quiet:
-                await place.send(chunk, allowed_mentions=discord.AllowedMentions.none())
-            else:
-                await place.send(chunk)
+            await awake(rec.thread, lambda: place.send(chunk, **options))
     except discord.HTTPException as e:
         print(f"참여 신청 채널 전송 실패: {e}")
 
@@ -442,10 +461,8 @@ async def close_recruitment(rec: Recruitment) -> None:
         rec.synced = True
     try:
         admin = await get_channel(ADMIN_CHANNEL_ID)
-        await admin.send(
-            f"[모집 종료] 주최: <@{rec.host_id}>\n{roster_text}",
-            allowed_mentions=discord.AllowedMentions.none(),
-        )
+        for chunk in split_message(f"[모집 종료] 주최: <@{rec.host_id}>\n{roster_text}"):
+            await admin.send(chunk, allowed_mentions=discord.AllowedMentions.none())
         if roster:
             for chunk in manager_blocks(rec):
                 await admin.send(chunk, allowed_mentions=discord.AllowedMentions.none())
@@ -777,7 +794,8 @@ async def send_to(place_id: int, text: str) -> None:
     """모집 글(또는 채널)에 알림을 울리지 않고 메시지를 보낸다. 실패해도 넘어간다."""
     try:
         place = await get_channel(place_id)
-        await place.send(text, allowed_mentions=discord.AllowedMentions.none())
+        thread = place if isinstance(place, discord.Thread) else None
+        await awake(thread, lambda: place.send(text, allowed_mentions=discord.AllowedMentions.none()))
     except discord.HTTPException as e:
         print(f"결과 공지 실패: {e}")
 
@@ -1144,13 +1162,14 @@ async def player_role(interaction: discord.Interaction, role: Optional[discord.R
         await interaction.followup.send(f"🎫 등록 명단을 읽지 못했어요. 잠시 뒤에 다시 해 주세요. ({e})")
         return
     bot.role_note = out["problem"]
+    done = roles_text(out).replace("🎫 **참여 선수 역할**\n", "")  # 문제가 생기기 전에 처리한 것이 있으면 그것도 알린다
     if out["problem"]:
-        await interaction.followup.send("🎫 **참여 선수 역할**을 맞추지 못했어요. " + out["problem"], allowed_mentions=quiet)
-        return
-    head = f"🎫 승인한 선수에게 <@&{bot.player_role_id}> 역할을 자동으로 줍니다. 제외하면 뺍니다. (1분마다 확인)"
-    body = roles_text(out).replace("🎫 **참여 선수 역할**\n", "") or "지금은 새로 주거나 뺄 사람이 없어요."
-    more = f"\n나머지 {out['left']}명은 이어서 처리합니다." if out["left"] else ""
-    for chunk in split_message(f"{head}\n{body}{more}"):
+        text = "🎫 **참여 선수 역할**을 맞추지 못했어요. " + out["problem"] + (f"\n{done}" if done else "")
+    else:
+        head = f"🎫 승인한 선수에게 <@&{bot.player_role_id}> 역할을 자동으로 줍니다. 제외하면 뺍니다. (1분마다 확인)"
+        more = f"\n나머지 {out['left']}명은 이어서 처리합니다." if out["left"] else ""
+        text = f"{head}\n{done or '지금은 새로 주거나 뺄 사람이 없어요.'}{more}"
+    for chunk in split_message(text):
         await interaction.followup.send(chunk, allowed_mentions=quiet)
 
 

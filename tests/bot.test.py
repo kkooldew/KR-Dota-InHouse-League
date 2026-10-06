@@ -716,7 +716,7 @@ async def main():
               and f"`봇 라인` {bottom[0]} 대 {bottom[1]} · {gap(*bottom)} (래디언트 1·5번 대 다이어 3·4번의 합)" in lineup, "실제 편성: 라인에서 만나는 두 사람의 합")
         avg = re.search(r"`팀 평균` (\d+) 대 (\d+) · (🟢|🔴) \+(\d+)", lineup)
         odds = re.search(r"기대 승률\*\* 🟢 (\d+)% · 🔴 (\d+)%", lineup)
-        check(avg and abs(abs(int(avg[1]) - int(avg[2])) - int(avg[4])) <= 1 and (avg[3] == "🟢") == (int(avg[1]) > int(avg[2]))
+        check(avg and abs(int(avg[1]) - int(avg[2])) == int(avg[4]) and (avg[3] == "🟢") == (int(avg[1]) > int(avg[2]))
               and f"평균 MMR **{avg[1]}** (그대로 계산하면 {round(sum(rad) / 5)})" in lineup, "실제 편성: 팀 평균과 그 차이")
         check(odds and int(odds[1]) + int(odds[2]) == 100 and (int(odds[1]) >= 50 if avg[3] == "🟢" else int(odds[1]) <= 50), "실제 편성: 기대 승률은 평균이 높은 팀이 높다 (차이가 작으면 반올림해 50%)")
         told = {side: [int(x) for x in re.search(rf"{side}: 이기면 MMR \+(\d+)~\+(\d+) · 지면 −(\d+)~−(\d+)", lineup).groups()] for side in ("래디언트", "다이어")}
@@ -737,6 +737,33 @@ async def main():
         check(len(bench) == 2 and all(mmr[i]["wins"] == 2 and mmr[i]["losses"] == 2 for i in bench), "실제 정산: 쉰 사람의 전적은 그대로")
         t, _ = await run(mod.undo_win, 100, ADMIN)
         check("결과 기록을 취소" in t and json.dumps(w.league, ensure_ascii=False, sort_keys=True) == start, "실제 되돌리기: 기록하기 전과 똑같아진다")
+
+    # ── 한동안 조용해서 접힌(보관된) 포럼 글 ──
+    w = World(mod, forum=True)
+    await run(mod.create_inhouse, 100, ADMIN)
+    rec = mod.bot.current
+    folded = discord.HTTPException(Mock(status=400, reason="Bad Request"), {"code": 50083, "message": "Thread is archived"})
+    w.thread.send.side_effect = [folded, None]
+    await mod.post(rec, "안내", quiet=True)
+    check(w.thread.edit.call_args.kwargs == {"archived": False} and w.thread.send.await_count == 2, "접힌 글에 올리지 못하면 글을 편 뒤 다시 올린다")
+    w.message.edit.side_effect = [folded, None]
+    n, m = w.thread.edit.await_count, w.message.edit.await_count
+    await mod.refresh_announcement(rec)
+    check(w.thread.edit.await_count == n + 1 and w.message.edit.await_count == m + 2, "접힌 글의 본문도 펴서 고친다")
+    w.thread.send.side_effect = [discord.HTTPException(Mock(status=403, reason="Forbidden"), {"code": 50013, "message": "Missing Permissions"})]
+    n = w.thread.edit.await_count
+    await mod.post(rec, "안내")
+    check(w.thread.edit.await_count == n, "다른 오류에는 글을 펴려 하지 않는다")
+    w.thread.send.side_effect, w.message.edit.side_effect = None, None
+    await run(mod.cancel, 100, ADMIN)
+
+    many = mod.Recruitment(1, int(time.time()) + 600)
+    many.participants = {k: {"name": f"아주긴이름의참가자{k:03d}", "username": "u"} for k in range(300)}
+    text = mod.announcement_text(many)
+    check(len(text) < 2000 and "(300명)" in text and re.search(r"외 \d+명$", text) is not None, "참여자가 아주 많으면 본문의 이름은 들어가는 만큼만 적는다")
+    few = mod.Recruitment(1, int(time.time()) + 600)
+    few.participants = {1: {"name": "가", "username": "u"}, 2: {"name": "나", "username": "u"}}
+    check(mod.announcement_text(few).endswith("참여자 (2명): 가, 나"), "보통은 이름을 모두 적는다")
 
     # ── 참여 선수 역할 자동 부여: 승인하면 역할을 주고, 제외하면 뺀다 ──
     class Role:

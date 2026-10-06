@@ -74,7 +74,7 @@
 <main class="wrap">
   <div class="reg">
     <h1 class="page-title">선수 등록</h1>
-    <p class="page-lead">시즌에 참가하려면 아래 여섯 가지를 입력해 주세요. 운영진이 승인하기 전까지는 같은 스팀 프로필로 다시 제출해 정보를 고칠 수 있습니다. 지난 시즌에 참가한 선수도 같은 양식으로 등록합니다.</p>
+    <p class="page-lead">시즌에 참가하려면 아래 내용을 입력해 주세요. 운영진이 승인하기 전까지는 같은 스팀 프로필로 다시 제출해 정보를 고칠 수 있습니다. 지난 시즌에 참가한 선수도 같은 양식으로 등록합니다.</p>
     <p class="state-line" id="stateLine" hidden></p>
 
     <div class="notice" id="loading">등록 상태를 확인하고 있습니다.</div>
@@ -373,7 +373,7 @@
     e.preventDefault();
     $('#formErr').hidden = true;
     let first = null;
-    Object.keys(checks).forEach(name => {
+    Object.keys(checks).filter(name => !fieldEl(name).hidden).forEach(name => {
       const msg = checks[name](document.getElementById(name).value);
       setErr(name, msg);
       if(msg && !first) first = document.getElementById(name);
@@ -398,7 +398,7 @@
         steam: $('#steam').value.trim(),
         discord: normDiscord($('#discord').value),
         mmr: Number($('#mmr').value),
-        peak: Number($('#peak').value),
+        peak: fieldEl('peak').hidden ? undefined : Number($('#peak').value),
         prefs: order.slice(),
         website: $('#website').value
       });
@@ -431,6 +431,8 @@
     if(!s.open){ block('<p>지금은 선수 등록 기간이 아닙니다. 다음 시즌 등록이 열리면 디스코드에서 알려 드립니다.</p>' + inviteHtml()); return; }
     $('#stateLine').textContent = (s.season ? s.season + ' ' : '') + '선수 등록을 받고 있습니다.';
     $('#stateLine').hidden = false;
+    // 최고 MMR은 서버 버전 7부터 저장한다. 서버가 아직 예전 버전이면 적어도 남지 않으므로 칸을 보이지 않는다
+    fieldEl('peak').hidden = !((s.version || 0) >= 7);
     showForm();
   }).catch(err => {
     block('<p>' + Site.esc(err.message) + '</p>');

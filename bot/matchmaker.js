@@ -91,7 +91,8 @@ var lanes = null;
       r: seat(st.R[i], st.ranksR[i], ifR.r[i], ifD.r[i]), d: seat(st.D[i], st.ranksD[i], ifD.d[i], ifR.d[i]) })),
     bench: pool.filter(p => !playing.has(p.id)).map(p => ({ id: p.id, name: p.name })),
     stats: { sR: Math.round(st.sR), sD: Math.round(st.sD), rawR: Math.round(st.rawR), rawD: Math.round(st.rawD),
-             diff: Math.round(st.diff), lead: st.sR > st.sD ? 'r' : st.sD > st.sR ? 'd' : '',
+             // 차이는 화면에 보이는 두 평균(반올림한 값)을 뺀 것으로 한다. 반올림 전의 차이를 쓰면 "5230 대 5352, 차이 121"처럼 1이 어긋나 보인다
+             diff: Math.abs(Math.round(st.sR) - Math.round(st.sD)), lead: st.sR > st.sD ? 'r' : st.sD > st.sR ? 'd' : '',
              sides: st.sides.map(s => ({ lane: s.lane, r: s.r, d: s.d, rRoles: meet(s.lane, 'r'), dRoles: meet(s.lane, 'd') })),
              chanceR: Math.round(ifR.eR * 100), below: st.below, firsts: st.firsts }
   };
