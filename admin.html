@@ -33,7 +33,7 @@
 .controls input[type=search]{flex:1 1 160px;max-width:240px;padding:7px 10px}
 .controls select{padding:7px 10px}
 .scroll{overflow-x:auto;-webkit-overflow-scrolling:touch;margin:0 -4px;padding:0 4px}
-table.reg{width:100%;border-collapse:collapse;min-width:820px;font-size:14px}
+table.reg{width:100%;border-collapse:collapse;min-width:900px;font-size:14px}
 .reg th{text-align:left;font-size:12px;font-weight:500;color:var(--bone-dim);padding:0 8px 8px;border-bottom:1px solid var(--line);white-space:nowrap}
 .reg td{padding:9px 8px;border-bottom:1px solid var(--line-soft);vertical-align:middle}
 .reg td.n{text-align:right}
@@ -42,7 +42,9 @@ table.reg{width:100%;border-collapse:collapse;min-width:820px;font-size:14px}
 .reg select.s-승인{border-color:var(--rad);color:#cfe3a8}
 .reg select.s-제외{border-color:var(--dire-deep);color:#e58b80}
 .reg .nick{font-weight:500}
-.reg .back{display:block;margin-top:2px;font-size:12px;font-weight:400;color:var(--gold);white-space:nowrap}
+.reg .note{display:block;margin-top:2px;font-size:12px;font-weight:400;color:#e58b80;white-space:nowrap}
+.reg .note.back{color:var(--gold)}
+.reg .peak{color:var(--bone-dim)}
 .reg .prefs{white-space:nowrap;font-size:13px}
 .reg .prefs span:first-child{color:var(--bone)}
 .reg .prefs span{color:var(--bone-dim);margin-right:6px}
@@ -96,8 +98,9 @@ ol.steps li + li{margin-top:3px}
         <input type="text" id="newSeason" maxlength="30" placeholder="예) 시즌 2">
         <button class="btn sm" type="button" id="btnNewSeason">새 시즌 시작</button>
       </div>
-      <p class="season-note">새 시즌을 시작하면 구글 시트에 그 시즌의 탭이 새로 생기고, 등록을 빈 명단에서 다시 받습니다. 지난 시즌 명단은 그 시즌의 탭에 그대로 남습니다.
-        지난 시즌에 등록했던 선수는 등록 페이지의 <b>지난 시즌에 참가했어요</b>에서 스팀 프로필과 포지션 순서만 넣어 다시 등록할 수 있습니다. <span id="pastSeasons"></span></p>
+      <p class="season-note">새 시즌을 시작하면 구글 시트에 그 시즌의 등록 탭이 새로 생기고, 등록을 빈 명단에서 다시 받습니다. 순위와 경기 기록도 새로 시작합니다.
+        끝난 시즌의 명단·순위·경기 기록은 시트에 그 시즌 이름이 붙은 탭으로 남습니다.
+        지난 시즌에 승인됐던 선수가 <b>같은 스팀 프로필과 디스코드</b>로 다시 등록하면, 그 시즌이 끝났을 때의 인하우스 MMR을 이어받습니다. <span id="pastSeasons"></span></p>
     </section>
 
     <section class="panel">
@@ -125,7 +128,7 @@ ol.steps li + li{margin-top:3px}
       <div class="scroll">
         <table class="reg">
           <thead><tr>
-            <th scope="col">상태</th><th scope="col">닉네임</th><th scope="col" class="n">MMR</th><th scope="col">포지션 순서</th>
+            <th scope="col">상태</th><th scope="col">닉네임</th><th scope="col" class="n">MMR</th><th scope="col" class="n">최고 MMR</th><th scope="col">포지션 순서</th>
             <th scope="col">디스코드</th><th scope="col">스팀</th><th scope="col">등록</th><th scope="col">고침</th>
           </tr></thead>
           <tbody id="rows"></tbody>
@@ -248,8 +251,11 @@ ol.steps li + li{margin-top:3px}
   $('#btnNewSeason').addEventListener('click', async () => {
     const name = $('#newSeason').value.trim();
     if(!name){ toast('새 시즌의 이름을 넣어 주세요'); $('#newSeason').focus(); return; }
+    const old = status.season || '이름 없는 시즌';
     if(!confirm('"' + name + '" 시즌을 새로 시작할까요?\n\n' +
-      '지금 명단(' + players.length + '명)은 "' + (status.season || '이름 없는 시즌') + '" 탭에 그대로 남고, 새 시즌은 빈 명단으로 시작합니다.\n' +
+      '· 등록: 지금 명단(' + players.length + '명)은 "' + old + '" 탭에 남고, 새 시즌은 빈 명단으로 시작합니다.\n' +
+      '· 순위와 경기 기록: "' + old + '"의 기록을 따로 보관하고, 새 시즌은 빈 기록으로 시작합니다.\n' +
+      '· 지난 시즌에 승인됐던 선수는 다시 등록할 때 인하우스 MMR을 이어받습니다.\n\n' +
       '시작한 뒤에는 이전 시즌으로 되돌릴 수 없습니다.')) return;
     $('#btnNewSeason').disabled = true;
     try{
@@ -288,13 +294,15 @@ ol.steps li + li{margin-top:3px}
     }[ui.sort];
     return list.sort(by);
   }
+  // 서버가 비고에 '재참가 · 시즌 이름 · …'이라고 적은 선수: 지난 시즌에 승인됐고 MMR을 이어받았다
+  const isBack = p => String(p.note || '').startsWith('재참가');
   function exportList(){
     return players.filter(p => ui.ex === 'approved' ? p.status === '승인' : p.status !== '제외');
   }
 
   function render(){
     const n = s => players.filter(p => p.status === s).length;
-    const back = players.filter(p => p.note).length;      // 지난 시즌 정보를 가져와 간편 등록한 선수
+    const back = players.filter(p => isBack(p)).length;   // 지난 시즌에 승인됐던 선수 (MMR을 이어받았다)
     $('#counts').innerHTML = '<span><b>' + players.length + '</b>명 등록</span><span><b>' + n('승인') + '</b>승인</span>' +
       '<span><b>' + n('대기') + '</b>대기</span><span><b>' + n('제외') + '</b>제외</span>' + (back ? '<span><b>' + back + '</b>재참가</span>' : '');
     const waiting = n('대기');
@@ -305,7 +313,7 @@ ol.steps li + li{margin-top:3px}
 
     const list = visible();
     if(!list.length){
-      $('#rows').innerHTML = '<tr><td colspan="8" class="none">' + (players.length ? '조건에 맞는 선수가 없습니다.' : '아직 등록한 선수가 없습니다.') + '</td></tr>';
+      $('#rows').innerHTML = '<tr><td colspan="9" class="none">' + (players.length ? '조건에 맞는 선수가 없습니다.' : '아직 등록한 선수가 없습니다.') + '</td></tr>';
       return;
     }
     $('#rows').innerHTML = list.map(p =>
@@ -313,8 +321,9 @@ ol.steps li + li{margin-top:3px}
         '<td><select class="s-' + esc(p.status) + '" data-key="' + esc(p.steamKey) + '" aria-label="' + esc(p.nickname) + ' 상태">' +
           ['대기', '승인', '제외'].map(s => '<option' + (s === p.status ? ' selected' : '') + '>' + s + '</option>').join('') +
         '</select></td>' +
-        '<td class="nick">' + esc(p.nickname) + (p.note ? '<span class="back">' + esc(p.note) + '</span>' : '') + '</td>' +
+        '<td class="nick">' + esc(p.nickname) + (p.note ? '<span class="note' + (isBack(p) ? ' back' : '') + '">' + esc(p.note) + '</span>' : '') + '</td>' +
         '<td class="n num">' + p.mmr + '</td>' +
+        '<td class="n num peak">' + (p.peak == null ? '-' : p.peak) + '</td>' +
         '<td class="prefs">' + p.prefs.map(v => '<span>' + (PREF_LABEL[v] || '?') + '</span>').join('') + '</td>' +
         '<td class="disc">' + esc(p.discord) + '</td>' +
         '<td>' + (p.steamUrl ? '<a href="' + esc(p.steamUrl) + '" target="_blank" rel="noopener noreferrer">프로필</a>' : '') + '</td>' +

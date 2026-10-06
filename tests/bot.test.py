@@ -91,12 +91,16 @@ class World:
         self.server = []          # 리그 서버로 보낸 요청
         self.fail = set()         # 실패하게 만들 요청 이름
         self.conflicts = 0        # 이 횟수만큼, 봇이 받아 간 사이에 매니저가 기록을 바꾼 것처럼 군다
+        self.registered = []      # 서버의 등록 명단 (운영진 페이지에서 승인·제외하는 그 명단)
+        self.season = "시즌 1"
 
         async def call_server(payload):
             self.server.append(payload)
             action = payload["action"]
             if action in self.fail:
                 raise RuntimeError("서버 오류")
+            if action == "adminList":
+                return {"ok": True, "players": [dict(p) for p in self.registered], "season": self.season}
             if action == "adminLeague":
                 return {"ok": True, "league": self.league, "rev": self.rev}
             if action == "saveLeague":
@@ -117,6 +121,8 @@ class World:
         mod.bot.lock = asyncio.Lock()
         mod.bot.current = None
         mod.bot.lineups = []
+        mod.bot.role_lock = asyncio.Lock()
+        mod.bot.player_role_id, mod.bot.role_seen, mod.bot.role_season, mod.bot.role_note = 0, {}, "", ""
         mod.STATE_PATH.unlink(missing_ok=True)
 
     def texts(self, mock):
@@ -572,7 +578,7 @@ async def main():
     w.league = None
     await gather(w, 10)
     await run(mod.close_now, 100, ADMIN)
-    check(len(asked) == n and any("서버에 리그 기록이 없어" in x for x in w.texts(w.admin.send)) and not any("팀 편성" in x for x in w.texts(w.thread.send)), "서버에 리그 기록이 없으면 관리자에게 알린다")
+    check(len(asked) == n and any("리그 기록에 선수가 없어" in x for x in w.texts(w.admin.send)) and not any("팀 편성" in x for x in w.texts(w.thread.send)), "서버에 리그 기록이 없으면 관리자에게 알린다")
 
     w = World(mod, forum=True, league=league_of(12))
     w.fail.add("adminLeague")
@@ -731,6 +737,185 @@ async def main():
         check(len(bench) == 2 and all(mmr[i]["wins"] == 2 and mmr[i]["losses"] == 2 for i in bench), "실제 정산: 쉰 사람의 전적은 그대로")
         t, _ = await run(mod.undo_win, 100, ADMIN)
         check("결과 기록을 취소" in t and json.dumps(w.league, ensure_ascii=False, sort_keys=True) == start, "실제 되돌리기: 기록하기 전과 똑같아진다")
+
+    # ── 참여 선수 역할 자동 부여: 승인하면 역할을 주고, 제외하면 뺀다 ──
+    class Role:
+        def __init__(self, rid, name, position, managed=False, default=False):
+            self.id, self.name, self.position, self.managed, self.default = rid, name, position, managed, default
+            self.mention = f"<@&{rid}>"
+
+        def is_default(self):
+            return self.default
+
+        def __le__(self, other):
+            return self.position <= other.position
+
+        def __eq__(self, other):
+            return isinstance(other, Role) and other.id == self.id
+
+        def __hash__(self):
+            return hash(self.id)
+
+    def member(uid, name, roles=()):
+        m = Mock()
+        m.id, m.name, m.nick, m.discriminator, m.mention, m.roles = uid, name, None, "0", f"<@{uid}>", list(roles)
+
+        async def add_roles(role, reason=None):
+            m.roles.append(role)
+
+        async def remove_roles(role, reason=None):
+            m.roles.remove(role)
+
+        m.add_roles, m.remove_roles = AsyncMock(side_effect=add_roles), AsyncMock(side_effect=remove_roles)
+        return m
+
+    class Guild:
+        def __init__(self, members):
+            self.roles, self.members, self.queries, self.fetches = {}, {m.id: m for m in members}, [], []
+            self.me = Mock(guild_permissions=Mock(manage_roles=True), top_role=Role(900, "퍼그나봇", 10))
+
+        def get_role(self, rid):
+            return self.roles.get(rid)
+
+        async def fetch_member(self, uid):
+            self.fetches.append(uid)
+            if uid not in self.members:
+                raise discord.NotFound(Mock(status=404, reason="Not Found"), "Unknown Member")
+            return self.members[uid]
+
+        async def query_members(self, query=None, limit=5):
+            self.queries.append(query)
+            return [m for m in self.members.values() if m.name.startswith(query)][:limit]
+
+    def entry(n, status, name, nick=None):
+        return {"steamKey": f"s:{n}", "status": status, "discord": name, "nickname": nick or f"선수{n}", "mmr": 3000}
+
+    w = World(mod, forum=True)
+    PLAYER = Role(500, "참여 선수", 5)
+    kim, kim2, lee, park = member(21, "kim"), member(22, "kim2"), member(23, "lee", [PLAYER]), member(24, "park", [PLAYER])
+    choi = member(100000000000000025, "choi")
+    guild = Guild([kim2, kim, lee, park, choi])                  # kim2 가 먼저 나와도 사용자명이 똑같은 kim 을 골라야 한다
+    guild.roles[500] = PLAYER
+
+    async def get_guild():
+        return guild
+
+    mod.get_guild = get_guild
+    mod.SYNC_URL, mod.SYNC_KEY = "https://example.invalid/exec", "k"
+    w.registered = [entry(1, "승인", "kim", "김"), entry(2, "승인", "100000000000000025"), entry(3, "제외", "lee"), entry(4, "대기", "park"),
+                    entry(5, "승인", "ghost", "고스*트"), entry(6, "제외", "nobody")]
+    admin_said = lambda: w.texts(w.admin.send)
+
+    check((await mod.role_status()).startswith("꺼짐 (디스코드 관리자 채널에서"), "역할을 정하기 전에는 꺼져 있다")
+    await mod.role_tick()
+    check(not w.server and not guild.queries and not admin_said(), "꺼져 있으면 등록 명단을 읽지 않는다")
+    t, _ = await run(mod.player_role, 999, ADMIN, PLAYER, None)
+    check("관리자 채널에서만" in t and mod.bot.player_role_id == 0, "다른 채널의 /선수역할 거절")
+    t, _ = await run(mod.player_role, 100, ADMIN, None, None)
+    check("꺼져 있어요" in t and not w.server, "역할을 고르지 않은 /선수역할: 켜는 법 안내")
+
+    t, i = await run(mod.player_role, 100, ADMIN, PLAYER, None)
+    check(mod.bot.player_role_id == 500 and "<@&500> 역할을 자동으로 줍니다" in t and "역할을 줬어요: <@21>, <@100000000000000025>" in t and "역할을 뺐어요: <@23>" in t,
+          "/선수역할 역할: 승인한 선수에게 주고 제외한 선수에게서 뺀다")
+    check(PLAYER in kim.roles and PLAYER in choi.roles and PLAYER not in lee.roles and PLAYER in park.roles and PLAYER not in kim2.roles,
+          "대기인 선수와, 사용자명이 비슷한 다른 사람은 건드리지 않는다")
+    check("찾지 못했어요: 고스\\*트 (`ghost`)" in t and "nobody" not in t, "서버에 없는 승인 선수는 알리고, 서버에 없는 제외 선수는 알릴 것이 없다")
+    check(guild.fetches == [100000000000000025] and guild.queries == ["kim", "lee", "ghost", "nobody"], "숫자 ID는 바로 찾고, 사용자명은 이름으로 찾는다 (대기는 찾지 않는다)")
+    check(i.followup.send.call_args.kwargs.get("allowed_mentions") is not None, "역할 안내는 알림을 울리지 않는다")
+    saved = json.loads(mod.STATE_PATH.read_text(encoding="utf-8"))["roles"]
+    check(saved["role_id"] == 500 and saved["season"] == "시즌 1" and saved["seen"]["s:1"]["ok"] and not saved["seen"]["s:5"]["ok"] and saved["seen"]["s:6"]["ok"] and "s:4" not in saved["seen"],
+          "정한 역할과 누구까지 맞췄는지를 파일에 적는다")
+    check(await mod.role_status() == "켜짐 (@참여 선수)", "켠 뒤의 상태 표시")
+
+    n = len(guild.queries)
+    await mod.role_tick()
+    check(len(guild.queries) == n and not admin_said() and not kim.add_roles.await_count > 1, "바뀐 것이 없으면 다시 묻지도 알리지도 않는다")
+
+    w.registered[0]["status"], w.registered[2]["status"] = "제외", "승인"                # 김은 제외로, lee 는 승인으로
+    await mod.role_tick()
+    check(PLAYER not in kim.roles and PLAYER in lee.roles and "역할을 줬어요: <@23>" in admin_said()[-1] and "역할을 뺐어요: <@21>" in admin_said()[-1]
+          and admin_said()[-1].startswith("🎫 **참여 선수 역할**"), "상태가 바뀌면 역할도 따라 바뀌고 관리자 채널에 알린다")
+    check(w.admin.send.call_args.kwargs.get("allowed_mentions") is not None, "관리자 채널 알림도 조용히")
+
+    ghost = member(26, "ghost")
+    guild.members[26] = ghost                                             # 찾지 못했던 사람이 서버에 들어왔다
+    n = len(admin_said())
+    await mod.role_tick()
+    check(PLAYER not in ghost.roles and len(admin_said()) == n, "찾지 못한 사람은 한동안 다시 찾지 않는다")
+    mod.bot.role_seen["s:5"]["tried"] -= mod.ROLE_RETRY_SECONDS + 1
+    await mod.role_tick()
+    check(PLAYER in ghost.roles and "역할을 줬어요: <@26>" in admin_said()[-1], "시간이 지나면 다시 찾아서 역할을 준다")
+    w.registered.append(entry(7, "승인", "later"))
+    await mod.role_tick()
+    guild.members[27] = member(27, "later")
+    t, _ = await run(mod.player_role, 100, ADMIN, None, None)
+    check(PLAYER in guild.members[27].roles and "역할을 줬어요: <@27>" in t, "/선수역할 을 다시 입력하면 기다리지 않고 바로 다시 찾는다")
+    t, _ = await run(mod.player_role, 100, ADMIN, None, None)
+    check("새로 주거나 뺄 사람이 없어요" in t, "맞출 것이 없을 때의 /선수역할")
+
+    # 권한 문제는 한 번만 알린다
+    w.registered.append(entry(8, "승인", "kim2"))
+    guild.me.guild_permissions.manage_roles = False
+    n = len(admin_said())
+    await mod.role_tick()
+    await mod.role_tick()
+    check(len(admin_said()) == n + 1 and "맞추지 못했어요" in admin_said()[-1] and "역할 관리" in admin_said()[-1] and PLAYER not in kim2.roles, "봇에 역할 관리 권한이 없으면 한 번만 알린다")
+    check((await mod.role_status()).startswith("[확인 필요] 봇에 **역할 관리** 권한이 없어요"), "상태 표시에도 까닭이 나온다")
+    guild.me.guild_permissions.manage_roles = True
+    await mod.role_tick()
+    check(PLAYER in kim2.roles and mod.bot.role_note == "" and "역할을 줬어요: <@22>" in admin_said()[-1], "권한을 고치면 밀린 것을 처리한다")
+    w.registered.append(entry(9, "승인", "park"))
+    park.roles.clear()
+    park.add_roles.side_effect = discord.Forbidden(Mock(status=403, reason="Forbidden"), "Missing Permissions")
+    await mod.role_tick()
+    check("역할을 바꿀 권한이 없어요" in admin_said()[-1] and "s:9" not in mod.bot.role_seen, "디스코드가 거절하면 까닭을 알리고 다음에 다시 한다")
+
+    async def add_ok(role, reason=None):
+        park.roles.append(role)
+
+    park.add_roles.side_effect = add_ok
+    await mod.role_tick()
+    check(PLAYER in park.roles and mod.bot.role_seen["s:9"]["ok"], "거절이 풀리면 준다")
+
+    BIG, BOT = Role(600, "운영진", 20), Role(700, "다른 봇", 3, managed=True)
+    t, _ = await run(mod.player_role, 100, ADMIN, BIG, None)
+    check("켤 수 없어요" in t and "아래에 있어요" in t and mod.bot.player_role_id == 500, "봇보다 높은 역할은 고를 수 없다 (설정은 그대로)")
+    t, _ = await run(mod.player_role, 100, ADMIN, BOT, None)
+    check("봇이 줄 수 없어요" in t and mod.bot.player_role_id == 500, "다른 봇이 관리하는 역할은 고를 수 없다")
+
+    # 껐다 켜도 이어 간다
+    seen_before = json.dumps(mod.bot.role_seen, sort_keys=True)
+    mod.bot.player_role_id, mod.bot.role_seen, mod.bot.role_season = 0, {}, ""
+    await mod.restore_state()
+    check(mod.bot.player_role_id == 500 and json.dumps(mod.bot.role_seen, sort_keys=True) == seen_before and mod.bot.role_season == "시즌 1", "봇을 껐다 켜도 역할 설정과 맞춘 내용이 남는다")
+
+    # 시즌이 바뀌면 새 명단으로 처음부터 다시 맞춘다
+    w.season, w.registered = "시즌 2", [entry(1, "승인", "kim", "김")]            # 지난 시즌에 제외돼 역할이 없던 김이 새 시즌에 승인됐다
+    await mod.role_tick()
+    check(PLAYER in kim.roles and mod.bot.role_season == "시즌 2" and list(mod.bot.role_seen) == ["s:1"] and PLAYER in lee.roles, "시즌이 바뀌면 새 명단을 처음부터 맞춘다 (지난 시즌에 준 역할은 그대로 둔다)")
+
+    # 한 번에 너무 많이 묻지 않는다
+    crowd = [member(1000 + k, f"m{k:02d}") for k in range(35)]
+    guild.members.update({m.id: m for m in crowd})
+    w.registered = [entry(100 + k, "승인", f"m{k:02d}") for k in range(35)]
+    out = await mod.sync_roles()
+    check(len(out["added"]) == mod.ROLE_BATCH and out["left"] == 5, "한 번에 서른 명까지만 처리하고 나머지는 다음 차례로")
+    out = await mod.sync_roles()
+    check(len(out["added"]) == 5 and out["left"] == 0 and all(PLAYER in m.roles for m in crowd), "다음 차례에 나머지를 처리한다")
+
+    w.fail.add("adminList")
+    try:
+        await mod.role_tick()
+        check(False, "등록 명단을 읽지 못하면 그 차례는 건너뛴다")
+    except RuntimeError:
+        check(True, "등록 명단을 읽지 못하면 그 차례는 건너뛴다 (role_loop 가 받아서 다음에 다시 한다)")
+    w.fail.clear()
+
+    t, _ = await run(mod.player_role, 100, ADMIN, None, True)
+    n = len(w.server)
+    await mod.role_tick()
+    check("껐어요" in t and mod.bot.player_role_id == 0 and len(w.server) == n and json.loads(mod.STATE_PATH.read_text(encoding="utf-8"))["roles"]["role_id"] == 0, "/선수역할 끄기")
+    mod.SYNC_URL, mod.SYNC_KEY = "", ""
 
     for task in asyncio.all_tasks() - {asyncio.current_task()}:
         task.cancel()

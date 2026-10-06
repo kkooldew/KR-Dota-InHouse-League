@@ -14,7 +14,9 @@
 - 관리자 채널에는 리그 매니저에 붙여넣을 명단(디스코드 ID·사용자명·별명)을 함께 올림
 - 서버 주소(sync_url)와 운영진 키(sync_key)를 적어 두면, 명단과 짠 팀을 리그 서버에도 올려
   매니저의 "봇이 올린 명단 불러오기", "봇이 짠 팀 불러오기"로 바로 받을 수 있음
-- 진행 중인 모집은 state.json 에 적어 두어, 봇을 껐다 켜도 이어짐
+- 관리자 채널에서 /선수역할 로 역할을 정해 두면, 운영진 페이지에서 승인한 선수에게 그 역할을 주고 제외한 선수에게서는 뺌
+  (등록 명단을 1분마다 읽어 맞춘다. 봇에 역할 관리 권한이 있고, 봇의 역할이 그 역할보다 위에 있어야 한다)
+- 진행 중인 모집과 역할 설정은 state.json 에 적어 두어, 봇을 껐다 켜도 이어짐
 
 설정은 같은 폴더의 config.json 에서 바꿉니다. (config.example.json 을 복사해 만드세요)
 """
@@ -55,6 +57,11 @@ SYNC_URL = str(config.get("sync_url", "")).strip()
 SYNC_KEY = str(config.get("sync_key", "")).strip()
 AUTO_MATCH = bool(config.get("auto_match", True))  # 마감하면 팀을 짜서 알릴지 (sync_url·sync_key 와 Node 가 있어야 한다)
 NODE_PATH = str(config.get("node_path", "") or "node").strip()
+# 승인한 선수에게 줄 역할. 보통은 비워 두고 디스코드에서 /선수역할 로 정한다(그 값은 state.json 에 남는다)
+PLAYER_ROLE_ID = int(config.get("player_role_id", 0) or 0)
+ROLE_POLL_SECONDS = 60  # 등록 명단의 승인·제외를 이만큼마다 확인한다
+ROLE_RETRY_SECONDS = 600  # 서버에서 찾지 못한 사람은 이만큼 지난 뒤에 다시 찾아본다
+ROLE_BATCH = 30  # 한 번에 찾아볼 사람 수. 디스코드에 몰아서 묻지 않게 나눠 한다
 PLAYERS_NEEDED = 10  # 5 vs 5
 KST = timezone(timedelta(hours=9))  # 마감 시각 입력과 모집 글 제목에 쓰는 한국 시간
 DAY_STARTS_AT = 6  # 하루는 한국 시간 오전 6시에 바뀐다 (매니저의 팀 편성과 같은 기준)
@@ -113,10 +120,19 @@ class InhouseBot(discord.Client):
         # 오늘 짠 팀 [{"at": 시각, "ids": 선수 id, "message_id": 모집 글}]. 결과를 아직 기록하지 않은 판도 오늘 뛴 것으로 치는 데 쓴다
         self.lineups: list[dict] = []
         self.restored = False
+        # 참여 선수 역할 자동 부여. player_role_id 가 0이면 꺼져 있다.
+        # role_seen 은 등록마다 마지막으로 맞춘 내용 {스팀키: {"status", "discord", "ok", "tried"}}, role_season 은 그때의 시즌 이름이다
+        self.player_role_id = PLAYER_ROLE_ID
+        self.role_seen: dict[str, dict] = {}
+        self.role_season = ""
+        self.role_note = ""  # 마지막으로 관리자 채널에 알린 문제. 같은 문제를 1분마다 다시 알리지 않으려고 적어 둔다
+        self.role_lock: asyncio.Lock | None = None
+        self.role_task: asyncio.Task | None = None
 
     async def setup_hook(self) -> None:
         # 생성·마감·연장·취소가 겹치지 않게 한 번에 하나씩 처리한다
         self.lock = asyncio.Lock()
+        self.role_lock = asyncio.Lock()
         # 서버 단위로 등록하면 슬래시 명령어가 즉시 반영됨
         await self.tree.sync(guild=GUILD)
 
@@ -127,6 +143,8 @@ class InhouseBot(discord.Client):
             self.restored = True
             async with self.lock:
                 await restore_state()
+            print(f"참여 선수 역할 자동 부여: {await role_status()}")
+            self.role_task = asyncio.create_task(role_loop())
 
 
 bot = InhouseBot()
@@ -343,7 +361,11 @@ def save_state() -> None:
     keep_from = time.time() - 2 * 86400  # 결과를 다음 날 기록하는 일도 있어 이틀 치를 남긴다
     bot.lineups = [x for x in bot.lineups if x.get("at", 0) >= keep_from]
     try:
-        data = {"current": cur.to_dict() if cur is not None and cur.message is not None else None, "lineups": bot.lineups}
+        data = {
+            "current": cur.to_dict() if cur is not None and cur.message is not None else None,
+            "lineups": bot.lineups,
+            "roles": {"role_id": bot.player_role_id, "season": bot.role_season, "seen": bot.role_seen},
+        }
         tmp = STATE_PATH.with_suffix(".tmp")
         tmp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
         os.replace(tmp, STATE_PATH)
@@ -358,6 +380,11 @@ async def restore_state() -> None:
     except (OSError, ValueError):
         return
     bot.lineups = [x for x in data.get("lineups") or [] if isinstance(x, dict)]
+    roles = data.get("roles")
+    if isinstance(roles, dict):  # /선수역할 로 정한 역할과, 누구까지 맞췄는지
+        bot.player_role_id = int(roles.get("role_id") or 0) or PLAYER_ROLE_ID
+        bot.role_season = str(roles.get("season") or "")
+        bot.role_seen = {k: v for k, v in (roles.get("seen") or {}).items() if isinstance(v, dict)}
     cur = data.get("current")
     if not cur or not cur.get("message_id"):
         return
@@ -635,8 +662,9 @@ async def auto_match(rec: Recruitment) -> None:
         await tell_admins("리그 서버에서 기록을 받지 못해 팀을 자동으로 짜지 못했습니다. 매니저에서 직접 짜 주세요.")
         return
     if not league or not league.get("players"):
-        await tell_admins("서버에 리그 기록이 없어 팀을 자동으로 짜지 못했습니다. "
-                          "리그 매니저의 데이터 · 설정 탭에서 리그 서버에 연결하고 **지금 올리기**를 누른 뒤 `/연장` → `/마감` 하면 다시 짭니다.")
+        await tell_admins("서버의 리그 기록에 선수가 없어 팀을 자동으로 짜지 못했습니다(새 시즌을 막 시작했거나, 매니저를 아직 서버에 연결하지 않은 경우입니다). "
+                          "운영진 페이지의 **매니저용 명단 받기**로 받은 파일을 리그 매니저에 불러오고, 데이터 · 설정 탭의 **서버와 자동으로 맞추기**가 켜져 있는지 확인한 뒤 "
+                          "`/연장` → `/마감` 하면 다시 짭니다.")
         return
 
     who, missing = match_players(rec, league["players"])
@@ -752,6 +780,163 @@ async def send_to(place_id: int, text: str) -> None:
         await place.send(text, allowed_mentions=discord.AllowedMentions.none())
     except discord.HTTPException as e:
         print(f"결과 공지 실패: {e}")
+
+
+# ── 참여 선수 역할 자동 부여 ──────────────────────────────────
+# 운영진 페이지에서 승인한 선수에게 역할을 주고, 제외한 선수에게서는 뺀다. 대기는 건드리지 않는다.
+# 봇에는 서버가 승인을 알려 올 길이 없어서(봇은 밖에서 들어오는 요청을 받지 않는다) 등록 명단을 주기적으로 읽어 맞춘다.
+async def get_guild() -> discord.Guild:
+    guild = bot.get_guild(GUILD.id)
+    if guild is None:
+        guild = await bot.fetch_guild(GUILD.id)
+    return guild
+
+
+def role_problem(guild: discord.Guild, role: discord.Role | None) -> str:
+    """봇이 이 역할을 주고 뺄 수 없는 까닭. 할 수 있으면 빈 글."""
+    if role is None:
+        return "정해 둔 역할을 찾지 못했어요. 지웠다면 `/선수역할` 로 다시 정해 주세요."
+    if role.is_default() or role.managed:
+        return f"**{role.name}** 역할은 봇이 줄 수 없어요(@everyone 이거나 다른 봇·연동이 관리하는 역할)."
+    me = guild.me
+    if me is None:
+        return ""
+    if not me.guild_permissions.manage_roles:
+        return "봇에 **역할 관리** 권한이 없어요. 서버 설정 → 역할에서 봇의 역할에 **역할 관리**를 켜 주세요."
+    if me.top_role <= role:
+        return f"봇의 역할이 **{role.name}** 역할보다 아래에 있어요. 서버 설정 → 역할에서 봇의 역할을 **{role.name}** 위로 끌어 올려 주세요."
+    return ""
+
+
+async def role_status() -> str:
+    """지금 설정을 한 줄로 (켤 때 창에 찍고, /선수역할 에 답할 때 쓴다)"""
+    if not bot.player_role_id:
+        return "꺼짐 (디스코드 관리자 채널에서 `/선수역할` 로 줄 역할을 정하면 켜집니다)"
+    if not (SYNC_URL and SYNC_KEY):
+        return "꺼짐 (config.json 에 sync_url 과 sync_key 가 있어야 합니다)"
+    try:
+        guild = await get_guild()
+        role = guild.get_role(bot.player_role_id)
+    except discord.HTTPException as e:
+        return f"[확인 필요] 디스코드 서버를 확인하지 못했습니다 ({e})"
+    problem = role_problem(guild, role)
+    return f"[확인 필요] {problem}" if problem else f"켜짐 (@{role.name})"
+
+
+async def find_member(guild: discord.Guild, name: str) -> discord.Member | None:
+    """등록할 때 적은 디스코드(사용자명 또는 숫자로 된 사용자 ID)로 서버의 멤버를 찾는다. 서버에 없으면 None"""
+    name = str(name or "").strip().lstrip("@").lower()
+    if not name:
+        return None
+    if re.fullmatch(r"\d{17,20}", name):
+        try:
+            return await guild.fetch_member(int(name))
+        except discord.NotFound:
+            return None
+    base, _, tag = name.partition("#")  # 예전 방식(이름#1234)도 받는다
+    if not base:
+        return None
+    # 이름이나 별명이 이 글자로 시작하는 멤버를 받아, 사용자명이 똑같은 사람만 고른다
+    for member in await guild.query_members(query=base, limit=100):
+        if member.name.lower() == base and (not tag or member.discriminator == tag):
+            return member
+    return None
+
+
+async def sync_roles(force: bool = False) -> dict:
+    """등록 명단의 상태에 맞춰 역할을 주고 뺀다. 이미 맞춘 등록은 건너뛰고, 상태나 디스코드가 바뀐 등록만 다시 본다.
+    force 면 서버에서 찾지 못했던 사람도 기다리지 않고 다시 찾아본다.
+    돌려주는 값: {"added": [멤버], "removed": [멤버], "missing": [등록], "problem": 까닭, "left": 다음 차례로 미룬 수}"""
+    out = {"added": [], "removed": [], "missing": [], "problem": "", "left": 0}
+    if not bot.player_role_id or not (SYNC_URL and SYNC_KEY):
+        return out
+    async with bot.role_lock:
+        data = await call_server({"action": "adminList"})
+        guild = await get_guild()
+        role = guild.get_role(bot.player_role_id)
+        out["problem"] = role_problem(guild, role)
+        if out["problem"]:
+            return out
+
+        season = str(data.get("season") or "")
+        if season != bot.role_season:  # 시즌이 바뀌면 명단이 새로 시작하므로 처음부터 다시 맞춘다
+            bot.role_season, bot.role_seen = season, {}
+        seen, now, tried, changed = bot.role_seen, time.time(), 0, False
+        for p in data.get("players") or []:
+            key, status, name = str(p.get("steamKey") or p.get("discord") or ""), p.get("status"), str(p.get("discord") or "")
+            if not key or status not in ("승인", "제외"):
+                continue
+            last = seen.get(key) or {}
+            same = last.get("status") == status and last.get("discord") == name
+            if same and last.get("ok"):
+                continue
+            if same and not force and now - last.get("tried", 0) < ROLE_RETRY_SECONDS:
+                continue
+            if tried >= ROLE_BATCH:
+                out["left"] += 1
+                continue
+            tried += 1
+            done = True
+            try:
+                member = await find_member(guild, name)
+                if member is None:
+                    # 제외한 사람이 서버에 없으면 뺄 역할도 없다. 승인한 사람이 없으면 나중에 다시 찾아본다
+                    done = status == "제외"
+                    if not done and not same:  # 처음 못 찾았을 때만 알린다
+                        out["missing"].append(p)
+                elif status == "승인" and role not in member.roles:
+                    await member.add_roles(role, reason="인하우스 리그 등록 승인")
+                    out["added"].append(member)
+                elif status == "제외" and role in member.roles:
+                    await member.remove_roles(role, reason="인하우스 리그 등록 제외")
+                    out["removed"].append(member)
+            except discord.Forbidden:
+                out["problem"] = "역할을 바꿀 권한이 없어요. 봇에 **역할 관리** 권한이 있는지, 봇의 역할이 그 역할보다 위에 있는지 확인해 주세요."
+                break
+            except (discord.HTTPException, asyncio.TimeoutError) as e:  # 디스코드가 잠깐 답하지 않았다. 나중에 다시 한다
+                print(f"참여 선수 역할: {name} 을(를) 처리하지 못했습니다: {e!r}")
+                done = False
+            seen[key] = {"status": status, "discord": name, "ok": done, "tried": now}
+            changed = True
+        if changed:
+            save_state()
+    return out
+
+
+def roles_text(out: dict) -> str:
+    """역할을 맞춘 결과를 관리자 채널에 알릴 글. 알릴 것이 없으면 빈 글."""
+    lines = []
+    if out["added"]:
+        lines.append("✅ 승인 → 역할을 줬어요: " + ", ".join(m.mention for m in out["added"]))
+    if out["removed"]:
+        lines.append("🚫 제외 → 역할을 뺐어요: " + ", ".join(m.mention for m in out["removed"]))
+    if out["missing"]:
+        lines.append("⚠️ 디스코드 서버에서 찾지 못했어요: "
+                     + ", ".join(f"{safe_name(str(p.get('nickname') or '?'))} (`{str(p.get('discord') or '').replace('`', '')}`)" for p in out["missing"])
+                     + "\n서버에 들어와 있는지, 등록한 디스코드 사용자명이 맞는지 확인해 주세요. 10분마다 다시 찾아봅니다.")
+    return ("🎫 **참여 선수 역할**\n" + "\n".join(lines)) if lines else ""
+
+
+async def role_tick() -> None:
+    """등록 명단을 한 번 읽어 역할을 맞추고, 바뀐 것이 있을 때만 관리자 채널에 알린다."""
+    out = await sync_roles()
+    text = roles_text(out)
+    if text:
+        await tell_admins(text)
+    # 권한 문제는 같은 내용을 되풀이해 알리지 않는다. 풀렸다가 다시 생기면 또 알린다
+    if out["problem"] and out["problem"] != bot.role_note:
+        await tell_admins("🎫 **참여 선수 역할**을 맞추지 못했어요. " + out["problem"])
+    bot.role_note = out["problem"]
+
+
+async def role_loop() -> None:
+    """켜 둔 동안 주기적으로 역할을 맞춘다."""
+    while True:
+        try:
+            await role_tick()
+        except Exception as e:  # 서버나 디스코드가 잠깐 답하지 않아도 다음 차례에 다시 한다
+            print(f"참여 선수 역할 맞추기 실패: {e!r}")
+        await asyncio.sleep(ROLE_POLL_SECONDS)
 
 
 # ── 슬래시 명령어: 운영진 ─────────────────────────────────────
@@ -923,6 +1108,50 @@ async def undo_win(interaction: discord.Interaction) -> None:
         save_state()
         await send_to(entry["place_id"], "↩️ **경기 결과 기록을 취소했어요.** MMR과 전적을 기록하기 전으로 되돌렸어요.")
     await interaction.followup.send("↩️ 결과 기록을 취소하고 MMR을 되돌렸어요. 다시 기록하려면 `/승리` 를 쓰세요.")
+
+
+@bot.tree.command(name="선수역할", description="승인한 선수에게 자동으로 줄 역할을 정합니다. 제외한 선수에게서는 뺍니다 (운영진 전용)", guild=GUILD)
+@app_commands.rename(role="역할", off="끄기")
+@app_commands.describe(role="승인한 선수에게 줄 역할. 비우면 지금 설정을 보여 주고 바로 한 번 맞춥니다", off="자동으로 역할 주기를 끕니다")
+async def player_role(interaction: discord.Interaction, role: Optional[discord.Role] = None, off: Optional[bool] = None) -> None:
+    if not await admin_only(interaction):
+        return
+    await interaction.response.defer()
+    quiet = discord.AllowedMentions.none()
+    if off:
+        bot.player_role_id, bot.role_seen = 0, {}
+        save_state()
+        await interaction.followup.send("🎫 참여 선수 역할 자동 부여를 껐어요. 이미 준 역할은 그대로 둡니다. 다시 켜려면 `/선수역할` 에서 역할을 골라 주세요.")
+        return
+    if role is not None:
+        problem = role_problem(await get_guild(), role)
+        if problem:
+            await interaction.followup.send(f"🎫 {role.mention} 역할로는 켤 수 없어요. {problem}", allowed_mentions=quiet)
+            return
+        if role.id != bot.player_role_id:
+            bot.player_role_id, bot.role_seen = role.id, {}  # 역할이 바뀌면 처음부터 다시 맞춘다
+            save_state()
+    if not bot.player_role_id:
+        await interaction.followup.send("🎫 참여 선수 역할 자동 부여가 꺼져 있어요. `/선수역할` 에서 **역할**을 고르면, 운영진 페이지에서 승인한 선수에게 그 역할을 주고 제외한 선수에게서는 뺍니다.")
+        return
+    if not (SYNC_URL and SYNC_KEY):
+        await interaction.followup.send("🎫 역할은 정했지만, 봇이 등록 명단을 읽을 수 없어요. `config.json` 에 `sync_url` 과 `sync_key` 를 넣고 봇을 다시 켜 주세요.")
+        return
+    try:
+        out = await sync_roles(force=True)
+    except Exception as e:
+        print(f"참여 선수 역할 맞추기 실패: {e!r}")
+        await interaction.followup.send(f"🎫 등록 명단을 읽지 못했어요. 잠시 뒤에 다시 해 주세요. ({e})")
+        return
+    bot.role_note = out["problem"]
+    if out["problem"]:
+        await interaction.followup.send("🎫 **참여 선수 역할**을 맞추지 못했어요. " + out["problem"], allowed_mentions=quiet)
+        return
+    head = f"🎫 승인한 선수에게 <@&{bot.player_role_id}> 역할을 자동으로 줍니다. 제외하면 뺍니다. (1분마다 확인)"
+    body = roles_text(out).replace("🎫 **참여 선수 역할**\n", "") or "지금은 새로 주거나 뺄 사람이 없어요."
+    more = f"\n나머지 {out['left']}명은 이어서 처리합니다." if out["left"] else ""
+    for chunk in split_message(f"{head}\n{body}{more}"):
+        await interaction.followup.send(chunk, allowed_mentions=quiet)
 
 
 # ── 슬래시 명령어: 참가자 ─────────────────────────────────────

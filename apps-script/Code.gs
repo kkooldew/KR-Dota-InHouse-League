@@ -3,8 +3,10 @@
  *
  * 하는 일
  *  - 선수 등록 페이지에서 받은 정보를 이 구글 시트에 저장한다 (시트는 운영진 계정에만 보인다)
- *    시즌마다 '선수등록 (시즌 이름)' 탭을 따로 쓰고, 지난 시즌에 등록했던 선수는 스팀 프로필과 포지션 순서만으로 다시 등록할 수 있다
+ *    시즌마다 '선수등록 (시즌 이름)' 탭을 따로 쓴다. 지난 시즌에 승인됐던 선수가 같은 스팀 프로필과 디스코드로 다시 등록하면
+ *    그 시즌이 끝났을 때의 인하우스 MMR을 이어받는다
  *  - 운영진 키가 있는 사람에게만 등록 명단을 돌려주고, 승인 상태와 등록 기간을 바꾸고 새 시즌을 시작하게 한다
+ *    (새 시즌을 시작하면 끝난 시즌의 리그 기록을 따로 보관하고, 새 시즌은 빈 기록에서 시작한다)
  *  - 리그 매니저가 올린 경기 기록을 받아, 개인 정보를 뺀 공개용 기록으로 내보낸다
  *  - 디스코드 봇이 올린 참가 명단을 보관했다가 리그 매니저에 넘겨준다
  *
@@ -12,9 +14,11 @@
  * 코드를 고친 뒤에는 배포 → 배포 관리 → 수정(연필) → 버전: 새 버전 → 배포 를 눌러야 반영됩니다.
  */
 
-const SERVER_VERSION = 6;                                // 서버를 고칠 때마다 올린다. 상태 응답에 실려서 새 버전이 배포됐는지 밖에서 확인할 수 있다
+const SERVER_VERSION = 7;                                // 서버를 고칠 때마다 올린다. 상태 응답에 실려서 새 버전이 배포됐는지 밖에서 확인할 수 있다
 const SHEET_NAME = '선수등록';                             // 등록 탭 이름의 앞부분. 시즌마다 '선수등록 (시즌 이름)' 탭을 따로 쓴다
-const HEADERS = ['등록시각', '수정시각', '상태', '닉네임', '스팀프로필', '스팀키', '디스코드', 'MMR', '1지망', '2지망', '3지망', '4지망', '비고'];
+// 칸을 더할 때는 맨 뒤에 붙이고 LAYOUT 을 올린다. 이미 있는 탭에는 ready_ 가 새 머리글을 채워 넣는다
+const HEADERS = ['등록시각', '수정시각', '상태', '닉네임', '스팀프로필', '스팀키', '디스코드', 'MMR', '1지망', '2지망', '3지망', '4지망', '비고', '최고MMR'];
+const LAYOUT = '2';
 const COL = HEADERS.reduce((o, h, i) => (o[h] = i, o), {});
 const PREF_LABELS = ['캐리', '미드', '오프', '서폿'];          // 지망 번호 1~4
 const STATUSES = ['대기', '승인', '제외'];
@@ -75,9 +79,8 @@ function doPost(e) {
 
     switch (body.action) {
       case 'register': return register_(body);
-      case 'rejoin': return rejoin_(body);
       case 'ping': requireAdmin_(body); return adminStatus_();
-      case 'adminList': requireAdmin_(body); return { players: listRegistrations_() };
+      case 'adminList': requireAdmin_(body); return { players: listRegistrations_(), season: statusInfo_().season };   // 시즌 이름은 봇이 시즌이 바뀐 것을 알아보는 데 쓴다
       case 'adminSetStatus': requireAdmin_(body); return setStatus_(body);
       case 'adminConfig': requireAdmin_(body); return setConfig_(body);
       case 'adminNewSeason': requireAdmin_(body); return newSeason_(body);
@@ -130,22 +133,24 @@ function withLock_(fn) {
 /* =========================================================
    상태
    ========================================================= */
+// 누구나 볼 수 있는 상태. 등록한 인원 수는 여기에 싣지 않는다(운영자가 공개하지 않기로 했다)
 function statusInfo_() {
   const props = PropertiesService.getScriptProperties();
   const list = seasons_();
   return {
     open: props.getProperty('REG_OPEN') !== 'false',
     season: list[list.length - 1].name,
-    registered: Math.max(0, getSheet_().getLastRow() - 1),
-    returning: list.length > 1,                            // 지난 시즌이 있으면 등록 페이지가 간편 등록을 함께 보여 준다
     recordsAt: props.getProperty('RECORDS_AT') || '',
     version: SERVER_VERSION
   };
 }
 
-// 운영진 페이지에는 지난 시즌 이름도 함께 준다 (오래된 시즌이 앞)
+// 운영진에게는 등록 인원 수와 지난 시즌 이름도 함께 준다 (오래된 시즌이 앞)
 function adminStatus_() {
-  return Object.assign(statusInfo_(), { pastSeasons: seasons_().slice(0, -1).map(s => s.name) });
+  return Object.assign(statusInfo_(), {
+    registered: Math.max(0, getSheet_().getLastRow() - 1),
+    pastSeasons: seasons_().slice(0, -1).map(s => s.name)
+  });
 }
 
 function setConfig_(body) {
@@ -159,6 +164,8 @@ function setConfig_(body) {
    ========================================================= */
 // 시즌마다 등록 탭을 따로 둔다. 스크립트 속성 SEASONS 에 [{name, id}] 로 적는다. 오래된 시즌이 앞이고 맨 뒤가 지금 시즌이다.
 // id 는 탭의 고유 번호(gid)라, 시트에서 탭 이름을 바꾸거나 순서를 옮겨도 그 시즌의 탭을 찾는다.
+// 끝난 시즌에는 league(그 시즌의 리그 기록을 보관한 드라이브 파일)와 endedAt 이 붙는다.
+// 지금 시즌의 leaguePending 은 새 시즌을 시작하면서 리그 기록을 아직 비우지 못했다는 표시다(finishSeason_).
 function seasons_() {
   let list = null;
   try { list = JSON.parse(PropertiesService.getScriptProperties().getProperty('SEASONS') || 'null'); } catch (err) { /* 깨졌으면 다시 만든다 */ }
@@ -183,9 +190,23 @@ function initSeasons_() {
   return list;
 }
 
-// 요청을 처리하기 전에 시즌 목록이 있는지 본다. 없으면(버전 6으로 올린 뒤 첫 요청) 한 번에 하나씩만 만들게 잠근다.
+// 요청을 처리하기 전에 시트가 지금 버전의 모양인지 본다. 서버를 새 버전으로 올린 뒤 첫 요청에서만 일이 있고,
+// 그때는 한 번에 하나씩만 하게 잠근다: 시즌 목록이 없으면 만들고, 칸이 늘었으면 모든 시즌 탭에 새 머리글을 채운다.
 function ready_() {
-  if (!PropertiesService.getScriptProperties().getProperty('SEASONS')) withLock_(() => { seasons_(); });
+  const props = PropertiesService.getScriptProperties();
+  const raw = props.getProperty('SEASONS') || '';
+  const pending = raw.indexOf('"leaguePending":true') >= 0;      // 새 시즌을 시작하다 리그 기록을 비우지 못한 채 남은 경우
+  if (raw && !pending && props.getProperty('LAYOUT') === LAYOUT) return;
+  withLock_(() => {
+    const list = seasons_();
+    if (props.getProperty('LAYOUT') !== LAYOUT) {
+      const ss = SpreadsheetApp.getActiveSpreadsheet();
+      list.forEach(s => { const sheet = sheetById_(ss, s.id); if (sheet) prepareSheet_(sheet); });
+      props.setProperty('LAYOUT', LAYOUT);
+    }
+    try { finishSeason_(list); }
+    catch (err) { console.error('리그 기록을 새로 시작하지 못했습니다. 다음 요청에서 다시 합니다: ' + (err && err.stack || err)); }
+  });
 }
 
 function seasonName_(v) {
@@ -197,15 +218,15 @@ function seasonKey_(name) {
   return String(name).toLowerCase().replace(/\s+/g, '');
 }
 
-// 시즌의 탭 이름. 시트 탭 이름에 쓸 수 없는 글자( : \ / ? * [ ] )는 뺀다
-function tabName_(season) {
+// 시즌의 탭 이름. 시트 탭 이름에 쓸 수 없는 글자( : \ / ? * [ ] )는 뺀다. base 는 탭의 종류(선수등록, 순위, 경기 기록)
+function tabName_(season, base) {
   const s = String(season || '').replace(/[:\\\/?*\[\]]/g, ' ').replace(/\s+/g, ' ').trim();
-  return s ? SHEET_NAME + ' (' + s + ')' : SHEET_NAME;
+  return s ? (base || SHEET_NAME) + ' (' + s + ')' : (base || SHEET_NAME);
 }
 
 // 아직 쓰이지 않은 탭 이름. 같은 이름의 다른 탭이 있으면 뒤에 번호를 붙인다. own 은 이름을 바꾸려는 탭 자신이다
-function freeTabName_(ss, season, own) {
-  const want = tabName_(season);
+function freeTabName_(ss, season, own, base) {
+  const want = tabName_(season, base);
   for (let n = 1; ; n++) {
     const name = n === 1 ? want : want + ' ' + n;
     const other = ss.getSheetByName(name);
@@ -214,9 +235,9 @@ function freeTabName_(ss, season, own) {
 }
 
 // 탭 이름을 시즌 이름에 맞춘다. 이름은 보기 좋으라고 붙이는 것이라, 못 바꿔도 넘어간다
-function nameTab_(ss, sheet, season) {
+function nameTab_(ss, sheet, season, base) {
   try {
-    const name = freeTabName_(ss, season, sheet);
+    const name = freeTabName_(ss, season, sheet, base);
     if (sheet.getName() !== name) sheet.setName(name);
   } catch (err) {
     console.warn('탭 이름을 바꾸지 못했습니다: ' + err);
@@ -244,26 +265,85 @@ function renameSeason_(v) {
   });
 }
 
-// 새 시즌을 시작한다: 새 탭을 만들어 등록을 처음부터 받는다. 지난 시즌의 명단은 그 시즌의 탭에 그대로 남는다
+// 새 시즌을 시작한다.
+//  - 등록: 새 탭을 만들어 빈 명단에서 다시 받는다. 지난 시즌의 명단은 그 시즌의 탭에 그대로 남는다.
+//  - 리그 기록: 끝나는 시즌의 기록(선수의 인하우스 MMR·전적, 경기)을 드라이브 파일로 따로 보관하고, 새 시즌은 선수와 경기가 없는 기록으로 시작한다(설정은 그대로).
+//    지난 시즌에 승인됐던 선수가 다시 등록하면, 보관해 둔 기록에서 시즌이 끝났을 때의 인하우스 MMR을 찾아 이어받는다(register_).
 function newSeason_(body) {
   const name = seasonName_(body.season);
   if (!name) fail_('새 시즌의 이름을 넣어 주세요', 'season');
   return withLock_(() => {
+    const props = PropertiesService.getScriptProperties();
     const list = seasons_();
     if (list.some(s => seasonKey_(s.name) === seasonKey_(name)))
       fail_('이미 있는 시즌 이름입니다. 다른 이름을 넣어 주세요.', 'season');
     const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const cur = list[list.length - 1];
+
+    // 보관이 먼저다. 여기서 실패하면 아무것도 바뀌지 않는다
+    const ended = getLeague_().league;
+    if (ended) {
+      const label = String(cur.name || '이름 없는 시즌').replace(/[\\\/:*?"<>|]/g, ' ').replace(/\s+/g, ' ').trim();
+      cur.league = DriveApp.createFile('인하우스_리그기록_' + label + '.json', JSON.stringify(ended), 'application/json').getId();
+    }
+    cur.endedAt = new Date().toISOString();
+
     const sheet = ss.insertSheet(freeTabName_(ss, name), 0);     // 지금 시즌의 탭이 맨 앞에 오게 한다
     prepareSheet_(sheet);
-    list.push({ name, id: sheet.getSheetId() });
+    list.push(ended ? { name, id: sheet.getSheetId(), leaguePending: true } : { name, id: sheet.getSheetId() });
     saveSeasons_(list);
+    props.setProperty('ROSTER', '');                             // 지난 시즌의 참가 명단과 짠 팀은 새 시즌의 선수와 맞지 않는다
+    props.setProperty('LINEUP', '');
+
+    // 시즌은 이미 바뀌었다. 리그 기록을 비우다 실패해도 여기서 멈추지 않고, 다음 요청 때 ready_ 가 이어서 한다
+    try { finishSeason_(list); }
+    catch (err) { console.error('리그 기록을 새로 시작하지 못했습니다. 다음 요청에서 다시 합니다: ' + (err && err.stack || err)); }
     return adminStatus_();
   });
+}
+
+// 새 시즌의 리그 기록을 아직 비우지 못했으면(leaguePending) 비운다. 잠금을 잡은 상태에서 부른다
+function finishSeason_(list) {
+  const cur = list[list.length - 1];
+  if (!cur.leaguePending) return;
+  const live = getLeague_().league;                              // 아직 지난 시즌의 기록이다. 설정만 이어받는다
+  startLeague_(live && live.settings, list.length > 1 ? list[list.length - 2].name : '');
+  delete cur.leaguePending;
+  saveSeasons_(list);
+}
+
+// 리그 기록을 선수와 경기가 없는 상태로 새로 시작한다. 번호를 올려서 매니저가 새 기록을 받아 가게 한다.
+function startLeague_(settings, endedSeason) {
+  const props = PropertiesService.getScriptProperties();
+  const league = { players: [], matches: [], settings: settings || {} };
+  const out = writePublic_(sanitizeRecords_(league));
+  driveFile_('LEAGUE_FILE_ID', '인하우스_리그기록.json').setContent(JSON.stringify(league));
+  props.setProperty('LEAGUE_AT', out.publishedAt);
+  props.setProperty('LEAGUE_REV', String(leagueRev_() + 1));
+  keepMirror_(endedSeason);                                      // 여기부터는 보기용 탭이라 실패해도 넘어간다
+  writeMirror_(league);
+}
+
+// 보관해 둔 지난 시즌의 리그 기록. 없거나 읽지 못하면 null
+function archivedLeague_(season) {
+  if (!season.league) return null;
+  try {
+    const league = JSON.parse(DriveApp.getFileById(season.league).getBlob().getDataAsString('UTF-8'));
+    return league && Array.isArray(league.players) ? league : null;
+  } catch (err) {
+    console.warn('보관해 둔 리그 기록을 읽지 못했습니다 (' + season.name + '): ' + err);
+    return null;
+  }
 }
 
 /* =========================================================
    선수 등록
    ========================================================= */
+// 등록 양식은 하나다. 처음 온 선수와 지난 시즌에 뛴 선수가 같은 칸을 채워 낸다.
+// 지난 시즌에 승인됐던 선수(스팀 프로필과 디스코드가 모두 같은 사람)는 여기서 알아보고 인하우스 MMR을 이어받게 한다:
+//  - 닉네임, 포지션 순서, 최고 MMR은 이번에 적어 낸 값으로 한다
+//  - MMR 칸에는 적어 낸 현재 MMR 대신, 지난 시즌이 끝났을 때의 인하우스 MMR을 넣는다 (carriedMmr_)
+// 승인한 명단을 리그 매니저로 불러올 때 이 MMR 칸이 새 시즌 인하우스 MMR의 출발점이 된다.
 function register_(body) {
   // 사람 눈에 보이지 않는 칸이 채워져 있으면 자동 입력 프로그램으로 보고, 성공한 척만 한다
   if (body.website) return { updated: false };
@@ -272,6 +352,7 @@ function register_(body) {
   const nickname = cleanNickname_(body.nickname);
   const discord = normDiscord_(body.discord);
   const mmr = parseMmr_(body.mmr);
+  const peak = parsePeak_(body.peak, mmr);
   const prefs = parsePrefs_(body.prefs);
   const steam = resolveSteam_(parseSteam_(body.steam));     // 스팀에 물어봐야 해서 다른 칸을 모두 확인한 뒤에 한다
 
@@ -286,9 +367,8 @@ function register_(body) {
     if (rows.length >= MAX_ROWS) fail_('등록 인원이 가득 찼습니다. 운영진에게 문의해 주세요.');
 
     // 예전에 사용자 지정 주소로 저장된 줄(id:이름)도 같은 사람으로 알아본다
-    const mine = rows.find(r => r.steamKey === steam.key) || (steam.legacyKey ? rows.find(r => r.steamKey === steam.legacyKey) : undefined);
-    const nickKey = nickname.toLowerCase().replace(/\s+/g, '');
-    const nickOwner = rows.find(r => r.nickname.toLowerCase().replace(/\s+/g, '') === nickKey);
+    const mine = rows.find(r => sameSteam_(r, steam));
+    const nickOwner = rows.find(r => nameKey_(r.nickname) === nameKey_(nickname));
     const discordOwner = rows.find(r => r.discord === discord);
 
     if (mine && mine.discord !== discord)
@@ -301,6 +381,9 @@ function register_(body) {
     if (nickOwner && nickOwner !== mine)
       fail_('다른 선수가 이미 쓰고 있는 닉네임입니다. 다른 닉네임을 넣어 주세요.', 'nickname');
 
+    // 지난 시즌에 승인됐던 선수인지 본다. 이번 시즌에 처음 내는 것이면, 스팀과 디스코드 가운데 한쪽만 지난 기록과 같은 경우를 여기서 거절한다
+    const past = findPast_(steam, discord, !mine);
+    const back = !!(past && past.approved);
     const now = new Date();
     const prefCells = prefs.map(n => PREF_LABELS[n - 1]);
     if (mine) {
@@ -311,11 +394,28 @@ function register_(body) {
       line[COL['스팀프로필']] = text_(steam.url);
       line[COL['스팀키']] = text_(steam.key);
       line[COL['디스코드']] = text_(mine.discord);
-      line[COL['MMR']] = mmr;
+      if (!back) line[COL['MMR']] = mmr;                   // 재참가 선수의 MMR은 처음 낼 때 이어받은 값 그대로 둔다
       prefCells.forEach((v, i) => { line[COL['1지망'] + i] = v; });
-      line[COL['비고']] = '';                              // 본인이 모두 새로 적어 냈으니 '지난 시즌에서 가져옴' 표시는 지운다
+      line[COL['비고']] = mine.note ? text_(mine.note) : '';
+      if (peak !== null) line[COL['최고MMR']] = peak;
       sheet.getRange(mine.rowNumber, 1, 1, HEADERS.length).setValues([line]);
-      return { updated: true };
+      return { updated: true, returning: back, mmr: back ? mine.mmr : mmr };
+    }
+
+    // from 은 선수에게 알려 줄 시즌 이름: 인하우스 MMR을 이어받았으면 그 MMR이 나온 시즌, 아니면 승인됐던 시즌
+    const label = s => s || '지난 시즌';
+    let start = mmr, from = '', inhouse = false, note = '';
+    if (back) {
+      const got = carriedMmr_(past, steam, discord);
+      start = got.mmr;
+      inhouse = got.inhouse;
+      from = got.inhouse ? got.season : past.season;
+      note = '재참가 · ' + label(past.season) + (got.inhouse
+        ? ' · ' + (got.season === past.season ? '' : label(got.season) + ' ') + '인하우스 MMR 이어받음'
+        : ' · 그때 등록한 MMR 이어받음');
+    } else if (past) {
+      // 지난 시즌에 등록은 했지만 승인되지 않았던 사람. 처음 온 선수처럼 받되, 운영진이 알아보게 적어 둔다
+      note = label(past.season) + '에도 등록함 (그때 ' + past.row.status + ')';
     }
     const line = new Array(HEADERS.length).fill('');
     line[COL['등록시각']] = now;
@@ -325,80 +425,83 @@ function register_(body) {
     line[COL['스팀프로필']] = text_(steam.url);
     line[COL['스팀키']] = text_(steam.key);
     line[COL['디스코드']] = text_(discord);
-    line[COL['MMR']] = mmr;
+    line[COL['MMR']] = start;
     prefCells.forEach((v, i) => { line[COL['1지망'] + i] = v; });
+    line[COL['비고']] = note ? text_(note) : '';
+    line[COL['최고MMR']] = peak === null ? '' : peak;
     sheet.appendRow(line);
-    return { updated: false };
+    return { updated: false, returning: back, from, inhouse, mmr: start };
   });
 
   cache.put(rlKey, '1', 30);
   return result;
 }
 
-// 지난 시즌에 등록했던 선수의 간편 등록. 스팀 프로필과 포지션 순서만 받고,
-// 닉네임·디스코드·MMR은 그 선수가 가장 최근에 등록한 시즌의 줄에서 가져와 지금 시즌에 새 줄(대기)로 넣는다.
-function rejoin_(body) {
-  if (body.website) return { nickname: '', from: '' };     // 자동 입력 프로그램에는 성공한 척만 한다
-  if (PropertiesService.getScriptProperties().getProperty('REG_OPEN') === 'false') fail_('지금은 선수 등록 기간이 아닙니다', 'closed');
+// 이름을 견줄 때 쓰는 모양: 공백과 대소문자는 무시한다
+function nameKey_(v) {
+  return String(v == null ? '' : v).toLowerCase().replace(/\s+/g, '');
+}
 
-  const prefs = parsePrefs_(body.prefs);
-  const p = parseSteam_(body.steam);
-  // 숫자 주소는 시트에서 바로 찾을 수 있어 스팀에 묻지 않는다. 사용자 지정 주소만 스팀에서 고유 번호를 알아 온다
-  const steam = p.id ? { key: 's:' + p.id, url: 'https://steamcommunity.com/profiles/' + p.id, legacyKey: '' } : resolveSteam_(p);
+function sameSteam_(row, steam) {
+  return row.steamKey === steam.key || (!!steam.legacyKey && row.steamKey === steam.legacyKey);
+}
 
-  const cache = CacheService.getScriptCache();
-  const rlKey = 'rl:' + steam.key;
-  if (cache.get(rlKey)) fail_('방금 제출했습니다. 30초 뒤에 다시 시도해 주세요.', 'rate');
-
-  const result = withLock_(() => {
-    const list = seasons_();
-    const sheet = getSheet_();
-    const rows = readRows_(sheet);
-    if (rows.length >= MAX_ROWS) fail_('등록 인원이 가득 찼습니다. 운영진에게 문의해 주세요.');
-    const same = r => r.steamKey === steam.key || (!!steam.legacyKey && r.steamKey === steam.legacyKey);
-
-    const mine = rows.find(same);
-    if (mine) fail_(mine.status === '대기'
-      ? '이번 시즌에 이미 등록돼 있습니다. 운영진의 확인을 기다려 주세요. 고칠 내용이 있으면 "처음 등록해요"에서 같은 스팀 프로필과 디스코드로 다시 제출하면 됩니다.'
-      : '이번 시즌에 이미 등록돼 있습니다. 바꿀 내용이 있으면 운영진에게 알려 주세요.', 'already');
-
-    // 가장 최근 시즌부터 거슬러 올라가며 이 선수의 줄을 찾는다
-    const ss = SpreadsheetApp.getActiveSpreadsheet();
-    let old = null, from = '';
-    for (let i = list.length - 2; i >= 0 && !old; i--) {
-      const past = sheetById_(ss, list[i].id);
-      if (!past) continue;                                 // 탭이 지워진 시즌은 건너뛴다
-      old = readRows_(past).filter(same)[0] || null;
-      from = list[i].name;
+// 지난 시즌의 등록 탭에서 이 사람을 찾는다 (가장 최근 시즌부터).
+// 승인됐던 등록만 본인 확인이 끝난 것으로 본다. 스팀과 디스코드가 모두 같은 승인 기록이 있으면 재참가 선수다.
+// 한쪽만 같은 승인 기록이 있으면 잘못 적었거나 계정이 바뀐 것이라, strict 일 때는 다시 확인하도록 거절한다
+// (그대로 받으면 디스코드를 잘못 적은 선수가 지난 시즌의 인하우스 MMR을 잃고 새 선수가 된다).
+// 돌려주는 값: { row, season, index, approved } 또는 null. approved 가 false 면 등록만 하고 승인되지 않았던 기록이다.
+function findPast_(steam, discord, strict) {
+  const list = seasons_();
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let waiting = null;
+  for (let i = list.length - 2; i >= 0; i--) {
+    const sheet = sheetById_(ss, list[i].id);
+    if (!sheet) continue;                                  // 탭이 지워진 시즌은 건너뛴다
+    const rows = readRows_(sheet).filter(r => sameSteam_(r, steam) || r.discord === discord);
+    const approved = rows.filter(r => r.status === '승인');
+    const both = approved.filter(r => sameSteam_(r, steam) && r.discord === discord)[0];
+    if (both) return { row: both, season: list[i].name, index: i, approved: true };
+    if (approved.length) {
+      if (!strict) return null;
+      fail_(approved.some(r => sameSteam_(r, steam))
+        ? '이 스팀 프로필은 지난 시즌에 다른 디스코드 계정으로 등록돼 있었습니다. 디스코드 사용자명을 다시 확인해 주세요. 계정이 바뀌었다면 운영진에게 알려 주세요.'
+        : '이 디스코드 계정은 지난 시즌에 다른 스팀 프로필로 등록돼 있었습니다. 스팀 프로필 주소를 다시 확인해 주세요. 계정이 바뀌었다면 운영진에게 알려 주세요.', 'conflict');
     }
-    if (!old || !old.nickname || !old.discord)
-      fail_('지난 시즌에 이 스팀 프로필로 등록한 기록을 찾지 못했습니다. "처음 등록해요"로 등록해 주세요.', 'notfound');
+    if (!waiting) {
+      const same = rows.filter(r => sameSteam_(r, steam) && r.discord === discord)[0];
+      if (same) waiting = { row: same, season: list[i].name, index: i, approved: false };
+    }
+  }
+  return waiting;
+}
 
-    const nickKey = old.nickname.toLowerCase().replace(/\s+/g, '');
-    if (rows.some(r => r.nickname.toLowerCase().replace(/\s+/g, '') === nickKey))
-      fail_('지난 시즌에 쓰던 닉네임을 이번 시즌에 다른 선수가 쓰고 있습니다. "처음 등록해요"에서 다른 닉네임으로 등록해 주세요.', 'conflict');
-    if (rows.some(r => r.discord === old.discord))
-      fail_('지난 시즌에 등록한 디스코드 계정이 이번 시즌에 다른 스팀 프로필로 등록돼 있습니다. 운영진에게 알려 주세요.', 'conflict');
+// 재참가 선수가 이어받을 MMR: 지난 시즌이 끝났을 때의 인하우스 MMR.
+// 새 시즌을 시작할 때 보관해 둔 리그 기록(newSeason_)을 최근 시즌부터 찾아본다. 지난 시즌의 기록은 그때의 계산 방식으로
+// 정산된 값 그대로 쓴다. 계산 방식은 시즌마다 달라질 수 있으니 다시 계산하지 않는다.
+// 기록에서 선수를 찾는 순서: 스팀 고유 번호 → 디스코드 → (둘 다 적혀 있지 않은 선수에 한해) 그 시즌에 등록한 닉네임.
+// 어느 시즌의 기록에도 없으면(승인만 되고 선수단에 들어간 적이 없는 경우) 그때 등록한 MMR을 쓴다.
+function carriedMmr_(past, steam, discord) {
+  const list = seasons_();
+  const id64 = steam.key.slice(2);
+  for (let i = list.length - 2; i >= 0; i--) {
+    const league = archivedLeague_(list[i]);
+    if (!league) continue;
+    const nick = i === past.index ? nameKey_(past.row.nickname) : '';
+    const players = league.players.filter(p => p && typeof p === 'object');
+    const found = players.filter(p => leagueSteamId_(p.steam) === id64)[0]
+      || players.filter(p => p.discord && nameKey_(String(p.discord).replace(/^@/, '')) === discord)[0]
+      || (nick ? players.filter(p => !p.steam && !p.discord && nameKey_(p.name) === nick)[0] : undefined);
+    const mmr = found ? Math.round(Number(found.mmr)) : NaN;
+    if (Number.isFinite(mmr)) return { mmr: Math.max(0, mmr), inhouse: true, season: list[i].name };
+  }
+  return { mmr: past.row.mmr, inhouse: false, season: past.season };
+}
 
-    const now = new Date();
-    const line = new Array(HEADERS.length).fill('');
-    line[COL['등록시각']] = now;
-    line[COL['수정시각']] = now;
-    line[COL['상태']] = '대기';
-    line[COL['닉네임']] = text_(old.nickname);
-    line[COL['스팀프로필']] = text_(steam.url);
-    line[COL['스팀키']] = text_(steam.key);
-    line[COL['디스코드']] = text_(old.discord);
-    line[COL['MMR']] = old.mmr;
-    prefs.forEach((n, i) => { line[COL['1지망'] + i] = PREF_LABELS[n - 1]; });
-    // 운영진이 알아보게 적어 둔다. 지난 시즌에 승인되지 않았던 선수면 그때 상태도 함께 적는다
-    line[COL['비고']] = text_('재참가' + (from ? ' · ' + from : '') + (old.status === '승인' ? '' : ' (그때 ' + old.status + ')'));
-    sheet.appendRow(line);
-    return { nickname: old.nickname, from };
-  });
-
-  cache.put(rlKey, '1', 30);
-  return result;
+// 리그 기록에 적힌 스팀 프로필 주소에서 고유 번호를 읽는다. 없으면 ''
+function leagueSteamId_(v) {
+  const m = String(v == null ? '' : v).match(/7656\d{13}/);
+  return m ? m[0] : '';
 }
 
 // 앞에 '를 붙이면 시트가 글자 그대로 둔다. 닉네임이 =로 시작해도 수식이 되지 않고, 긴 숫자 ID도 반올림되지 않는다.
@@ -503,6 +606,16 @@ function parseMmr_(v) {
   return n;
 }
 
+// 최고 MMR(도타 2를 하면서 가장 높았던 MMR)은 운영진이 참고만 하는 값이다. 인하우스 MMR에는 쓰지 않는다.
+// 이 칸이 없던 때의 등록 페이지는 값을 보내지 않으므로, 비어 있으면 빈칸으로 둔다(null).
+function parsePeak_(v, mmr) {
+  if (v === undefined || v === null || v === '') return null;
+  const n = Number(v);
+  if (!Number.isFinite(n) || n < 0 || n > MAX_MMR || Math.round(n) !== n) fail_('최고 MMR은 0부터 ' + MAX_MMR + ' 사이의 정수로 넣어 주세요', 'peak');
+  if (n < mmr) fail_('최고 MMR은 현재 MMR보다 낮을 수 없습니다. 지금이 가장 높다면 현재 MMR과 같은 값을 넣어 주세요.', 'peak');
+  return n;
+}
+
 function parsePrefs_(v) {
   if (!Array.isArray(v) || v.length !== 4) fail_('포지션 순서를 네 개 모두 정해 주세요', 'prefs');
   const nums = v.map(Number);
@@ -534,7 +647,8 @@ function readRows_(sheet) {
       discord: d[COL['디스코드']].trim().toLowerCase(),
       mmr: Number(String(d[COL['MMR']]).replace(/[^\d.]/g, '')) || 0,
       prefs: [0, 1, 2, 3].map(i2 => prefCode_(d[COL['1지망'] + i2])),
-      note: d[COL['비고']].trim()
+      note: d[COL['비고']].trim(),
+      peak: d[COL['최고MMR']].trim() === '' ? null : (Number(String(d[COL['최고MMR']]).replace(/[^\d.]/g, '')) || 0)
     };
   }).filter(r => r.nickname || r.steamKey);
 }
@@ -561,6 +675,7 @@ function listRegistrations_() {
     steamKey: r.steamKey,
     discord: r.discord,
     mmr: r.mmr,
+    peak: r.peak,
     prefs: r.prefs,
     note: r.note
   }));
@@ -698,6 +813,22 @@ function writeMirror_(league) {
     mirrorTab_(ss, '경기 기록', matchRows_(league));
   } catch (err) {                                          // 보기용 탭을 못 써도 기록 저장은 끝낸다
     console.warn('시트의 순위·경기 기록 탭을 쓰지 못했습니다: ' + err);
+  }
+}
+
+// 끝난 시즌의 순위·경기 기록 탭에 시즌 이름을 붙여 남겨 둔다. 새 시즌의 탭은 writeMirror_ 가 다시 만든다
+function keepMirror_(season) {
+  try {
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const label = season || '지난 시즌';
+    ['순위', '경기 기록'].forEach(base => {
+      const sheet = ss.getSheetByName(base);
+      if (!sheet) return;
+      nameTab_(ss, sheet, label, base);
+      if (sheet.getLastRow() > 0) sheet.getRange(1, 1).setValue(text_('끝난 시즌(' + label + ')의 기록입니다. 보관해 둔 것이라 더 바뀌지 않습니다.'));
+    });
+  } catch (err) {
+    console.warn('지난 시즌의 순위·경기 기록 탭을 남기지 못했습니다: ' + err);
   }
 }
 
@@ -868,8 +999,9 @@ function prepareSheet_(sheet) {
     ['스팀프로필', '스팀키', '디스코드', '닉네임', '비고'].forEach(h => {
       sheet.getRange(1, COL[h] + 1, sheet.getMaxRows(), 1).setNumberFormat('@');
     });
-  } else if (sheet.getRange(1, HEADERS.length).getDisplayValue() === '') {
-    // 버전 5까지 만든 탭에는 비고 칸의 머리글이 없다
-    sheet.getRange(1, HEADERS.length).setValue(HEADERS[HEADERS.length - 1]).setFontWeight('bold');
+  } else {
+    // 예전 버전에서 만든 탭에는 나중에 생긴 칸(비고, 최고MMR)의 머리글이 없다. 비어 있는 머리글만 채운다
+    const head = sheet.getRange(1, 1, 1, HEADERS.length).getDisplayValues()[0];
+    HEADERS.forEach((h, i) => { if (head[i] === '') sheet.getRange(1, i + 1).setValue(h).setFontWeight('bold'); });
   }
 }
