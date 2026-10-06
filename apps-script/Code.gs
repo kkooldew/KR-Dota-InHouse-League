@@ -11,7 +11,7 @@
  * 코드를 고친 뒤에는 배포 → 배포 관리 → 수정(연필) → 버전: 새 버전 → 배포 를 눌러야 반영됩니다.
  */
 
-const SERVER_VERSION = 3;                                  // 서버를 고칠 때마다 올린다. 상태 응답에 실려서 새 버전이 배포됐는지 밖에서 확인할 수 있다
+const SERVER_VERSION = 4;                                 // 서버를 고칠 때마다 올린다. 상태 응답에 실려서 새 버전이 배포됐는지 밖에서 확인할 수 있다
 const SHEET_NAME = '선수등록';
 const HEADERS = ['등록시각', '수정시각', '상태', '닉네임', '스팀프로필', '스팀키', '디스코드', 'MMR', '1지망', '2지망', '3지망', '4지망'];
 const COL = HEADERS.reduce((o, h, i) => (o[h] = i, o), {});
@@ -21,6 +21,7 @@ const MAX_MMR = 15000;
 const MAX_ROWS = 3000;
 const ROSTER_MAX = 60;
 const STEAM_TRIES = 4;                                     // 스팀 조회를 몇 번까지 시도할지
+const LEAGUE_MAX = 8000000;                                // 봇에게 넘길 리그 기록의 최대 크기(글자 수)
 
 /* =========================================================
    설치: 편집기에서 setup 을 한 번 실행하세요
@@ -80,6 +81,9 @@ function doPost(e) {
       case 'publishRecords': requireAdmin_(body); return publishRecords_(body);
       case 'pushRoster': requireAdmin_(body); return pushRoster_(body);
       case 'adminRoster': requireAdmin_(body); return { roster: getRoster_() };
+      case 'adminLeague': requireAdmin_(body); return getLeague_();
+      case 'pushLineup': requireAdmin_(body); return pushLineup_(body);
+      case 'adminLineup': requireAdmin_(body); return { lineup: getLineup_() };
       default: fail_('알 수 없는 요청입니다');
     }
   });
@@ -428,15 +432,67 @@ function sanitizeRecords_(r) {
 
 function publishRecords_(body) {
   const clean = sanitizeRecords_(body.records);
+  const league = body.league == null ? '' : leagueText_(body.league);   // 형식이 틀리면 공개 기록도 바꾸지 않고 여기서 멈춘다
   const at = new Date().toISOString();
   clean.publishedAt = at;
   const text = JSON.stringify(clean);
   withLock_(() => {
+    const props = PropertiesService.getScriptProperties();
     recordsFile_().setContent(text);
-    PropertiesService.getScriptProperties().setProperty('RECORDS_AT', at);
+    props.setProperty('RECORDS_AT', at);
     putCache_('records', text);
+    if (league) {
+      driveFile_('LEAGUE_FILE_ID', '인하우스_리그기록_봇용.json').setContent(league);
+      props.setProperty('LEAGUE_AT', at);
+    }
   });
-  return { publishedAt: at, players: clean.players.length, matches: clean.matches.length };
+  return { publishedAt: at, players: clean.players.length, matches: clean.matches.length, league: !!league };
+}
+
+/* =========================================================
+   봇의 자동 팀 편성
+   ========================================================= */
+// 리그 매니저의 기록 전체(선수의 디스코드·스팀과 설정 포함). 매니저가 공개 기록과 함께 올리고, 봇이 팀을 짤 때 읽는다.
+// 공개 기록과 달리 거르지 않고 그대로 두며, 운영진 키가 있어야만 돌려준다.
+function leagueText_(league) {
+  if (typeof league !== 'object' || !Array.isArray(league.players) || !Array.isArray(league.matches)) fail_('리그 기록 형식이 잘못됐습니다');
+  const text = JSON.stringify({ players: league.players, matches: league.matches, settings: league.settings || {} });
+  if (text.length > LEAGUE_MAX) fail_('리그 기록이 너무 큽니다');
+  return text;
+}
+
+function getLeague_() {
+  const props = PropertiesService.getScriptProperties();
+  const id = props.getProperty('LEAGUE_FILE_ID');
+  if (!id) return { league: null, leagueAt: '' };
+  let text = '';
+  try { text = DriveApp.getFileById(id).getBlob().getDataAsString('UTF-8') || ''; } catch (err) { /* 파일이 지워졌으면 없는 것으로 본다 */ }
+  return { league: text ? JSON.parse(text) : null, leagueAt: text ? (props.getProperty('LEAGUE_AT') || '') : '' };
+}
+
+// 봇이 짠 팀. 매니저가 불러와 그대로 보드에 올리고 결과를 기록한다. lineup 이 null 이면 비운다.
+function pushLineup_(body) {
+  const props = PropertiesService.getScriptProperties();
+  const l = body.lineup;
+  if (l === null) { props.setProperty('LINEUP', ''); return { cleared: true }; }
+  const id = v => String(v == null ? '' : v).slice(0, 40);
+  const lanes = l && Array.isArray(l.lanes) ? l.lanes.map(x => ({ role: Number(x && x.role), r: id(x && x.r), d: id(x && x.d) })) : [];
+  const ids = lanes.reduce((a, x) => a.concat(x.r, x.d), []);
+  if (lanes.length !== 5 || lanes.some((x, i) => x.role !== i + 1) || ids.some(x => !x) || new Set(ids).size !== 10)
+    fail_('팀 편성 형식이 잘못됐습니다');
+  const lineup = {
+    at: new Date().toISOString(),
+    post: String(l.post || '').slice(0, 200),
+    lanes,
+    bench: (Array.isArray(l.bench) ? l.bench : []).slice(0, ROSTER_MAX).map(id).filter(Boolean)
+  };
+  props.setProperty('LINEUP', JSON.stringify(lineup));
+  return { at: lineup.at };
+}
+
+function getLineup_() {
+  const raw = PropertiesService.getScriptProperties().getProperty('LINEUP');
+  return raw ? JSON.parse(raw) : null;
 }
 
 function publicRecords_() {
@@ -449,13 +505,18 @@ function publicRecords_() {
 }
 
 function recordsFile_() {
+  return driveFile_('RECORDS_FILE_ID', '인하우스_공개기록.json');
+}
+
+// 스크립트 속성에 적어 둔 드라이브 파일. 없거나 지워졌으면 빈 기록으로 새로 만든다.
+function driveFile_(prop, name) {
   const props = PropertiesService.getScriptProperties();
-  const id = props.getProperty('RECORDS_FILE_ID');
+  const id = props.getProperty(prop);
   if (id) {
     try { return DriveApp.getFileById(id); } catch (err) { /* 지워졌으면 새로 만든다 */ }
   }
-  const file = DriveApp.createFile('인하우스_공개기록.json', JSON.stringify({ players: [], matches: [] }), 'application/json');
-  props.setProperty('RECORDS_FILE_ID', file.getId());
+  const file = DriveApp.createFile(name, JSON.stringify({ players: [], matches: [] }), 'application/json');
+  props.setProperty(prop, file.getId());
   return file;
 }
 

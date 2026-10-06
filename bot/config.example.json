@@ -8,5 +8,7 @@
   "extend_minutes": 5,
   "announcement": "🎮 **도타 2 내전 모집!**\n지금부터 내전 참여자를 모집합니다. 마감 후 명단이 공지되면 로비로 모여 주세요.",
   "sync_url": "",
-  "sync_key": ""
+  "sync_key": "",
+  "auto_match": true,
+  "node_path": ""
 }

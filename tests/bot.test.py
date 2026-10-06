@@ -14,7 +14,7 @@ import shutil
 import sys
 import tempfile
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from unittest.mock import AsyncMock, Mock
 
@@ -50,15 +50,19 @@ Created = collections.namedtuple("Created", "thread message")
 
 
 class World:
-    def __init__(self, mod, forum=True, sync=None):
+    """가짜 디스코드 서버와 가짜 리그 서버. league 를 주면 자동 팀 편성이 켜진 것으로 본다."""
+
+    def __init__(self, mod, forum=True, sync=None, league=None):
         self.mod = mod
         self.thread = Mock()
         self.thread.id = 300
         self.thread.send = AsyncMock()
         self.thread.edit = AsyncMock()
         self.message = Mock()
+        self.message.id = 300
         self.message.edit = AsyncMock()
         self.message.jump_url = "https://discord.com/channels/1/300/300"
+        self.thread.get_partial_message = Mock(return_value=self.message)
         self.admin = Mock()
         self.admin.send = AsyncMock()
         if forum:
@@ -69,11 +73,12 @@ class World:
         else:
             self.signup = Mock(spec=discord.TextChannel)
             self.signup.send = AsyncMock(return_value=self.message)
+            self.signup.get_partial_message = Mock(return_value=self.message)
         self.place = self.thread if forum else self.signup
         self.place_id = 300 if forum else 200
 
         async def get_channel(cid):
-            return {100: self.admin, 200: self.signup}[cid]
+            return {100: self.admin, 200: self.signup, 300: self.thread}[cid]
 
         self.pushed = []
 
@@ -81,10 +86,25 @@ class World:
             self.pushed.append("clear" if clear else list(rec.participants))
             return sync
 
+        self.league = league
+        self.server = []          # 리그 서버로 보낸 요청
+        self.fail = set()         # 실패하게 만들 요청 이름
+
+        async def call_server(payload):
+            self.server.append(payload)
+            if payload["action"] in self.fail:
+                raise RuntimeError("서버 오류")
+            return {"ok": True, "league": self.league} if payload["action"] == "adminLeague" else {"ok": True}
+
         mod.get_channel = get_channel
         mod.push_roster = push_roster
+        mod.call_server = call_server
+        mod.match_problem = (lambda: "") if league is not None else (lambda: "꺼짐 (테스트)")
+        mod.when = lambda ts: f"<t:{ts}:t>"      # 자정 무렵에 돌려도 결과가 같게, 날짜 표시는 따로 확인한다
         mod.bot.lock = asyncio.Lock()
         mod.bot.current = None
+        mod.bot.lineups = []
+        mod.STATE_PATH.unlink(missing_ok=True)
 
     def texts(self, mock):
         return [c.args[0] for c in mock.call_args_list]
@@ -119,15 +139,16 @@ def said(i):
     return calls[-1].args[0] if calls else ""
 
 
-async def run(cmd, channel_id, u):
+async def run(cmd, channel_id, u, *args):
     i = inter(channel_id, u)
-    await cmd.callback(i)
+    await cmd.callback(i, *args)
     return said(i), i
 
 
 async def main():
     mod = load()
     KST = mod.KST
+    real_when, real_problem = mod.when, mod.match_problem
     ADMIN = user(1, "운영자", admin=True)
     A, B, C = user(11, "가"), user(12, "나*별"), user(13, "다")
 
@@ -328,7 +349,9 @@ async def main():
     named(w.admin, "운영진", view_channel=True, send_messages=True)
     named(w.signup, "내전모집", view_channel=True, send_messages=True, send_messages_in_threads=True, manage_threads=True)
     out = await startup(w)
-    check(out == ["관리자 채널: #운영진 (일반 채널) - 권한 확인", "참여 신청 채널: #내전모집 (포럼) - 권한 확인"], "켤 때 확인: 정상")
+    check(out[:2] == ["관리자 채널: #운영진 (일반 채널) - 권한 확인", "참여 신청 채널: #내전모집 (포럼) - 권한 확인"], "켤 때 확인: 정상")
+    check(out[2] == "자동 팀 편성: 꺼짐 (테스트)", "켤 때 확인: 자동 팀 편성 상태")
+    check(real_problem().startswith("꺼짐 (config.json 에 sync_url"), "서버 연결 설정이 없으면 자동 팀 편성은 꺼짐")
     named(w.signup, "내전모집", view_channel=True, send_messages=False, send_messages_in_threads=True, manage_threads=False)
     out = await startup(w)
     check(out[1] == "참여 신청 채널: #내전모집 (포럼) [확인 필요] 봇에 없는 권한: 글 올리기, 스레드 관리(글 잠그기)", "켤 때 확인: 없는 권한 안내")
@@ -338,7 +361,199 @@ async def main():
 
     mod.get_channel = missing_channel
     out = await startup(w)
-    check(len(out) == 2 and out[0].startswith("[확인 필요] 관리자 채널(100)을 찾지 못했습니다."), "켤 때 확인: 채널을 못 찾을 때")
+    check(len(out) == 3 and out[0].startswith("[확인 필요] 관리자 채널(100)을 찾지 못했습니다."), "켤 때 확인: 채널을 못 찾을 때")
+
+    # ── 마감 시각을 정해서 만들기 ──
+    kst = lambda *a: int(datetime(*a, tzinfo=KST).timestamp())
+    check(mod.parse_deadline("2026-10-07-21-30") == kst(2026, 10, 7, 21, 30) and mod.parse_deadline(" 2027-01-01-00-00 ") == kst(2027, 1, 1, 0, 0), "마감 시각 읽기 (한국 시간)")
+    wrong = ["2026-10-07 21:30", "2026-10-7-21-30", "26-10-07-21-30", "2026-10-07-21", "2026-13-01-00-00", "2026-02-30-10-00", "2026-10-07-24-00", "2026-10-07-21-60", "내일 9시", "2026-10-07-21-30-00"]
+    check(all(mod.parse_deadline(x) is None for x in wrong), "형식이 다르거나 없는 날짜·시각은 읽지 않는다")
+    today = datetime.now(KST)
+    noon = int(today.replace(hour=12, minute=0, second=0, microsecond=0).timestamp())
+    check(real_when(noon) == f"<t:{noon}:t>" and real_when(noon + 86400) == f"<t:{noon + 86400}:f>", "마감이 오늘이면 시각만, 다른 날이면 날짜까지 보여 준다")
+
+    w = World(mod, forum=True)
+    later = datetime.now(KST) + timedelta(days=2)
+    text = f"{later:%Y-%m-%d}-21-30"
+    want = kst(later.year, later.month, later.day, 21, 30)
+    t, _ = await run(mod.create_inhouse, 100, ADMIN, text)
+    rec = mod.bot.current
+    kw = w.signup.create_thread.call_args.kwargs
+    check(rec is not None and rec.end_ts == want and f"<t:{want}:t>까지** 참여 신청" in kw["content"], "/내전생성 마감 시각 → 그 시각에 마감")
+    check(kw["name"] == f"{later.month}월 {later.day}일({'월화수목금토일'[later.weekday()]}) 21:30 내전 모집", "글 제목에 정한 시각: " + kw["name"])
+    check(f"<t:{want}:t>" in t and not rec.task.done(), "운영진에게 마감 시각 안내, 그때까지 기다림")
+    await run(mod.cancel, 100, ADMIN)
+    for bad, why in (("2026-10-07 21:30", "형식이 맞지 않아"), ("2020-01-01-00-00", "이미 지난 시각"), ("오늘 밤", "형식이 맞지 않아")):
+        w = World(mod, forum=True)
+        t, _ = await run(mod.create_inhouse, 100, ADMIN, bad)
+        check(why in t and mod.bot.current is None and w.signup.create_thread.await_count == 0, f"/내전생성 {bad} → 만들지 않음")
+    w = World(mod, forum=True)
+    before = time.time()
+    await run(mod.create_inhouse, 100, ADMIN, "  ")
+    check(mod.bot.current is not None and 300 <= mod.bot.current.end_ts - before <= 361, "마감 시각을 비우면 5분 뒤")
+    await run(mod.cancel, 100, ADMIN)
+
+    # ── 봇을 껐다 켜도 이어 가기 ──
+    w = World(mod, forum=True)
+    await run(mod.create_inhouse, 100, ADMIN)
+    await run(mod.join, 300, A)
+    await run(mod.join, 300, B)
+    rec = mod.bot.current
+    saved = json.loads(mod.STATE_PATH.read_text(encoding="utf-8"))
+    check(saved["current"]["participants"] == [[11, "가", "u11"], [12, "나*별", "u12"]] and saved["current"]["thread_id"] == 300 and not saved["current"]["closed"], "모집 상태를 파일에 적어 둔다")
+    mod.stop_timer(rec)
+    mod.bot.current = None                                   # 봇이 꺼졌다 켜진 것처럼
+    await mod.restore_state()
+    back = mod.bot.current
+    check(back is not rec and list(back.participants) == [11, 12] and back.end_ts == rec.end_ts and back.thread is w.thread and back.host_id == 1, "켜면 하던 모집을 이어받는다")
+    check(back.task is not None and not back.task.done(), "이어받은 모집도 마감 시각을 기다린다")
+    t, _ = await run(mod.join, 300, C)
+    check(list(back.participants) == [11, 12, 13] and "참여자 (3명)" in w.message.edit.call_args.kwargs["content"], "이어받은 모집에 /참여")
+    await run(mod.close_now, 100, ADMIN)
+    mod.bot.current = None
+    await mod.restore_state()
+    check(mod.bot.current.closed and mod.bot.current.task is None, "마감한 모집도 이어받는다 (자동 마감은 다시 걸지 않음)")
+    t, _ = await run(mod.extend, 100, ADMIN)
+    check("다시 열었어요" in t and not mod.bot.current.closed, "이어받은 뒤 /연장")
+    await run(mod.cancel, 100, ADMIN)
+
+    w = World(mod, forum=True)                               # 꺼져 있는 사이에 마감 시각이 지난 경우
+    await run(mod.create_inhouse, 100, ADMIN)
+    await run(mod.join, 300, A)
+    rec = mod.bot.current
+    mod.stop_timer(rec)
+    rec.end_ts = int(time.time()) - 60
+    mod.save_state()
+    mod.bot.current = None
+    await mod.restore_state()
+    await asyncio.sleep(0.4)
+    check(mod.bot.current.closed and any("내전 참여 명단" in x for x in w.texts(w.thread.send)), "꺼진 사이 마감 시각이 지났으면 켜자마자 마감")
+    mod.STATE_PATH.write_text("깨진 파일", encoding="utf-8")
+    mod.bot.current = None
+    await mod.restore_state()
+    check(mod.bot.current is None, "상태 파일이 깨져 있으면 새로 시작")
+
+    # ── 자동 팀 편성 ──
+    FIRSTS = [1, 1, 2, 2, 3, 3, 4, 4, 4, 4, 1, 2]
+
+    def league_of(n):
+        players = []
+        for k in range(n):
+            f = FIRSTS[k]
+            players.append({"id": f"p{k}", "name": f"선수{k}", "baseMMR": 3000 + k * 150, "mmr": 3000 + k * 150,
+                            "prefs": [f] + [x for x in (1, 2, 3, 4) if x != f], "wins": 2, "losses": 2, "streak": 0,
+                            "roleCount": [0, 0, 0, 0, 0], "discord": f"u{100 + k}", "steam": ""})
+        players[0]["discord"] = "100"                         # 디스코드 사용자 ID로 등록한 선수
+        players[1]["discord"] = ""                            # 디스코드를 적지 않아 이름으로 맞추는 선수
+        return {"players": players, "matches": [], "settings": {}}
+
+    async def gather(world, n, extra=()):
+        await run(mod.create_inhouse, 100, ADMIN)
+        for k in range(n):
+            await run(mod.join, 300, user(100 + k, f"선수{k}"))
+        for u in extra:
+            await run(mod.join, 300, u)
+        return mod.bot.current
+
+    fake_result = lambda ids, bench=(): {"ok": True,
+        "lanes": [{"role": r + 1, "r": {"id": ids[r], "name": "R" + ids[r], "mmr": 1, "rank": 0}, "d": {"id": ids[r + 5], "name": "D" + ids[r + 5], "mmr": 1, "rank": 0}} for r in range(5)],
+        "bench": [{"id": b, "name": "B" + b} for b in bench], "stats": {"rawR": 3500, "rawD": 3480, "sR": 0, "sD": 0, "diff": 0, "below": 0, "firsts": 10}}
+    asked = []
+
+    async def fake_matchmaker(payload):
+        asked.append(payload)
+        ids = payload["participants"]
+        return fake_result(ids[:10], ids[10:])
+
+    real_matchmaker = mod.run_matchmaker
+    mod.run_matchmaker = fake_matchmaker
+
+    w = World(mod, forum=True, league=league_of(12))
+    stranger = user(999, "미등록")
+    rec = await gather(w, 12, extra=[stranger])
+    t, _ = await run(mod.close_now, 100, ADMIN)
+    posts = w.texts(w.thread.send)
+    lineup = posts[-1]
+    check(len(asked) == 1 and sorted(asked[0]["participants"]) == sorted(f"p{k}" for k in range(12)) and asked[0]["busy"] == [], "마감하면 선수단과 맞는 참가자로 팀 편성을 요청")
+    check("내전 참여 명단" in posts[-2] and lineup.startswith("⚔️ **팀 편성**") and "🟢 **래디언트** · 평균 MMR 3500" in lineup and "🔴 **다이어** · 평균 MMR 3480" in lineup, "명단 공지 다음에 팀 편성 공지")
+    check("`1 캐리` Rp0 <@100>" in lineup and "`5 서폿` Dp9 <@109>" in lineup and lineup.count("<@") == 13, "자리마다 선수 이름과 디스코드 계정")
+    check("🪑 이번 판은 쉬어요: Bp10 <@110>, Bp11 <@111>" in lineup and "등록이 확인되지 않아 팀에서 빠졌어요: <@999>" in lineup, "쉬는 사람과 등록되지 않은 참가자 안내")
+    check(w.thread.send.call_args.kwargs.get("allowed_mentions") is not None, "팀 편성 공지는 알림을 다시 울리지 않는다")
+    pushed = [p for p in w.server if p["action"] == "pushLineup"]
+    check(len(pushed) == 1 and [l["role"] for l in pushed[0]["lineup"]["lanes"]] == [1, 2, 3, 4, 5] and pushed[0]["lineup"]["lanes"][0] == {"role": 1, "r": "p0", "d": "p5"}
+          and pushed[0]["lineup"]["bench"] == ["p10", "p11"] and pushed[0]["lineup"]["post"] == w.message.jump_url, "짠 팀을 서버에 올린다")
+    check(any("봇이 짠 팀 불러오기" in x and "⚔️ **팀 편성**" in x for x in w.texts(w.admin.send)), "관리자 채널에도 편성과 다음 할 일 안내")
+    check(rec.lineup and len(mod.bot.lineups) == 1 and len(mod.bot.lineups[0]["ids"]) == 10, "오늘 짠 팀을 기억한다")
+
+    await run(mod.extend, 100, ADMIN)                        # 다시 열면 짠 팀은 없던 일
+    check(not rec.lineup and mod.bot.lineups == [] and w.server[-1] == {"action": "pushLineup", "lineup": None}, "다시 열면 짠 팀을 서버에서 비운다")
+    await run(mod.close_now, 100, ADMIN)
+    check(rec.lineup and len(asked) == 2 and len(mod.bot.lineups) == 1, "다시 마감하면 팀도 다시 짠다")
+    first_ten = list(mod.bot.lineups[0]["ids"])
+
+    w.message.id = 301                                       # 다음 판은 다른 모집 글이다
+    await run(mod.create_inhouse, 100, ADMIN)                # 같은 날 다음 판: 앞 판에 뛴 사람을 오늘 뛴 사람으로 넘긴다
+    for k in range(12):
+        await run(mod.join, 300, user(100 + k, f"선수{k}"))
+    await run(mod.close_now, 100, ADMIN)
+    check(len(asked) == 3 and asked[2]["busy"] == sorted(first_ten) and len(mod.bot.lineups) == 2, "아직 기록하지 않은 앞 판에 뛴 사람을 오늘 뛴 사람으로 넘긴다")
+    await run(mod.cancel, 100, ADMIN)
+    check(len(mod.bot.lineups) == 1 and w.server[-1] == {"action": "pushLineup", "lineup": None}, "취소하면 그 판의 팀만 지운다")
+
+    w = World(mod, forum=True, league=league_of(12))
+    await gather(w, 9, extra=[stranger])                     # 열 명이 왔지만 등록된 선수는 아홉
+    n = len(asked)
+    await run(mod.close_now, 100, ADMIN)
+    check(len(asked) == n and "선수 등록이 확인된 참가자가 9명" in w.texts(w.thread.send)[-1] and any("선수단에 없는 참가자: <@999>" in x for x in w.texts(w.admin.send)), "등록된 선수가 열 명이 안 되면 짜지 않고 알린다")
+
+    w = World(mod, forum=True, league=league_of(12))
+    w.league = None
+    await gather(w, 10)
+    await run(mod.close_now, 100, ADMIN)
+    check(len(asked) == n and any("서버에 올린 기록이 없어" in x for x in w.texts(w.admin.send)) and not any("팀 편성" in x for x in w.texts(w.thread.send)), "매니저가 기록을 올린 적이 없으면 관리자에게 알린다")
+
+    w = World(mod, forum=True, league=league_of(12))
+    w.fail.add("adminLeague")
+    await gather(w, 10)
+    t, _ = await run(mod.close_now, 100, ADMIN)
+    check("마감했어요" in t and any("기록을 받지 못해" in x for x in w.texts(w.admin.send)), "서버가 답하지 않아도 마감은 끝까지 진행")
+
+    w = World(mod, forum=True, league=league_of(12))
+    w.fail.add("pushLineup")
+    rec = await gather(w, 10)
+    await run(mod.close_now, 100, ADMIN)
+    check(rec.lineup and any("리그 서버에 올리지 못했습니다" in x for x in w.texts(w.admin.send)) and w.texts(w.thread.send)[-1].startswith("⚔️"), "짠 팀을 서버에 못 올려도 디스코드에는 공지")
+
+    async def broken(payload):
+        raise RuntimeError("node 없음")
+
+    mod.run_matchmaker = broken
+    w = World(mod, forum=True, league=league_of(12))
+    rec = await gather(w, 10)
+    t, _ = await run(mod.close_now, 100, ADMIN)
+    check("마감했어요" in t and not rec.lineup and any("팀을 자동으로 짜지 못했습니다" in x and "node 없음" in x for x in w.texts(w.admin.send)), "팀 편성이 실패하면 관리자에게 알리고 넘어간다")
+
+    w = World(mod, forum=True, league=league_of(12))         # 아홉 명이면 팀을 짜려 하지 않는다
+    await gather(w, 9)
+    await run(mod.close_now, 100, ADMIN)
+    check(not any(p["action"] == "adminLeague" for p in w.server), "열 명이 안 되면 리그 기록도 묻지 않는다")
+
+    # 실제 Node 와 실제 매니저 파일로 끝까지
+    mod.run_matchmaker = real_matchmaker
+    mod.MATCHMAKER = SRC.parent / "matchmaker.js"
+    mod.MANAGER_FILE = SRC.parent.parent / "manager" / "InhouseLeagueManager_v0_18.html"
+    if shutil.which(mod.NODE_PATH) is None:
+        print("skip 실제 팀 편성 (Node 가 없어 건너뜀)")
+    else:
+        w = World(mod, forum=True, league=league_of(12))
+        rec = await gather(w, 12)
+        await run(mod.close_now, 100, ADMIN)
+        lineup = w.texts(w.thread.send)[-1]
+        seats = re.findall(r"`(\d) (캐리|미드|오프|서폿)` (선수\d+) <@(\d+)>", lineup)
+        check(lineup.startswith("⚔️ **팀 편성**") and len(seats) == 10 and len({s[2] for s in seats}) == 10, "실제 매니저 로직으로 열 명을 두 팀에 배치")
+        check([s[0] for s in seats] == list("12345") * 2 and all(int(s[3]) - 100 == int(s[2][2:]) for s in seats), "자리 순서와 디스코드 계정이 맞다")
+        check(lineup.count("이번 판은 쉬어요") == 1 and len(re.findall(r"선수\d+ <@\d+>", lineup.split("쉬어요: ")[1].split("\n")[0])) == 2, "열두 명이면 두 명이 쉰다")
+        check(len(w.server[-1]["lineup"]["lanes"]) == 5 and len(w.server[-1]["lineup"]["bench"]) == 2, "실제 편성을 서버에 올린다")
 
     for task in asyncio.all_tasks() - {asyncio.current_task()}:
         task.cancel()

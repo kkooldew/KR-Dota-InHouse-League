@@ -1,4 +1,7 @@
 # 디스코드 봇 토큰과 운영진 키가 들어가는 파일은 올리지 않습니다
 bot/config.json
+# 봇이 진행 중인 모집을 적어 두는 파일
+bot/state.json
+bot/state.tmp
 __pycache__/
 *.pyc

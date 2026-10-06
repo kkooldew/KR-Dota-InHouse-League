@@ -105,6 +105,37 @@ delete cache.records; r = get('records'); assert(r.ok && r.records.matches.lengt
 r = post({ action:'pushRoster', key, roster:{ entries:[{ id:'<@123456789012345678>', username:'zzkim', name:'김' }, { id:'', username:'x' }] } });
 assert(r.ok && r.count === 1, 'push roster keeps valid entries');
 r = post({ action:'adminRoster', key }); assert(r.ok && r.roster.entries[0].id === '123456789012345678', 'admin roster');
+
+// 봇의 자동 팀 편성: 매니저가 올린 리그 기록과 봇이 짠 팀
+r = post({ action:'adminLeague', key }); assert(r.ok && r.league === null && r.leagueAt === '', 'no league uploaded yet');
+const league = { players: records.players, matches: records.matches, settings: { balanceTol: 500 }, junk: 'dropped' };
+r = post({ action:'publishRecords', key, records, league });
+assert(r.ok && r.league === true, 'publish with league');
+r = post({ action:'adminLeague', key: 'nope' }); assert(!r.ok && r.code === 'auth', 'league needs key');
+r = post({ action:'adminLeague', key });
+assert(r.ok && r.league.players[0].discord === 'secret' && r.league.settings.balanceTol === 500 && r.league.matches[0].rule.k === 200 && !('junk' in r.league) && r.leagueAt,
+  'league is kept whole for the bot (discord and settings included)');
+assert(!JSON.stringify(get('records').records).includes('secret'), 'public records stay sanitized when a league is uploaded');
+r = post({ action:'publishRecords', key, records }); assert(r.ok && r.league === false && post({ action:'adminLeague', key }).league.players.length === 1, 'publish without league keeps the stored league');
+const stamp = get('status').recordsAt;
+r = post({ action:'publishRecords', key, records, league: { players: 'x' } });
+assert(!r.ok && get('status').recordsAt === stamp, 'bad league rejects the whole publish');
+
+const lanes = [1, 2, 3, 4, 5].map(role => ({ role, r: 'r' + role, d: 'd' + role, extra: 'x' }));
+r = post({ action:'adminLineup', key }); assert(r.ok && r.lineup === null, 'no lineup yet');
+r = post({ action:'pushLineup', key: 'nope', lineup: { lanes } }); assert(!r.ok && r.code === 'auth', 'lineup needs key');
+r = post({ action:'pushLineup', key, lineup: { lanes, bench: ['b1', '', 'b2'], post: 'https://discord.com/channels/1/2/3' } });
+assert(r.ok && r.at, 'push lineup');
+r = post({ action:'adminLineup', key });
+assert(r.ok && r.lineup.lanes.length === 5 && r.lineup.lanes[2].r === 'r3' && r.lineup.lanes[4].d === 'd5' && !('extra' in r.lineup.lanes[0]) &&
+  r.lineup.bench.join() === 'b1,b2' && r.lineup.post.endsWith('/3'), 'lineup read back');
+[{ lanes: lanes.slice(0, 4) }, { lanes: lanes.map(l => ({ ...l, d: 'same' })) }, { lanes: lanes.slice().reverse() }, {}].forEach((bad, i) => {
+  r = post({ action:'pushLineup', key, lineup: bad }); assert(!r.ok, 'bad lineup rejected #' + (i + 1));
+});
+assert(post({ action:'adminLineup', key }).lineup.lanes[0].r === 'r1', 'bad lineups leave the stored one alone');
+r = post({ action:'pushLineup', key, lineup: null });
+assert(r.ok && r.cleared && post({ action:'adminLineup', key }).lineup === null, 'lineup cleared');
+
 r = post({ action:'unknown' }); assert(!r.ok, 'unknown action');
 r = JSON.parse(env.doPost({ postData:{ contents:'not json' } }).text); assert(!r.ok, 'bad body');
 

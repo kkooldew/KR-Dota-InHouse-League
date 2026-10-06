@@ -388,7 +388,7 @@ ol.rules b{color:var(--bone);font-weight:500}
 <section id="tab-draft" role="tabpanel">
   <div class="panel">
     <h2>오늘 참가하는 선수</h2>
-    <p class="hint">오늘 뛰고 싶은 사람을 모두 누르세요. 10명 이상이면 팀을 짤 수 있습니다. 10명이 넘으면 총 판수가 적은 사람부터 10명이 출전하고, 판수가 같아 다 넣을 수 없으면 팀을 짰을 때 지망과 균형이 가장 잘 맞는 사람을 고릅니다.</p>
+    <p class="hint">오늘 뛰고 싶은 사람을 모두 누르세요. 10명 이상이면 팀을 짤 수 있습니다. 10명이 넘으면 오늘 한 판도 뛰지 않은 사람이 먼저 출전하고, 그다음은 총 판수가 적은 사람 순입니다. 그래도 다 넣을 수 없으면 팀을 짰을 때 지망과 균형이 가장 잘 맞는 사람을 고릅니다.</p>
     <div class="row">
       <span class="count" id="pickCount">0명</span>
       <div class="spacer grow"></div>
@@ -408,12 +408,13 @@ ol.rules b{color:var(--bone);font-weight:500}
       <button class="btn sm ghost" id="btnClearPick">선택 해제</button>
     </div>
     <details class="rosterpaste" id="rosterPaste">
-      <summary>디스코드 참가 명단으로 고르기</summary>
-      <p class="hint" style="margin:0 0 10px">디스코드 봇이 관리자 채널에 올린 <b>매니저 붙여넣기용</b> 명단을 그대로 붙여넣으세요. 줄마다 디스코드 사용자 ID, 사용자명, 선수 이름 순서로 맞는 선수를 찾아 참가자로 고릅니다. 지금 고른 참가자는 이 명단으로 바뀝니다.</p>
+      <summary>디스코드 봇의 참가 명단·짠 팀 불러오기</summary>
+      <p class="hint" style="margin:0 0 10px">디스코드 봇이 관리자 채널에 올린 <b>매니저 붙여넣기용</b> 명단을 그대로 붙여넣으세요. 줄마다 디스코드 사용자 ID, 사용자명, 선수 이름 순서로 맞는 선수를 찾아 참가자로 고릅니다. 지금 고른 참가자는 이 명단으로 바뀝니다. 봇이 팀까지 짰다면 <b>봇이 짠 팀 불러오기</b>를 누르세요. 디스코드에 공지된 편성이 그대로 보드에 올라오고, 경기가 끝난 뒤 이긴 팀만 누르면 됩니다.</p>
       <textarea id="rosterText" spellcheck="false" placeholder="123456789012345678 dota_kim 불멸의소환사&#10;234567890123456789 ward_fairy 와드요정"></textarea>
       <div class="row" style="margin-top:10px">
         <button class="btn gold sm" id="btnRosterApply">명단대로 고르기</button>
         <button class="btn sm" id="btnRosterPull" hidden>봇이 올린 명단 불러오기</button>
+        <button class="btn sm" id="btnLineupPull" hidden>봇이 짠 팀 불러오기</button>
       </div>
       <div class="roster-report" id="rosterReport" aria-live="polite"></div>
     </details>
@@ -536,13 +537,13 @@ ol.rules b{color:var(--bone);font-weight:500}
 
     <h3>리그 사이트·디스코드 봇과 함께 쓰기</h3>
     <p>리그 사이트에서 등록받은 선수는 운영진 페이지의 <b>매니저용 명단 받기</b>로 파일을 받아 선수단 탭의 <b>CSV 파일 고르기</b>로 불러옵니다. 디스코드와 스팀 정보가 함께 들어와, 다음에 다시 불러올 때 닉네임이 바뀌었어도 같은 선수로 이어집니다.</p>
-    <p>디스코드 봇이 모집을 마감하면 관리자 채널에 <b>매니저 붙여넣기용</b> 명단이 올라옵니다. 팀 편성 탭의 <b>디스코드 참가 명단으로 고르기</b>에 붙여넣으면 그 사람들이 참가자로 골라집니다. 데이터·설정 탭에서 공개 페이지를 연결해 두면 붙여넣지 않고 <b>봇이 올린 명단 불러오기</b>로 바로 받아올 수도 있습니다.</p>
+    <p>디스코드 봇이 모집을 마감하면 관리자 채널에 <b>매니저 붙여넣기용</b> 명단이 올라옵니다. 팀 편성 탭의 <b>디스코드 봇의 참가 명단·짠 팀 불러오기</b>에 붙여넣으면 그 사람들이 참가자로 골라집니다. 데이터·설정 탭에서 공개 페이지를 연결해 두면 붙여넣지 않고 <b>봇이 올린 명단 불러오기</b>로 바로 받아올 수도 있습니다. 봇이 팀까지 짜서 공지했다면 <b>봇이 짠 팀 불러오기</b>를 누르세요. 공지된 편성이 그대로 보드에 올라와서, 경기가 끝난 뒤 이긴 팀만 누르면 됩니다.</p>
     <p>공개 페이지를 연결하고 <b>자동으로 올리기</b>를 켜 두면, 경기를 기록하거나 되돌릴 때마다 몇 초 뒤 순위 페이지에 반영됩니다. 위쪽 <b>기록 저장</b>은 그대로 써서 파일 백업을 따로 받아 두세요.</p>
 
     <h3>경기 한 판의 흐름</h3>
     <ul>
       <li>팀 편성 탭에서 오늘 뛰고 싶은 사람을 모두 누릅니다. 10명 이상이면 팀을 짤 수 있습니다.</li>
-      <li><b>팀 짜기</b>를 누르면 출전할 10명을 뽑아 드래프트 보드를 보여줍니다. 참가자가 10명을 넘으면 <b>총 판수가 적은 사람</b>부터 뽑고, 판수가 같아 다 넣을 수 없으면 <b>팀을 짰을 때 지망과 균형이 가장 잘 맞는 사람</b>을 넣습니다.</li>
+      <li><b>팀 짜기</b>를 누르면 출전할 10명을 뽑아 드래프트 보드를 보여줍니다. 참가자가 10명을 넘으면 <b>오늘 한 판도 뛰지 않은 사람</b>을 먼저 뽑고, 그다음은 <b>총 판수가 적은 사람</b> 순입니다. 그래도 다 넣을 수 없으면 <b>팀을 짰을 때 지망과 균형이 가장 잘 맞는 사람</b>을 넣습니다. 하루는 오전 6시에 바뀝니다.</li>
       <li>두 팀을 다 짠 뒤 마지막으로 <b>진영</b>을 정합니다. 선수마다 지금까지 래디언트와 다이어에서 뛴 판수를 보고, 다이어를 더 많이 해 온 팀에 래디언트를 줍니다. 진영만 정할 뿐 팀 구성과 자리, 라인 맞대결은 바뀌지 않습니다.</li>
       <li>팀 짜기는 가장 좋은 편성 하나만 보여줍니다. 그래도 바꾸고 싶으면 선수 두 명을 차례로 눌러 자리를 맞바꿉니다. 팀을 건너뛰는 교체도 됩니다.</li>
       <li>경기가 끝나면 <b>래디언트 승</b> 또는 <b>다이어 승</b>을 누릅니다. 열 명의 MMR과 전적이 곧바로 바뀝니다.</li>
@@ -671,7 +672,7 @@ ol.rules b{color:var(--bone);font-weight:500}
 
   <div class="panel">
     <h2>공개 페이지 연결</h2>
-    <p class="hint">리그 사이트의 순위 페이지에 경기 기록을 올리고, 디스코드 봇이 올린 참가 명단을 받아옵니다. 서버 주소와 운영진 키는 이 브라우저에만 저장되며 기록 파일에는 들어가지 않습니다. 공개 페이지에는 이름·MMR·전적·경기 기록만 올라가고 디스코드와 스팀 정보는 빠집니다.</p>
+    <p class="hint">리그 사이트의 순위 페이지에 경기 기록을 올리고, 디스코드 봇이 올린 참가 명단을 받아옵니다. 서버 주소와 운영진 키는 이 브라우저에만 저장되며 기록 파일에는 들어가지 않습니다. 공개 페이지에는 이름·MMR·전적·경기 기록만 올라가고 디스코드와 스팀 정보는 빠집니다. 디스코드 봇이 팀을 자동으로 짤 수 있도록 선수단·경기 기록·설정 전체도 함께 올리는데, 이쪽은 공개되지 않고 운영진 키가 있어야만 읽을 수 있습니다. 봇이 최신 MMR과 판수로 팀을 짜려면 <b>기록이 바뀌면 자동으로 올리기</b>를 켜 두세요.</p>
     <div class="row">
       <label class="field grow">서버 주소 (Apps Script 웹 앱)<input type="url" id="syncUrl" placeholder="https://script.google.com/macros/s/…/exec" spellcheck="false"></label>
       <label class="field grow">운영진 키<input type="password" id="syncKey" autocomplete="off" spellcheck="false"></label>
@@ -704,6 +705,8 @@ ol.rules b{color:var(--bone);font-weight:500}
 /* =========================================================
    기본 값과 저장
    ========================================================= */
+/* @engine:start — 봇의 자동 팀 편성(bot/matchmaker.js)이 @engine 구역들을 그대로 읽어 실행한다.
+   이 구역 안에는 화면(document)을 건드리는 코드를 넣지 말 것 */
 const POS = [
   {n:1, short:'캐리',      tag:'캐리', full:'1번 안전 라인 캐리'},
   {n:2, short:'미드',      tag:'미드', full:'2번 미드'},
@@ -749,6 +752,7 @@ const DEFAULT_SETTINGS = {
 const defaultSettings = () => ({...DEFAULT_SETTINGS, roleWeights: DEFAULT_SETTINGS.roleWeights.slice(), prefPenalty: DEFAULT_SETTINGS.prefPenalty.slice()});
 
 let state = { players:[], matches:[], settings:defaultSettings() };
+/* @engine:end */
 let picked = new Set();
 let plan = null;                 // 팀 짜기가 찾은 가장 좋은 편성 하나
 let candKey = '';                // 편성을 찾을 때 쓴 지망·MMR·판수·설정. 지금과 다르면 옛 기준의 편성이다
@@ -771,11 +775,13 @@ const LOCK_AREAS = ['header.rail', 'nav.tabs', 'main'];
 document.body.classList.add('is-loading');
 LOCK_AREAS.forEach(sel => { const el = $(sel); if(el) el.inert = true; });
 const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+/* @engine:start */
 const byId = id => state.players.find(p => p.id === id);
 const avg = a => a.length ? a.reduce((x,y)=>x+y,0)/a.length : 0;
 const sum = a => a.reduce((x,y)=>x+y,0);
 const clamp = (v,a,b) => Math.max(a, Math.min(b, v));
 const gamesOf = p => p.wins + p.losses;
+/* @engine:end */
 // 디스코드는 사용자명(영문 소문자) 또는 숫자 ID로 적는다. 앞의 @와 대소문자 차이는 같은 사람으로 본다.
 const normDiscordId = v => String(v ?? '').trim().replace(/^@/, '').toLowerCase().slice(0, 40);
 // 스팀 프로필 주소에서 같은 사람을 가리키는 키를 뽑는다. profiles/7656… 또는 id/이름
@@ -1253,6 +1259,7 @@ function applyImport(list, mode = importMode, confirmed = false){
 /* =========================================================
    팀 편성
    ========================================================= */
+/* @engine:start */
 const PERMS = (()=>{
   const res = [];
   const walk = (acc, rest) => {
@@ -1444,14 +1451,30 @@ function searchLess(a, b){
 const EXACT_LIMIT = 300;      // 동률 조합이 이보다 적으면 전부 비교하고, 많으면 한 명씩 바꿔 보며 찾는다
 const CHOOSE_BUDGET = 1500;   // 출전 10명을 고르는 데 쓸 시간(ms). 다 재면 넘을 것 같으면 한 명씩 바꿔 보는 탐색으로 줄인다
 
+// 하루는 한국 시간 오전 6시에 바뀐다. 자정을 넘겨 이어지는 내전을 같은 날로 보기 위해서다.
+const DAY_STARTS_AT = 6;
+function dayStart(now = Date.now()){
+  const shift = (9 - DAY_STARTS_AT) * 3600e3;
+  return Math.floor((now + shift) / 864e5) * 864e5 - shift;
+}
+// 오늘 한 판이라도 뛴 선수의 id. 경기 기록에서 센다.
+function playedToday(now = Date.now()){
+  const from = dayStart(now), ids = new Set();
+  state.matches.forEach(m => { if(new Date(m.at).getTime() >= from) m.rows.forEach(r => ids.add(r.id)); });
+  return ids;
+}
+
 // 참가자 가운데 이번 판에 뛸 10명을 고른다.
-// 1순위는 총 판수가 적은 사람. 판수가 같아 다 넣을 수 없으면, 팀을 짰을 때 가장 좋은 편성이 나오는 사람을 넣는다.
-function chooseTen(pool){
+// 1순위는 오늘 한 판도 뛰지 않은 사람, 2순위는 총 판수가 적은 사람.
+// 그래도 순번이 같아 다 넣을 수 없으면, 팀을 짰을 때 가장 좋은 편성이 나오는 사람을 넣는다.
+// today는 오늘 이미 뛴 선수의 id 묶음이다. 봇은 아직 결과를 기록하지 않은 판에 뛴 사람까지 넣어서 넘긴다.
+function chooseTen(pool, today = playedToday()){
   if(pool.length <= 10) return pool.slice();
-  const sorted = pool.slice().sort((a,b)=> gamesOf(a) - gamesOf(b));   // 같은 판수는 명단 순서 그대로
-  const cut = gamesOf(sorted[9]);
-  const sure = sorted.filter(p => gamesOf(p) < cut);                   // 판수가 적어 무조건 뛰는 사람
-  const tied = sorted.filter(p => gamesOf(p) === cut);                 // 남은 자리를 두고 판수가 같은 사람
+  const turn = p => (today.has(p.id) ? 1e6 : 0) + gamesOf(p);          // 작을수록 먼저 뛴다
+  const sorted = pool.slice().sort((a,b)=> turn(a) - turn(b));         // 같은 순번은 명단 순서 그대로
+  const cut = turn(sorted[9]);
+  const sure = sorted.filter(p => turn(p) < cut);                      // 순번이 앞서 무조건 뛰는 사람
+  const tied = sorted.filter(p => turn(p) === cut);                    // 남은 자리를 두고 순번이 같은 사람
   const need = 10 - sure.length;
   const took = tied.length === need ? tied : pickBalanced(sure, tied, need);
   const ids = new Set(sure.concat(took).map(p=>p.id));
@@ -1542,8 +1565,8 @@ function eachCombo(arr, k, cb){
 
 // 편성을 가르는 입력. 이 값이 바뀌면 이미 찾은 편성과 출전 명단은 옛 기준이 된다.
 function buildKey(players){
-  const s = state.settings;
-  return JSON.stringify([players.map(p=>[p.id, p.mmr, p.prefs, gamesOf(p)]), s.roleWeights, s.balanceTol, s.prefPenalty]);
+  const s = state.settings, today = playedToday();
+  return JSON.stringify([players.map(p=>[p.id, p.mmr, p.prefs, gamesOf(p), today.has(p.id)]), s.roleWeights, s.balanceTol, s.prefPenalty]);
 }
 function candToLanes(cand, players){
   const L = POS.map(p=>({role:p.n, r:null, d:null}));
@@ -1603,6 +1626,7 @@ function laneStats(){
   return {R, D, roles, ranksR, ranksD, sR, sD, rawR:avg(R.map(p=>p.mmr)), rawD:avg(D.map(p=>p.mmr)), diff:Math.abs(sR-sD),
           pairs, sides, core: sum(pairs.map(x => Math.abs(x.r - x.d))), lanes: sum(sides.map(x => Math.abs(x.r - x.d))), below, firsts};
 }
+/* @engine:end */
 
 /* =========================================================
    경기 결과와 MMR
@@ -2926,10 +2950,13 @@ async function publishNow(manual){
   pubBusy = true;
   setSyncBadge('공개 페이지에 올리는 중');
   try{
-    const r = await syncPost({action:'publishRecords', records: publicRecords()});
+    // league는 봇이 팀을 짤 때 읽는 기록 전체다(디스코드·설정 포함). 서버가 공개하지 않고 따로 둔다
+    const r = await syncPost({action:'publishRecords', records: publicRecords(),
+      league: {players: state.players, matches: state.matches, settings: state.settings}});
     setSyncBadge('공개 페이지 반영 ' + clock(new Date()));
     $('#syncInfo').classList.remove('bad');
-    $('#syncInfo').textContent = '선수 ' + r.players + '명, 경기 ' + r.matches + '건을 ' + clock(new Date()) + '에 공개 페이지에 올렸습니다.';
+    $('#syncInfo').textContent = '선수 ' + r.players + '명, 경기 ' + r.matches + '건을 ' + clock(new Date()) + '에 공개 페이지에 올렸습니다.' +
+      (r.league ? ' 봇이 팀을 짤 때 쓸 기록도 함께 올렸습니다.' : ' 서버가 예전 버전이라 봇이 팀을 짤 때 쓸 기록은 올라가지 않았습니다.');
     if(manual) toast('공개 페이지에 올렸습니다');
   }catch(err){
     setSyncBadge('공개 페이지 반영 실패', true);
@@ -2947,6 +2974,7 @@ function renderSyncForm(){
   $('#syncKey').value = sync.key || '';
   $('#syncAuto').checked = !!sync.auto;
   $('#btnRosterPull').hidden = !syncReady();
+  $('#btnLineupPull').hidden = !syncReady();
 }
 $('#syncUrl').addEventListener('change', e => { sync.url = e.target.value.trim(); keepSync(); renderSyncForm(); });
 $('#syncKey').addEventListener('change', e => { sync.key = e.target.value.trim(); keepSync(); renderSyncForm(); });
@@ -3027,6 +3055,32 @@ $('#btnRosterPull').addEventListener('click', async () => {
     const when = new Date(r.roster.at).toLocaleString('ko-KR', {month:'numeric', day:'numeric', hour:'2-digit', minute:'2-digit'});
     applyRoster(text, when + '에 마감한 모집 명단입니다.');
   }catch(err){ toast('명단을 불러오지 못했습니다 — ' + err.message); }
+  finally{ b.disabled = false; }
+});
+
+/* ---- 봇이 짠 팀을 그대로 보드에 올리기 (v0.19) ---- */
+// 봇은 이 파일의 @engine 구역으로 팀을 짜지만, 출전 10명 고르기는 걸리는 시간에 따라 답이 달라질 수 있다.
+// 그래서 여기서 다시 짜지 않고, 디스코드에 공지된 편성을 그대로 받아 온다.
+$('#btnLineupPull').addEventListener('click', async () => {
+  const b = $('#btnLineupPull');
+  b.disabled = true;
+  try{
+    const L = (await syncPost({action:'adminLineup'})).lineup;
+    if(!L || !Array.isArray(L.lanes)){ toast('봇이 짠 팀이 아직 없습니다'); return; }
+    const ids = L.lanes.flatMap(l => [l.r, l.d]);
+    if(L.lanes.length !== 5 || new Set(ids).size !== 10 || ids.some(id => !byId(id))){
+      $('#rosterReport').innerHTML = '<span class="miss">봇이 짠 팀을 이 선수단에 올릴 수 없습니다.</span> 봇이 팀을 짠 뒤 선수단이 바뀌었을 수 있습니다. 디스코드 공지를 보고 직접 자리를 맞춰 주세요.';
+      return;
+    }
+    picked = new Set(ids.concat((L.bench || []).filter(id => byId(id))));
+    clearDraft();
+    lanes = L.lanes.map((l, i) => ({role: i + 1, r: l.r, d: l.d}));
+    renderPicker(); renderBoard();
+    const when = new Date(L.at).toLocaleString('ko-KR', {month:'numeric', day:'numeric', hour:'2-digit', minute:'2-digit'});
+    $('#rosterReport').innerHTML = '봇이 ' + esc(when) + '에 짠 팀을 보드에 올렸습니다. 경기가 끝나면 아래에서 이긴 팀을 누르세요.';
+    toast('봇이 짠 팀을 불러왔습니다');
+    $('#boardArea').scrollIntoView({behavior:'smooth', block:'start'});
+  }catch(err){ toast('팀을 불러오지 못했습니다 — ' + err.message); }
   finally{ b.disabled = false; }
 });
 
