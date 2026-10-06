@@ -12,6 +12,9 @@ env.setup();
 const key = props.ADMIN_KEY;
 assert(key && key.length >= 32, 'setup creates admin key');
 assert(grid[0][3] === '닉네임', 'header row created');
+// 버전 5까지의 시트(선수등록 탭 하나)에서 올라온 경우: 그 탭이 지금 시즌의 탭이 되고 이름에 시즌이 붙는다
+assert(sheets['선수등록 (시즌 1)'] && sheets['선수등록 (시즌 1)'].grid === grid && !('선수등록' in sheets) && grid[0][12] === '비고',
+  'upgrade: the old registration tab becomes the current season tab');
 
 const base = { action:'register', nickname:'불멸의소환사', steam:'steamcommunity.com/profiles/76561197990650432/', discord:'@ZZKim', mmr:'6100', prefs:[2,1,3,4] };
 let r = post(base);
@@ -92,6 +95,8 @@ assert(r.ok && r.open === false && r.season === '시즌 2', 'close registration'
 clearRL();
 r = post({ ...base }); assert(!r.ok && r.code === 'closed', 'registration closed rejects');
 r = get('status'); assert(r.ok && r.open === false && r.registered === 2 && r.version >= 2, 'public status');
+assert(sheets['선수등록 (시즌 2)'] && sheets['선수등록 (시즌 2)'].grid === grid && r.season === '시즌 2' && r.returning === false && !('pastSeasons' in r),
+  'renaming the season keeps the roster and renames its tab');
 
 const records = { players:[{ id:'p1', name:'A', baseMMR:5000, mmr:5100, prefs:[1,2,3,4], wins:1, losses:0, streak:1, roleCount:[1,0,0,0,0], discord:'secret', steam:'secret' }],
   matches:[{ id:'m1', at:'2026-10-05T08:12:12.491Z', winner:'r', rule:{k:200}, rows:[{ id:'p1', name:'A', side:'r', role:1, rank:0, before:5000, delta:100, extra:'x' }] }], settings:{k:200} };
@@ -222,3 +227,118 @@ assert(grid[4][5] === 's:76561198000000888' && grid[4][4] === 'https://steamcomm
 assert(grid[5][5] === 'id:gone' && env._logs.some(l => l.includes('찾지 못해') && l.includes('사라진주소')), 'unresolvable old key is kept and reported');
 assert(env._logs.some(l => l.includes('같은 스팀 계정') && l.includes('겹친사람')), 'duplicate account after conversion is reported');
 assert(props.ADMIN_KEY === key, 'running setup again keeps the admin key');
+
+// ── 시즌별 등록 탭과 지난 시즌 선수의 간편 등록 (새로 설치한 시트에서 시작) ──
+(() => {
+  const S = makeEnv({ fresh: true });
+  const post = body => JSON.parse(S.env.doPost({ postData: { contents: JSON.stringify(body) } }).text);
+  const status = () => JSON.parse(S.env.doGet({ parameter: {} }).text);
+  const clearRL = () => Object.keys(S.cache).filter(k => k.startsWith('rl:')).forEach(k => delete S.cache[k]);
+  const tabNames = () => S.tabs.map(t => t.getName()).join(' | ');
+  const C = { status: 2, nick: 3, url: 4, key: 5, discord: 6, mmr: 7, p1: 8, note: 12 };
+  const steamId = n => '7656119800000' + String(1000 + n);
+  const url = n => 'https://steamcommunity.com/profiles/' + steamId(n);
+  const reg = (n, extra = {}) => { clearRL(); return post({ action: 'register', nickname: '선수' + n, steam: url(n), discord: 'user' + n, mmr: 3000 + n * 100, prefs: [1, 2, 3, 4], ...extra }); };
+  const rejoin = (steam, prefs = [4, 3, 2, 1], extra = {}) => { clearRL(); return post({ action: 'rejoin', steam, prefs, ...extra }); };
+  const rowOf = (tab, n) => S.sheets[tab].grid.find(row => row[C.key] === 's:' + steamId(n));
+
+  S.env.setup();
+  const key = S.props.ADMIN_KEY;
+  assert(tabNames() === '선수등록 (시즌 1)' && S.tabs[0].grid[0].join() === '등록시각,수정시각,상태,닉네임,스팀프로필,스팀키,디스코드,MMR,1지망,2지망,3지망,4지망,비고',
+    'fresh install: the first season gets its own tab');
+  S.steam.vanity.returner = steamId(5);
+  [1, 3, 4, 6, 7, 8].forEach(n => reg(n));
+  reg(2, { discord: '223456789012345678' });
+  reg(5, { steam: 'https://steamcommunity.com/id/Returner' });
+  post({ action: 'adminSetStatus', key, steamKeys: [1, 2, 3, 5, 6, 7, 8].map(n => 's:' + steamId(n)), status: '승인' });
+  post({ action: 'adminSetStatus', key, steamKey: 's:' + steamId(4), status: '제외' });
+  assert(status().registered === 8 && status().returning === false && post({ action: 'ping', key }).pastSeasons.length === 0, 'first season: nobody is a returning player yet');
+  let r = rejoin(url(99));
+  assert(!r.ok && r.code === 'notfound', 'quick rejoin without a past season finds nothing');
+  r = rejoin(url(1));
+  assert(!r.ok && r.code === 'already' && S.tabs[0].grid.length === 9, 'quick rejoin by someone already in this season is refused');
+
+  // 새 시즌 시작
+  r = post({ action: 'adminNewSeason', key: 'nope', season: '시즌 2' }); assert(!r.ok && r.code === 'auth', 'starting a season needs key');
+  r = post({ action: 'adminNewSeason', key, season: '   ' }); assert(!r.ok && r.code === 'season', 'a new season needs a name');
+  r = post({ action: 'adminNewSeason', key, season: ' 시즌1 ' }); assert(!r.ok && r.code === 'season' && S.tabs.length === 1, 'a new season cannot reuse a name (spaces ignored)');
+  r = post({ action: 'adminNewSeason', key, season: '시즌 2' });
+  assert(r.ok && r.season === '시즌 2' && r.registered === 0 && r.returning === true && r.pastSeasons.join() === '시즌 1', 'new season starts with an empty roster');
+  assert(tabNames() === '선수등록 (시즌 2) | 선수등록 (시즌 1)' && S.sheets['선수등록 (시즌 1)'].grid.length === 9 && S.sheets['선수등록 (시즌 2)'].grid.length === 1
+    && S.sheets['선수등록 (시즌 2)'].grid[0][C.note] === '비고', 'new season: a new tab in front, last season kept in its own tab');
+  assert(post({ action: 'adminList', key }).players.length === 0 && status().season === '시즌 2' && status().returning === true, 'admin list and public status follow the new season');
+
+  // 지난 시즌 선수의 간편 등록
+  r = rejoin(url(1));
+  let row = rowOf('선수등록 (시즌 2)', 1);
+  assert(r.ok && r.nickname === '선수1' && r.from === '시즌 1' && !('discord' in r) && !('mmr' in r), 'quick rejoin answers with the nickname and season only');
+  assert(row && row[C.status] === '대기' && row[C.nick] === '선수1' && row[C.url] === url(1) && row[C.discord] === 'user1' && row[C.mmr] === 3100
+    && row.slice(C.p1, C.p1 + 4).join() === '서폿,오프,미드,캐리' && row[C.note] === '재참가 · 시즌 1', 'quick rejoin copies nickname, discord and MMR, takes the new position order');
+  assert(rowOf('선수등록 (시즌 1)', 1).slice(C.p1, C.p1 + 4).join() === '캐리,미드,오프,서폿' && S.sheets['선수등록 (시즌 1)'].grid.length === 9, 'last season\'s tab is left as it was');
+  r = post({ action: 'rejoin', steam: url(1), prefs: [1, 2, 3, 4] }); assert(!r.ok && r.code === 'rate', 'quick rejoin is rate limited too');
+  r = rejoin(url(1)); assert(!r.ok && r.code === 'already' && r.error.includes('처음 등록해요') && S.sheets['선수등록 (시즌 2)'].grid.length === 2, 'second quick rejoin: already registered, told how to edit');
+  post({ action: 'adminSetStatus', key, steamKey: 's:' + steamId(1), status: '승인' });
+  r = rejoin(url(1)); assert(!r.ok && r.code === 'already' && r.error.includes('운영진에게'), 'after approval: told to ask the staff');
+  assert(rowOf('선수등록 (시즌 2)', 1)[C.status] === '승인' && rowOf('선수등록 (시즌 1)', 8)[C.status] === '승인' && post({ action: 'adminList', key }).players[0].note === '재참가 · 시즌 1',
+    'approval applies to this season; the admin list shows who came back');
+
+  r = rejoin(steamId(2));                                  // 숫자만 넣어도 된다
+  row = rowOf('선수등록 (시즌 2)', 2);
+  assert(r.ok && row[C.discord] === '223456789012345678' && typeof row[C.discord] === 'string' && row[C.mmr] === 3200, 'numeric discord id is carried over as text');
+  r = rejoin(url(4));
+  assert(r.ok && rowOf('선수등록 (시즌 2)', 4)[C.status] === '대기' && rowOf('선수등록 (시즌 2)', 4)[C.note] === '재참가 · 시즌 1 (그때 제외)', 'someone excluded last season comes back as waiting, with a note for the staff');
+  const calls = S.steam.calls;
+  S.steam.down = true;
+  r = rejoin(url(3));
+  assert(r.ok && S.steam.calls === calls && rowOf('선수등록 (시즌 2)', 3), 'numeric address: quick rejoin does not need steam to answer');
+  Object.keys(S.cache).filter(k => k.startsWith('steam:')).forEach(k => delete S.cache[k]);      // 지난 시즌에 조회해 둔 결과가 남아 있지 않을 때
+  r = rejoin('https://steamcommunity.com/id/Returner'); assert(!r.ok && r.code === 'steam', 'custom address while steam is not answering: asked to retry');
+  S.steam.down = false;
+  r = rejoin('https://steamcommunity.com/id/Returner');
+  assert(r.ok && r.nickname === '선수5' && rowOf('선수등록 (시즌 2)', 5)[C.url] === url(5), 'custom address is resolved to the same account');
+
+  const count = S.sheets['선수등록 (시즌 2)'].grid.length;
+  r = rejoin(url(99)); assert(!r.ok && r.code === 'notfound' && r.error.includes('처음 등록해요'), 'unknown steam profile: told to use the full form');
+  r = rejoin('https://store.steampowered.com/app/570'); assert(!r.ok && r.code === 'steam', 'quick rejoin: bad steam address');
+  r = rejoin(url(6), [1, 1, 2, 3]); assert(!r.ok && r.code === 'prefs', 'quick rejoin: bad position order');
+  r = rejoin(url(6), [1, 2, 3, 4], { website: 'spam' }); assert(r.ok && r.nickname === '', 'quick rejoin: honeypot pretends success');
+  post({ action: 'adminConfig', key, open: false });
+  r = rejoin(url(6)); assert(!r.ok && r.code === 'closed', 'quick rejoin: registration closed');
+  post({ action: 'adminConfig', key, open: true });
+  assert(S.sheets['선수등록 (시즌 2)'].grid.length === count, 'refused quick rejoins write nothing');
+
+  // 이번 시즌에 다른 사람이 같은 닉네임이나 디스코드를 먼저 쓴 경우
+  reg(21, { nickname: '선수 6' });
+  r = rejoin(url(6)); assert(!r.ok && r.code === 'conflict' && r.error.includes('닉네임'), 'quick rejoin: nickname taken by someone else this season');
+  reg(22, { discord: 'user7' });
+  r = rejoin(url(7)); assert(!r.ok && r.code === 'conflict' && r.error.includes('디스코드'), 'quick rejoin: discord account used by another steam profile this season');
+
+  // 간편 등록한 뒤, 승인 전에는 모든 칸을 적는 등록으로 고칠 수 있다
+  r = reg(2, { discord: 'someone_else' }); assert(!r.ok && r.code === 'conflict', 'full form with another discord cannot take over a rejoined row');
+  r = reg(2, { discord: '223456789012345678', mmr: 4321, nickname: '선수2새이름' });
+  row = rowOf('선수등록 (시즌 2)', 2);
+  assert(r.ok && r.updated === true && row[C.mmr] === 4321 && row[C.nick] === '선수2새이름' && row[C.note] === '', 'full form updates a rejoined row and clears the note');
+
+  // 세 번째 시즌: 가장 최근에 등록한 시즌의 정보를 가져온다
+  r = post({ action: 'adminNewSeason', key, season: '시즌 3' });
+  assert(r.ok && r.pastSeasons.join() === '시즌 1,시즌 2' && tabNames() === '선수등록 (시즌 3) | 선수등록 (시즌 2) | 선수등록 (시즌 1)', 'third season');
+  r = rejoin(url(2));
+  row = rowOf('선수등록 (시즌 3)', 2);
+  assert(r.ok && r.from === '시즌 2' && r.nickname === '선수2새이름' && row[C.mmr] === 4321 && row[C.note] === '재참가 · 시즌 2 (그때 대기)', 'the latest season wins (and a never-approved row is noted)');
+  r = rejoin(url(8));
+  assert(r.ok && r.from === '시즌 1' && rowOf('선수등록 (시즌 3)', 8)[C.mmr] === 3800 && rowOf('선수등록 (시즌 3)', 8)[C.note] === '재참가 · 시즌 1', 'a player who skipped a season is found in the older one');
+  S.tabs.splice(S.tabs.findIndex(t => t.getName() === '선수등록 (시즌 2)'), 1);       // 운영진이 지난 시즌 탭을 지웠다
+  r = rejoin(url(1));
+  assert(r.ok && r.from === '시즌 1' && rowOf('선수등록 (시즌 3)', 1)[C.note] === '재참가 · 시즌 1', 'a deleted season tab is skipped');
+
+  // 시즌 이름 고치기와 탭 이름
+  r = post({ action: 'adminConfig', key, season: '시즌1' }); assert(!r.ok && r.code === 'season' && status().season === '시즌 3', 'the current season cannot take a past season\'s name');
+  r = post({ action: 'adminConfig', key, season: '2027 봄: 시즌/3' });
+  assert(r.ok && r.season === '2027 봄: 시즌/3' && S.tabs[0].getName() === '선수등록 (2027 봄 시즌 3)' && r.registered === 3, 'renaming: characters a tab cannot hold are dropped from the tab name only');
+  S.tabs.push(Object.assign(Object.create(S.tabs[0]), { getName: () => '선수등록 (시즌 4)', getSheetId: () => -1 }));   // 운영진이 손으로 만든 같은 이름의 탭
+  r = post({ action: 'adminNewSeason', key, season: '시즌 4' });
+  assert(r.ok && S.tabs[0].getName() === '선수등록 (시즌 4) 2' && r.registered === 0, 'tab name already taken: a number is added');
+  S.tabs.splice(0, 1);                                     // 지금 시즌의 탭이 지워졌다
+  r = status();
+  assert(r.ok && r.registered === 0 && r.season === '시즌 4' && S.tabs[0].grid[0][C.nick] === '닉네임' && reg(30).ok && S.tabs[0].grid.length === 2, 'a deleted current tab is made again');
+})();

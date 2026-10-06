@@ -3,7 +3,8 @@
  *
  * 하는 일
  *  - 선수 등록 페이지에서 받은 정보를 이 구글 시트에 저장한다 (시트는 운영진 계정에만 보인다)
- *  - 운영진 키가 있는 사람에게만 등록 명단을 돌려주고, 승인 상태와 등록 기간을 바꾸게 한다
+ *    시즌마다 '선수등록 (시즌 이름)' 탭을 따로 쓰고, 지난 시즌에 등록했던 선수는 스팀 프로필과 포지션 순서만으로 다시 등록할 수 있다
+ *  - 운영진 키가 있는 사람에게만 등록 명단을 돌려주고, 승인 상태와 등록 기간을 바꾸고 새 시즌을 시작하게 한다
  *  - 리그 매니저가 올린 경기 기록을 받아, 개인 정보를 뺀 공개용 기록으로 내보낸다
  *  - 디스코드 봇이 올린 참가 명단을 보관했다가 리그 매니저에 넘겨준다
  *
@@ -11,9 +12,9 @@
  * 코드를 고친 뒤에는 배포 → 배포 관리 → 수정(연필) → 버전: 새 버전 → 배포 를 눌러야 반영됩니다.
  */
 
-const SERVER_VERSION = 5;                                // 서버를 고칠 때마다 올린다. 상태 응답에 실려서 새 버전이 배포됐는지 밖에서 확인할 수 있다
-const SHEET_NAME = '선수등록';
-const HEADERS = ['등록시각', '수정시각', '상태', '닉네임', '스팀프로필', '스팀키', '디스코드', 'MMR', '1지망', '2지망', '3지망', '4지망'];
+const SERVER_VERSION = 6;                                // 서버를 고칠 때마다 올린다. 상태 응답에 실려서 새 버전이 배포됐는지 밖에서 확인할 수 있다
+const SHEET_NAME = '선수등록';                             // 등록 탭 이름의 앞부분. 시즌마다 '선수등록 (시즌 이름)' 탭을 따로 쓴다
+const HEADERS = ['등록시각', '수정시각', '상태', '닉네임', '스팀프로필', '스팀키', '디스코드', 'MMR', '1지망', '2지망', '3지망', '4지망', '비고'];
 const COL = HEADERS.reduce((o, h, i) => (o[h] = i, o), {});
 const PREF_LABELS = ['캐리', '미드', '오프', '서폿'];          // 지망 번호 1~4
 const STATUSES = ['대기', '승인', '제외'];
@@ -27,7 +28,6 @@ const LEAGUE_MAX = 8000000;                                // 리그 기록의 �
    설치: 편집기에서 setup 을 한 번 실행하세요
    ========================================================= */
 function setup() {
-  const sheet = getSheet_();
   const props = PropertiesService.getScriptProperties();
   let key = props.getProperty('ADMIN_KEY');
   if (!key) {
@@ -35,7 +35,8 @@ function setup() {
     props.setProperty('ADMIN_KEY', key);
   }
   if (props.getProperty('REG_OPEN') === null) props.setProperty('REG_OPEN', 'true');
-  if (props.getProperty('SEASON') === null) props.setProperty('SEASON', '시즌 1');
+  if (props.getProperty('SEASON') === null) props.setProperty('SEASON', '시즌 1');   // 첫 시즌의 이름. 그 뒤로는 SEASONS 에 적는다
+  const sheet = getSheet_();
   recordsFile_();                                   // 공개 기록 파일을 미리 만들어 권한을 받아 둔다
   const moved = migrateSteamKeys_();                // 스팀에 물어보는 권한도 여기서 함께 받는다
   if (moved.changed) Logger.log('스팀 사용자 지정 주소로 저장돼 있던 ' + moved.changed + '명을 고유 번호로 바꿨습니다.');
@@ -74,10 +75,12 @@ function doPost(e) {
 
     switch (body.action) {
       case 'register': return register_(body);
-      case 'ping': requireAdmin_(body); return statusInfo_();
+      case 'rejoin': return rejoin_(body);
+      case 'ping': requireAdmin_(body); return adminStatus_();
       case 'adminList': requireAdmin_(body); return { players: listRegistrations_() };
       case 'adminSetStatus': requireAdmin_(body); return setStatus_(body);
       case 'adminConfig': requireAdmin_(body); return setConfig_(body);
+      case 'adminNewSeason': requireAdmin_(body); return newSeason_(body);
       case 'publishRecords': requireAdmin_(body); return publishRecords_(body);
       case 'pushRoster': requireAdmin_(body); return pushRoster_(body);
       case 'adminRoster': requireAdmin_(body); return { roster: getRoster_() };
@@ -94,6 +97,7 @@ function doPost(e) {
 function respond_(fn) {
   let out;
   try {
+    ready_();
     out = Object.assign({ ok: true }, fn());
   } catch (err) {
     if (err && err.userFacing) out = { ok: false, error: err.message, code: err.code || '' };
@@ -128,21 +132,133 @@ function withLock_(fn) {
    ========================================================= */
 function statusInfo_() {
   const props = PropertiesService.getScriptProperties();
-  const sheet = getSheet_();
+  const list = seasons_();
   return {
     open: props.getProperty('REG_OPEN') !== 'false',
-    season: props.getProperty('SEASON') || '',
-    registered: Math.max(0, sheet.getLastRow() - 1),
+    season: list[list.length - 1].name,
+    registered: Math.max(0, getSheet_().getLastRow() - 1),
+    returning: list.length > 1,                            // 지난 시즌이 있으면 등록 페이지가 간편 등록을 함께 보여 준다
     recordsAt: props.getProperty('RECORDS_AT') || '',
     version: SERVER_VERSION
   };
 }
 
+// 운영진 페이지에는 지난 시즌 이름도 함께 준다 (오래된 시즌이 앞)
+function adminStatus_() {
+  return Object.assign(statusInfo_(), { pastSeasons: seasons_().slice(0, -1).map(s => s.name) });
+}
+
 function setConfig_(body) {
-  const props = PropertiesService.getScriptProperties();
-  if (typeof body.open === 'boolean') props.setProperty('REG_OPEN', String(body.open));
-  if (typeof body.season === 'string') props.setProperty('SEASON', body.season.trim().slice(0, 30));
-  return statusInfo_();
+  if (typeof body.open === 'boolean') PropertiesService.getScriptProperties().setProperty('REG_OPEN', String(body.open));
+  if (typeof body.season === 'string') renameSeason_(body.season);
+  return adminStatus_();
+}
+
+/* =========================================================
+   시즌
+   ========================================================= */
+// 시즌마다 등록 탭을 따로 둔다. 스크립트 속성 SEASONS 에 [{name, id}] 로 적는다. 오래된 시즌이 앞이고 맨 뒤가 지금 시즌이다.
+// id 는 탭의 고유 번호(gid)라, 시트에서 탭 이름을 바꾸거나 순서를 옮겨도 그 시즌의 탭을 찾는다.
+function seasons_() {
+  let list = null;
+  try { list = JSON.parse(PropertiesService.getScriptProperties().getProperty('SEASONS') || 'null'); } catch (err) { /* 깨졌으면 다시 만든다 */ }
+  return Array.isArray(list) && list.length ? list : initSeasons_();
+}
+
+function saveSeasons_(list) {
+  PropertiesService.getScriptProperties().setProperty('SEASONS', JSON.stringify(list));
+}
+
+// 처음 한 번: 시즌별 탭이 없던 때(버전 5까지)의 '선수등록' 탭을 지금 시즌의 탭으로 삼고, 탭 이름에 시즌 이름을 붙인다.
+// 새로 설치한 시트면 첫 시즌의 탭을 만든다.
+function initSeasons_() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const name = seasonName_(PropertiesService.getScriptProperties().getProperty('SEASON'));
+  let sheet = ss.getSheetByName(SHEET_NAME);
+  if (sheet) nameTab_(ss, sheet, name);
+  else sheet = ss.getSheetByName(tabName_(name)) || ss.insertSheet(tabName_(name), 0);
+  prepareSheet_(sheet);
+  const list = [{ name, id: sheet.getSheetId() }];
+  saveSeasons_(list);
+  return list;
+}
+
+// 요청을 처리하기 전에 시즌 목록이 있는지 본다. 없으면(버전 6으로 올린 뒤 첫 요청) 한 번에 하나씩만 만들게 잠근다.
+function ready_() {
+  if (!PropertiesService.getScriptProperties().getProperty('SEASONS')) withLock_(() => { seasons_(); });
+}
+
+function seasonName_(v) {
+  return String(v == null ? '' : v).replace(/[\u0000-\u001f\u007f]/g, '').replace(/\s+/g, ' ').trim().slice(0, 30);
+}
+
+// 같은 시즌 이름인지: 공백과 대소문자는 무시한다
+function seasonKey_(name) {
+  return String(name).toLowerCase().replace(/\s+/g, '');
+}
+
+// 시즌의 탭 이름. 시트 탭 이름에 쓸 수 없는 글자( : \ / ? * [ ] )는 뺀다
+function tabName_(season) {
+  const s = String(season || '').replace(/[:\\\/?*\[\]]/g, ' ').replace(/\s+/g, ' ').trim();
+  return s ? SHEET_NAME + ' (' + s + ')' : SHEET_NAME;
+}
+
+// 아직 쓰이지 않은 탭 이름. 같은 이름의 다른 탭이 있으면 뒤에 번호를 붙인다. own 은 이름을 바꾸려는 탭 자신이다
+function freeTabName_(ss, season, own) {
+  const want = tabName_(season);
+  for (let n = 1; ; n++) {
+    const name = n === 1 ? want : want + ' ' + n;
+    const other = ss.getSheetByName(name);
+    if (!other || (own && other.getSheetId() === own.getSheetId())) return name;
+  }
+}
+
+// 탭 이름을 시즌 이름에 맞춘다. 이름은 보기 좋으라고 붙이는 것이라, 못 바꿔도 넘어간다
+function nameTab_(ss, sheet, season) {
+  try {
+    const name = freeTabName_(ss, season, sheet);
+    if (sheet.getName() !== name) sheet.setName(name);
+  } catch (err) {
+    console.warn('탭 이름을 바꾸지 못했습니다: ' + err);
+  }
+}
+
+function sheetById_(ss, id) {
+  return ss.getSheets().filter(s => s.getSheetId() === id)[0] || null;
+}
+
+// 지금 시즌의 이름만 고친다. 명단과 탭은 그대로이고 탭 이름만 따라 바뀐다
+function renameSeason_(v) {
+  const name = seasonName_(v);
+  withLock_(() => {
+    const list = seasons_();
+    const cur = list[list.length - 1];
+    if (cur.name === name) return;
+    if (list.slice(0, -1).some(s => seasonKey_(s.name) === seasonKey_(name)))
+      fail_('지난 시즌과 같은 이름은 쓸 수 없습니다. 다른 이름을 넣어 주세요.', 'season');
+    cur.name = name;
+    saveSeasons_(list);
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const sheet = sheetById_(ss, cur.id);
+    if (sheet) nameTab_(ss, sheet, name);
+  });
+}
+
+// 새 시즌을 시작한다: 새 탭을 만들어 등록을 처음부터 받는다. 지난 시즌의 명단은 그 시즌의 탭에 그대로 남는다
+function newSeason_(body) {
+  const name = seasonName_(body.season);
+  if (!name) fail_('새 시즌의 이름을 넣어 주세요', 'season');
+  return withLock_(() => {
+    const list = seasons_();
+    if (list.some(s => seasonKey_(s.name) === seasonKey_(name)))
+      fail_('이미 있는 시즌 이름입니다. 다른 이름을 넣어 주세요.', 'season');
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const sheet = ss.insertSheet(freeTabName_(ss, name), 0);     // 지금 시즌의 탭이 맨 앞에 오게 한다
+    prepareSheet_(sheet);
+    list.push({ name, id: sheet.getSheetId() });
+    saveSeasons_(list);
+    return adminStatus_();
+  });
 }
 
 /* =========================================================
@@ -197,6 +313,7 @@ function register_(body) {
       line[COL['디스코드']] = text_(mine.discord);
       line[COL['MMR']] = mmr;
       prefCells.forEach((v, i) => { line[COL['1지망'] + i] = v; });
+      line[COL['비고']] = '';                              // 본인이 모두 새로 적어 냈으니 '지난 시즌에서 가져옴' 표시는 지운다
       sheet.getRange(mine.rowNumber, 1, 1, HEADERS.length).setValues([line]);
       return { updated: true };
     }
@@ -212,6 +329,72 @@ function register_(body) {
     prefCells.forEach((v, i) => { line[COL['1지망'] + i] = v; });
     sheet.appendRow(line);
     return { updated: false };
+  });
+
+  cache.put(rlKey, '1', 30);
+  return result;
+}
+
+// 지난 시즌에 등록했던 선수의 간편 등록. 스팀 프로필과 포지션 순서만 받고,
+// 닉네임·디스코드·MMR은 그 선수가 가장 최근에 등록한 시즌의 줄에서 가져와 지금 시즌에 새 줄(대기)로 넣는다.
+function rejoin_(body) {
+  if (body.website) return { nickname: '', from: '' };     // 자동 입력 프로그램에는 성공한 척만 한다
+  if (PropertiesService.getScriptProperties().getProperty('REG_OPEN') === 'false') fail_('지금은 선수 등록 기간이 아닙니다', 'closed');
+
+  const prefs = parsePrefs_(body.prefs);
+  const p = parseSteam_(body.steam);
+  // 숫자 주소는 시트에서 바로 찾을 수 있어 스팀에 묻지 않는다. 사용자 지정 주소만 스팀에서 고유 번호를 알아 온다
+  const steam = p.id ? { key: 's:' + p.id, url: 'https://steamcommunity.com/profiles/' + p.id, legacyKey: '' } : resolveSteam_(p);
+
+  const cache = CacheService.getScriptCache();
+  const rlKey = 'rl:' + steam.key;
+  if (cache.get(rlKey)) fail_('방금 제출했습니다. 30초 뒤에 다시 시도해 주세요.', 'rate');
+
+  const result = withLock_(() => {
+    const list = seasons_();
+    const sheet = getSheet_();
+    const rows = readRows_(sheet);
+    if (rows.length >= MAX_ROWS) fail_('등록 인원이 가득 찼습니다. 운영진에게 문의해 주세요.');
+    const same = r => r.steamKey === steam.key || (!!steam.legacyKey && r.steamKey === steam.legacyKey);
+
+    const mine = rows.find(same);
+    if (mine) fail_(mine.status === '대기'
+      ? '이번 시즌에 이미 등록돼 있습니다. 운영진의 확인을 기다려 주세요. 고칠 내용이 있으면 "처음 등록해요"에서 같은 스팀 프로필과 디스코드로 다시 제출하면 됩니다.'
+      : '이번 시즌에 이미 등록돼 있습니다. 바꿀 내용이 있으면 운영진에게 알려 주세요.', 'already');
+
+    // 가장 최근 시즌부터 거슬러 올라가며 이 선수의 줄을 찾는다
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    let old = null, from = '';
+    for (let i = list.length - 2; i >= 0 && !old; i--) {
+      const past = sheetById_(ss, list[i].id);
+      if (!past) continue;                                 // 탭이 지워진 시즌은 건너뛴다
+      old = readRows_(past).filter(same)[0] || null;
+      from = list[i].name;
+    }
+    if (!old || !old.nickname || !old.discord)
+      fail_('지난 시즌에 이 스팀 프로필로 등록한 기록을 찾지 못했습니다. "처음 등록해요"로 등록해 주세요.', 'notfound');
+
+    const nickKey = old.nickname.toLowerCase().replace(/\s+/g, '');
+    if (rows.some(r => r.nickname.toLowerCase().replace(/\s+/g, '') === nickKey))
+      fail_('지난 시즌에 쓰던 닉네임을 이번 시즌에 다른 선수가 쓰고 있습니다. "처음 등록해요"에서 다른 닉네임으로 등록해 주세요.', 'conflict');
+    if (rows.some(r => r.discord === old.discord))
+      fail_('지난 시즌에 등록한 디스코드 계정이 이번 시즌에 다른 스팀 프로필로 등록돼 있습니다. 운영진에게 알려 주세요.', 'conflict');
+
+    const now = new Date();
+    const line = new Array(HEADERS.length).fill('');
+    line[COL['등록시각']] = now;
+    line[COL['수정시각']] = now;
+    line[COL['상태']] = '대기';
+    line[COL['닉네임']] = text_(old.nickname);
+    line[COL['스팀프로필']] = text_(steam.url);
+    line[COL['스팀키']] = text_(steam.key);
+    line[COL['디스코드']] = text_(old.discord);
+    line[COL['MMR']] = old.mmr;
+    prefs.forEach((n, i) => { line[COL['1지망'] + i] = PREF_LABELS[n - 1]; });
+    // 운영진이 알아보게 적어 둔다. 지난 시즌에 승인되지 않았던 선수면 그때 상태도 함께 적는다
+    line[COL['비고']] = text_('재참가' + (from ? ' · ' + from : '') + (old.status === '승인' ? '' : ' (그때 ' + old.status + ')'));
+    sheet.appendRow(line);
+    return { nickname: old.nickname, from };
   });
 
   cache.put(rlKey, '1', 30);
@@ -350,7 +533,8 @@ function readRows_(sheet) {
       steamKey: d[COL['스팀키']].trim(),
       discord: d[COL['디스코드']].trim().toLowerCase(),
       mmr: Number(String(d[COL['MMR']]).replace(/[^\d.]/g, '')) || 0,
-      prefs: [0, 1, 2, 3].map(i2 => prefCode_(d[COL['1지망'] + i2]))
+      prefs: [0, 1, 2, 3].map(i2 => prefCode_(d[COL['1지망'] + i2])),
+      note: d[COL['비고']].trim()
     };
   }).filter(r => r.nickname || r.steamKey);
 }
@@ -377,7 +561,8 @@ function listRegistrations_() {
     steamKey: r.steamKey,
     discord: r.discord,
     mmr: r.mmr,
-    prefs: r.prefs
+    prefs: r.prefs,
+    note: r.note
   }));
 }
 
@@ -658,17 +843,33 @@ function getRoster_() {
 /* =========================================================
    시트
    ========================================================= */
+// 지금 시즌의 등록 탭
 function getSheet_() {
+  const list = seasons_();
+  const cur = list[list.length - 1];
   const ss = SpreadsheetApp.getActiveSpreadsheet();
-  let sheet = ss.getSheetByName(SHEET_NAME);
-  if (!sheet) sheet = ss.insertSheet(SHEET_NAME);
+  let sheet = sheetById_(ss, cur.id);
+  if (!sheet) {                                            // 탭이 지워졌으면 빈 탭을 새로 만든다
+    sheet = ss.insertSheet(freeTabName_(ss, cur.name), 0);
+    cur.id = sheet.getSheetId();
+    saveSeasons_(list);
+  }
+  if (sheet.getLastRow() === 0) prepareSheet_(sheet);       // 머리글까지 지워졌으면 다시 쓴다
+  return sheet;
+}
+
+// 등록 탭의 머리글과 칸 모양을 갖춘다
+function prepareSheet_(sheet) {
+  if (sheet.getMaxColumns() < HEADERS.length) sheet.insertColumnsAfter(sheet.getMaxColumns(), HEADERS.length - sheet.getMaxColumns());
   if (sheet.getLastRow() === 0) {
     sheet.getRange(1, 1, 1, HEADERS.length).setValues([HEADERS]).setFontWeight('bold');
     sheet.setFrozenRows(1);
     // 스팀키·디스코드 ID처럼 긴 숫자가 지수 표기나 반올림으로 바뀌지 않게 글자 칸으로 둔다
-    ['스팀프로필', '스팀키', '디스코드', '닉네임'].forEach(h => {
+    ['스팀프로필', '스팀키', '디스코드', '닉네임', '비고'].forEach(h => {
       sheet.getRange(1, COL[h] + 1, sheet.getMaxRows(), 1).setNumberFormat('@');
     });
+  } else if (sheet.getRange(1, HEADERS.length).getDisplayValue() === '') {
+    // 버전 5까지 만든 탭에는 비고 칸의 머리글이 없다
+    sheet.getRange(1, HEADERS.length).setValue(HEADERS[HEADERS.length - 1]).setFontWeight('bold');
   }
-  return sheet;
 }

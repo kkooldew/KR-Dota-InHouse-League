@@ -13,10 +13,19 @@
 <style>
 .reg{max-width:640px}
 .state-line{margin:-14px 0 22px;font-size:14px;color:var(--bone-dim)}
-.field{padding:18px 0;border-top:1px solid var(--line-soft)}
-.field:first-of-type{border-top:0;padding-top:4px}
+/* 처음 등록 / 지난 시즌 참가자의 간편 등록 고르기 */
+.mode{margin:0 0 16px}
+.mode .seg{display:flex;max-width:440px}
+.mode .seg button{flex:1;padding:11px 12px;font-size:15px}
+.mode .seg button[aria-pressed="true"]{background:#2b2616;color:var(--gold);font-weight:700}
+.mode p{margin:9px 0 0;font-size:13.5px;color:var(--bone-dim)}
+/* 번호는 보이는 칸만 세어 붙인다 (간편 등록에서는 닉네임·디스코드·MMR 칸이 숨는다) */
+#form{counter-reset:field}
+.field{counter-increment:field;padding:18px 0;border-top:1px solid var(--line-soft)}
+.field:first-of-type,.field.top{border-top:0;padding-top:4px}
 .field > label,.field > .label{display:flex;align-items:baseline;gap:10px;font-weight:700;font-size:15.5px;margin-bottom:8px}
 .field .no{font-family:var(--num);font-weight:500;color:var(--gold);font-size:16px;min-width:14px}
+.field .no::before{content:counter(field)}
 .field input[type=text],.field input[type=url],.field input[type=number]{width:100%;font-size:16px;padding:11px 12px}
 .field input.mmr{max-width:180px}
 .help{margin:7px 0 0 24px;font-size:13px;color:var(--bone-dim)}
@@ -70,15 +79,23 @@
 <main class="wrap">
   <div class="reg">
     <h1 class="page-title">선수 등록</h1>
-    <p class="page-lead">시즌에 참가하려면 아래 다섯 가지를 입력해 주세요. 운영진이 승인하기 전까지는 같은 스팀 프로필로 다시 제출해 정보를 고칠 수 있습니다.</p>
+    <p class="page-lead" id="lead">시즌에 참가하려면 아래 다섯 가지를 입력해 주세요. 운영진이 승인하기 전까지는 같은 스팀 프로필로 다시 제출해 정보를 고칠 수 있습니다.</p>
     <p class="state-line" id="stateLine" hidden></p>
 
     <div class="notice" id="loading">등록 상태를 확인하고 있습니다.</div>
     <div class="notice bad" id="blocked" hidden></div>
 
+    <div class="mode" id="mode" hidden>
+      <div class="seg" role="group" aria-label="등록 방법">
+        <button type="button" data-mode="new" aria-pressed="true">처음 등록해요</button>
+        <button type="button" data-mode="back" aria-pressed="false">지난 시즌에 참가했어요</button>
+      </div>
+      <p>지난 시즌에 등록한 적이 있으면 스팀 프로필 주소와 포지션 순서만 넣어 다시 등록할 수 있습니다.</p>
+    </div>
+
     <form class="panel" id="form" novalidate hidden>
       <div class="field" data-f="nickname">
-        <label for="nickname"><span class="no">1</span>닉네임</label>
+        <label for="nickname"><span class="no"></span>닉네임</label>
         <div class="body">
           <input type="text" id="nickname" name="nickname" maxlength="20" autocomplete="nickname" required>
         </div>
@@ -87,7 +104,7 @@
       </div>
 
       <div class="field" data-f="steam">
-        <label for="steam"><span class="no">2</span>스팀 프로필 주소</label>
+        <label for="steam"><span class="no"></span>스팀 프로필 주소</label>
         <div class="body">
           <input type="url" id="steam" name="steam" inputmode="url" autocomplete="off" placeholder="https://steamcommunity.com/profiles/7656…" required>
         </div>
@@ -97,7 +114,7 @@
       </div>
 
       <div class="field" data-f="discord">
-        <label for="discord"><span class="no">3</span>디스코드 사용자명</label>
+        <label for="discord"><span class="no"></span>디스코드 사용자명</label>
         <div class="body">
           <input type="text" id="discord" name="discord" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="예) dota_kim" required>
         </div>
@@ -106,7 +123,7 @@
       </div>
 
       <div class="field" data-f="mmr">
-        <label for="mmr"><span class="no">4</span>현재 MMR</label>
+        <label for="mmr"><span class="no"></span>현재 MMR</label>
         <div class="body">
           <input type="number" class="mmr num" id="mmr" name="mmr" inputmode="numeric" min="0" max="15000" step="1" required>
         </div>
@@ -115,7 +132,7 @@
       </div>
 
       <div class="field" data-f="prefs">
-        <div class="label" id="prefsLabel"><span class="no">5</span>포지션 순서</div>
+        <div class="label" id="prefsLabel"><span class="no"></span>포지션 순서</div>
         <div class="body">
           <p class="help" style="margin:0 0 12px">하고 싶은 포지션이 위로 오도록 끌어서 순서를 바꾸세요. 맨 위가 1지망입니다. 휴대폰에서는 오른쪽 손잡이를 잡고 끕니다. 서폿은 4번과 5번을 함께 뜻하며, 둘 중 어디를 맡을지는 팀을 짤 때 정해집니다.</p>
           <ol class="ranks" id="ranks" aria-labelledby="prefsLabel"></ol>
@@ -141,8 +158,9 @@
 
     <section class="panel done" id="done" hidden>
       <h2 id="doneTitle">등록을 마쳤습니다</h2>
+      <p id="doneFrom" hidden></p>
       <p>운영진이 확인한 뒤 디스코드에서 참가 역할을 드립니다. 내전 모집 공지는 디스코드로만 나가니 서버에 들어와 알림을 켜 두세요.</p>
-      <p>승인 전에는 같은 스팀 프로필로 다시 제출해 정보를 고칠 수 있습니다. 승인된 뒤에 바꿀 내용이 생기면 운영진에게 알려 주세요.</p>
+      <p id="doneEdit"></p>
       <div class="actions">
         <a class="btn gold" id="doneInvite" target="_blank" rel="noopener" hidden>디스코드 서버 들어가기</a>
         <button class="btn ghost" type="button" id="again">입력한 정보 고치기</button>
@@ -316,14 +334,61 @@
     ok.textContent = r ? r.text : ''; ok.hidden = !r;
   });
 
+  /* ---------- 등록 방법: 처음 등록 / 지난 시즌 참가자의 간편 등록 ---------- */
+  // 간편 등록은 스팀 프로필과 포지션 순서만 받는다. 닉네임·디스코드·MMR은 서버가 지난 시즌 등록에서 가져온다
+  const FULL_ONLY = ['nickname', 'discord', 'mmr'];
+  const LEAD = {
+    new: $('#lead').textContent,
+    back: '지난 시즌에 등록한 스팀 프로필 주소와 이번 시즌의 포지션 순서만 넣으면 됩니다. 닉네임·디스코드·MMR은 가장 최근에 등록한 시즌의 내용을 그대로 가져옵니다.'
+  };
+  const SUBMIT = {new: '등록하기', back: '지난 시즌 정보로 등록하기'};
+  let mode = 'new';
+  let canReturn = false;                // 지난 시즌이 있을 때만 간편 등록을 보여 준다
+  function setMode(m){
+    mode = m;
+    $('#mode').querySelectorAll('button').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.mode === m)));
+    FULL_ONLY.forEach(name => { clearErr(name); fieldEl(name).hidden = m === 'back'; });
+    fieldEl('steam').classList.toggle('top', m === 'back');
+    $('#mode p').hidden = m === 'back';                    // 같은 안내가 위쪽 설명에 나오므로 겹치지 않게 감춘다
+    $('#lead').textContent = LEAD[m];
+    $('#submit').textContent = SUBMIT[m];
+    $('#formErr').hidden = true;
+  }
+  $('#mode').addEventListener('click', e => {
+    const b = e.target.closest('button[data-mode]');
+    if(b && b.dataset.mode !== mode) setMode(b.dataset.mode);
+  });
+  // 간편 등록에서 기록을 찾지 못했을 때, 안내 안의 버튼으로 바로 처음 등록으로 넘어간다 (넣어 둔 스팀 주소와 순서는 그대로)
+  $('#formErr').addEventListener('click', e => {
+    if(e.target.id !== 'toNew') return;
+    setMode('new');
+    $('#nickname').focus();
+  });
+
   /* ---------- 보내기 ---------- */
   function showForm(){
     $('#loading').hidden = true; $('#blocked').hidden = true;
     $('#done').hidden = true; $('#form').hidden = false;
+    $('#mode').hidden = !canReturn;
   }
   function block(html){
-    $('#loading').hidden = true; $('#form').hidden = true; $('#done').hidden = true;
+    $('#loading').hidden = true; $('#form').hidden = true; $('#done').hidden = true; $('#mode').hidden = true;
     $('#blocked').innerHTML = html; $('#blocked').hidden = false;
+  }
+  function showDone(r){
+    const back = mode === 'back';
+    $('#doneTitle').textContent = back ? '다시 등록했습니다' : r.updated ? '등록 정보를 고쳤습니다' : '등록을 마쳤습니다';
+    $('#doneFrom').textContent = back
+      ? (r.nickname ? '‘' + r.nickname + '’ 님이 ' : '') + (r.from ? r.from + '에 ' : '지난 시즌에 ') + '등록한 닉네임·디스코드·MMR을 가져와 이번 시즌에 등록했습니다.'
+      : '';
+    $('#doneFrom').hidden = !back;
+    $('#doneEdit').textContent = back
+      ? '닉네임·디스코드·MMR이 그때와 달라졌다면 운영진에게 알려 주세요. 승인 전에는 "처음 등록해요"에서 같은 스팀 프로필과 디스코드로 다시 제출해 직접 고칠 수도 있습니다.'
+      : '승인 전에는 같은 스팀 프로필로 다시 제출해 정보를 고칠 수 있습니다. 승인된 뒤에 바꿀 내용이 생기면 운영진에게 알려 주세요.';
+    $('#again').hidden = back;
+    $('#form').hidden = true; $('#mode').hidden = true; $('#done').hidden = false;
+    $('#done').scrollIntoView({block: 'start', behavior: 'smooth'});
+    $('#doneTitle').setAttribute('tabindex', '-1'); $('#doneTitle').focus({preventScroll: true});
   }
   function inviteHtml(){
     return L.discordInvite ? '<p><a href="' + Site.esc(L.discordInvite) + '" target="_blank" rel="noopener">디스코드 서버 들어가기</a></p>' : '';
@@ -332,8 +397,9 @@
   $('#form').addEventListener('submit', async e => {
     e.preventDefault();
     $('#formErr').hidden = true;
+    const back = mode === 'back';
     let first = null;
-    Object.keys(checks).forEach(name => {
+    Object.keys(checks).filter(name => !back || !FULL_ONLY.includes(name)).forEach(name => {
       const msg = checks[name](document.getElementById(name).value);
       setErr(name, msg);
       if(msg && !first) first = document.getElementById(name);
@@ -352,7 +418,12 @@
     const btn = $('#submit');
     btn.disabled = true; btn.textContent = '보내는 중';
     try{
-      const r = await api.post({
+      const r = await api.post(back ? {
+        action: 'rejoin',
+        steam: $('#steam').value.trim(),
+        prefs: order.slice(),
+        website: $('#website').value
+      } : {
         action: 'register',
         nickname: $('#nickname').value.trim(),
         steam: $('#steam').value.trim(),
@@ -361,22 +432,21 @@
         prefs: order.slice(),
         website: $('#website').value
       });
-      $('#doneTitle').textContent = r.updated ? '등록 정보를 고쳤습니다' : '등록을 마쳤습니다';
-      $('#form').hidden = true; $('#done').hidden = false;
-      $('#done').scrollIntoView({block: 'start', behavior: 'smooth'});
-      $('#doneTitle').setAttribute('tabindex', '-1'); $('#doneTitle').focus({preventScroll: true});
+      showDone(r);
     }catch(err){
       if(err.code === 'closed'){ block('<p>지금은 선수 등록 기간이 아닙니다.</p>' + inviteHtml()); return; }
-      if(['nickname','steam','discord','mmr','prefs'].includes(err.code)){
+      // 칸에 붙일 수 있는 오류는 그 칸 아래에 보인다 (간편 등록에서 숨긴 칸의 오류는 아래 상자로 보낸다)
+      if(['nickname','steam','discord','mmr','prefs'].includes(err.code) && !fieldEl(err.code).hidden){
         setErr(err.code, err.message);
         const el = err.code === 'prefs' ? $('#ranks .grip') : document.getElementById(err.code);
         el.focus();
       }else{
-        $('#formErr').innerHTML = '<p>' + Site.esc(err.message) + '</p>';
+        $('#formErr').innerHTML = '<p>' + Site.esc(err.message) + '</p>' +
+          (err.code === 'notfound' ? '<p><button type="button" class="btn sm" id="toNew">처음 등록해요로 바꾸기</button></p>' : '');
         $('#formErr').hidden = false;
       }
     }finally{
-      btn.disabled = false; btn.textContent = '등록하기';
+      btn.disabled = false; btn.textContent = SUBMIT[mode];
     }
   });
   $('#again').addEventListener('click', () => { showForm(); $('#nickname').focus(); });
@@ -393,6 +463,7 @@
     if(!s.open){ block('<p>지금은 선수 등록 기간이 아닙니다. 다음 시즌 등록이 열리면 디스코드에서 알려 드립니다.</p>' + inviteHtml()); return; }
     $('#stateLine').textContent = (s.season ? s.season + ' ' : '') + '선수 등록을 받고 있습니다. 지금까지 ' + s.registered + '명이 등록했습니다.';
     $('#stateLine').hidden = false;
+    canReturn = !!s.returning;
     showForm();
   }).catch(err => {
     block('<p>' + Site.esc(err.message) + '</p>');

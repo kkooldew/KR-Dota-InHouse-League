@@ -24,6 +24,9 @@
 .pill.off::before{background:var(--dire)}
 .season-row{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:14px}
 .season-row input{width:160px}
+.season-row label{min-width:58px}
+.season-note{margin:10px 0 0;font-size:12.5px;color:var(--bone-dim);max-width:76ch}
+.season-note b{color:var(--bone);font-weight:500}
 .counts{display:flex;flex-wrap:wrap;gap:4px 18px;font-size:14px;color:var(--bone-dim);margin:0 0 14px}
 .counts b{font-family:var(--num);font-weight:500;color:var(--bone);font-size:16px;margin-right:3px}
 .controls{display:flex;flex-wrap:wrap;gap:10px 12px;align-items:center;margin-bottom:12px}
@@ -39,6 +42,7 @@ table.reg{width:100%;border-collapse:collapse;min-width:820px;font-size:14px}
 .reg select.s-승인{border-color:var(--rad);color:#cfe3a8}
 .reg select.s-제외{border-color:var(--dire-deep);color:#e58b80}
 .reg .nick{font-weight:500}
+.reg .back{display:block;margin-top:2px;font-size:12px;font-weight:400;color:var(--gold);white-space:nowrap}
 .reg .prefs{white-space:nowrap;font-size:13px}
 .reg .prefs span:first-child{color:var(--bone)}
 .reg .prefs span{color:var(--bone-dim);margin-right:6px}
@@ -84,9 +88,16 @@ ol.steps li + li{margin-top:3px}
       <div class="season-row">
         <label for="season" class="dim" style="font-size:13.5px">시즌 이름</label>
         <input type="text" id="season" maxlength="30">
-        <button class="btn sm" type="button" id="btnSeason">저장</button>
-        <span class="dim" style="font-size:12.5px">등록 페이지와 순위 페이지 위쪽에 보입니다.</span>
+        <button class="btn sm" type="button" id="btnSeason">이름만 고치기</button>
+        <span class="dim" style="font-size:12.5px">등록 페이지와 순위 페이지 위쪽에 보입니다. 이름만 바뀌고 명단은 그대로입니다.</span>
       </div>
+      <div class="season-row">
+        <label for="newSeason" class="dim" style="font-size:13.5px">새 시즌</label>
+        <input type="text" id="newSeason" maxlength="30" placeholder="예) 시즌 2">
+        <button class="btn sm" type="button" id="btnNewSeason">새 시즌 시작</button>
+      </div>
+      <p class="season-note">새 시즌을 시작하면 구글 시트에 그 시즌의 탭이 새로 생기고, 등록을 빈 명단에서 다시 받습니다. 지난 시즌 명단은 그 시즌의 탭에 그대로 남습니다.
+        지난 시즌에 등록했던 선수는 등록 페이지의 <b>지난 시즌에 참가했어요</b>에서 스팀 프로필과 포지션 순서만 넣어 다시 등록할 수 있습니다. <span id="pastSeasons"></span></p>
     </section>
 
     <section class="panel">
@@ -218,6 +229,8 @@ ol.steps li + li{margin-top:3px}
     $('#openHint').textContent = status.open ? '누구나 등록 페이지에서 등록하거나 정보를 고칠 수 있습니다.' : '등록 페이지에서 새로 등록하거나 고칠 수 없습니다.';
     $('#btnToggleOpen').textContent = status.open ? '등록 닫기' : '등록 열기';
     if(document.activeElement !== $('#season')) $('#season').value = status.season || '';
+    const past = status.pastSeasons || [];
+    $('#pastSeasons').textContent = past.length ? '지난 시즌: ' + past.map(s => s || '이름 없는 시즌').join(', ') : '';
     $('#recordsInfo').innerHTML = status.recordsAt
       ? '리그 매니저가 마지막으로 기록을 올린 때는 ' + esc(fmt(status.recordsAt)) + '입니다. <a href="ranking.html">순위 페이지 보기</a>'
       : '리그 매니저에서 아직 기록을 올리지 않았습니다. 매니저의 데이터·설정 탭에서 공개 페이지 연결을 설정하세요.';
@@ -229,8 +242,24 @@ ol.steps li + li{margin-top:3px}
     catch(err){ toast(err.message); }
   });
   $('#btnSeason').addEventListener('click', async () => {
-    try{ status = await adminPost({action: 'adminConfig', season: $('#season').value}); renderStatus(); toast('시즌 이름을 저장했습니다'); }
+    try{ status = await adminPost({action: 'adminConfig', season: $('#season').value}); renderStatus(); toast('시즌 이름을 고쳤습니다'); }
     catch(err){ toast(err.message); }
+  });
+  $('#btnNewSeason').addEventListener('click', async () => {
+    const name = $('#newSeason').value.trim();
+    if(!name){ toast('새 시즌의 이름을 넣어 주세요'); $('#newSeason').focus(); return; }
+    if(!confirm('"' + name + '" 시즌을 새로 시작할까요?\n\n' +
+      '지금 명단(' + players.length + '명)은 "' + (status.season || '이름 없는 시즌') + '" 탭에 그대로 남고, 새 시즌은 빈 명단으로 시작합니다.\n' +
+      '시작한 뒤에는 이전 시즌으로 되돌릴 수 없습니다.')) return;
+    $('#btnNewSeason').disabled = true;
+    try{
+      status = await adminPost({action: 'adminNewSeason', season: name});
+      $('#newSeason').value = '';
+      renderStatus();
+      await reload();
+      toast('"' + name + '" 시즌을 시작했습니다');
+    }catch(err){ toast(err.message); }
+    finally{ $('#btnNewSeason').disabled = false; }
   });
 
   /* ---------- 등록 명단 ---------- */
@@ -265,8 +294,9 @@ ol.steps li + li{margin-top:3px}
 
   function render(){
     const n = s => players.filter(p => p.status === s).length;
+    const back = players.filter(p => p.note).length;      // 지난 시즌 정보를 가져와 간편 등록한 선수
     $('#counts').innerHTML = '<span><b>' + players.length + '</b>명 등록</span><span><b>' + n('승인') + '</b>승인</span>' +
-      '<span><b>' + n('대기') + '</b>대기</span><span><b>' + n('제외') + '</b>제외</span>';
+      '<span><b>' + n('대기') + '</b>대기</span><span><b>' + n('제외') + '</b>제외</span>' + (back ? '<span><b>' + back + '</b>재참가</span>' : '');
     const waiting = n('대기');
     $('#btnApproveAll').hidden = !waiting;
     $('#btnApproveAll').textContent = '대기 중인 ' + waiting + '명 모두 승인';
@@ -283,7 +313,7 @@ ol.steps li + li{margin-top:3px}
         '<td><select class="s-' + esc(p.status) + '" data-key="' + esc(p.steamKey) + '" aria-label="' + esc(p.nickname) + ' 상태">' +
           ['대기', '승인', '제외'].map(s => '<option' + (s === p.status ? ' selected' : '') + '>' + s + '</option>').join('') +
         '</select></td>' +
-        '<td class="nick">' + esc(p.nickname) + '</td>' +
+        '<td class="nick">' + esc(p.nickname) + (p.note ? '<span class="back">' + esc(p.note) + '</span>' : '') + '</td>' +
         '<td class="n num">' + p.mmr + '</td>' +
         '<td class="prefs">' + p.prefs.map(v => '<span>' + (PREF_LABEL[v] || '?') + '</span>').join('') + '</td>' +
         '<td class="disc">' + esc(p.discord) + '</td>' +
