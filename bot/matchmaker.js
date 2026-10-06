@@ -15,7 +15,10 @@
  *   마지막 경기 되돌리기 (mode: 'undo')
  *     matchId: 되돌릴 경기 id (그 경기가 마지막 경기일 때만 되돌린다)
  * 출력 (표준 출력, JSON)
- *   팀 편성: {ok:true, lanes:[{role, r:{id,name,mmr,rank}, d:{…}}], bench:[{id,name}], stats:{…}}  rank는 그 자리가 선수의 몇 지망인지(0부터)
+ *   팀 편성: {ok:true, lanes:[{role, r:{id,name,mmr,rank,win,lose}, d:{…}}], bench:[{id,name}], stats:{…}}
+ *     rank는 그 자리가 선수의 몇 지망인지(0부터), win·lose는 이 편성 그대로 이기거나 졌을 때의 MMR 변동
+ *     stats는 매니저의 보드에 보이는 값: sR·sD 팀 평균(자리 배율과 지망 반영), rawR·rawD 그대로 낸 평균, diff 팀 평균 차이, lead 앞선 팀('r'|'d'|''),
+ *       sides 라인 합 [{lane, r, d, rRoles, dRoles}], chanceR 래디언트 기대 승률(%), below·firsts 3지망 이하·1지망 인원
  *   결과·되돌리기: {ok:true, league: 바뀐 리그 기록, match:{id,at,winner}, changes:[{id,name,side,role,before,delta,after}]}
  *   실패: {ok:false, error}
  */
@@ -75,14 +78,22 @@ var lanes = null;
   const ten = chooseTen(pool, today);
   lanes = candToLanes(bestMatch(ten), ten);
   const st = laneStats();
-  const seat = (p, rank) => ({ id: p.id, name: p.name, mmr: p.mmr, rank });
+  // 이기면·지면 받을 점수 미리 보기. 매니저의 보드(renderBoard)와 같은 계산이라, 이 편성 그대로 기록하면 정산 결과와 같다
+  const rule = ruleOf();
+  const ifR = computeDeltas(st.R, st.D, true, st.roles, rule, st.ranksR, st.ranksD);      // 래디언트가 이길 때
+  const ifD = computeDeltas(st.R, st.D, false, st.roles, rule, st.ranksR, st.ranksD);     // 다이어가 이길 때
+  const seat = (p, rank, win, lose) => ({ id: p.id, name: p.name, mmr: p.mmr, rank, win, lose: Math.max(-p.mmr, lose) });   // MMR은 0 아래로 내려가지 않는다
+  const meet = (lane, side) => MATCHUPS.filter(m => m.lane === lane).map(m => m[side]);   // 그 라인에 서는 자리 번호
   const playing = new Set(ten.map(p => p.id));
   return {
     ok: true,
-    lanes: lanes.map((l, i) => ({ role: l.role, r: seat(st.R[i], st.ranksR[i]), d: seat(st.D[i], st.ranksD[i]) })),
+    lanes: lanes.map((l, i) => ({ role: l.role,
+      r: seat(st.R[i], st.ranksR[i], ifR.r[i], ifD.r[i]), d: seat(st.D[i], st.ranksD[i], ifD.d[i], ifR.d[i]) })),
     bench: pool.filter(p => !playing.has(p.id)).map(p => ({ id: p.id, name: p.name })),
     stats: { sR: Math.round(st.sR), sD: Math.round(st.sD), rawR: Math.round(st.rawR), rawD: Math.round(st.rawD),
-             diff: Math.round(st.diff), below: st.below, firsts: st.firsts }
+             diff: Math.round(st.diff), lead: st.sR > st.sD ? 'r' : st.sD > st.sR ? 'd' : '',
+             sides: st.sides.map(s => ({ lane: s.lane, r: s.r, d: s.d, rRoles: meet(s.lane, 'r'), dRoles: meet(s.lane, 'd') })),
+             chanceR: Math.round(ifR.eR * 100), below: st.below, firsts: st.firsts }
   };
 })()`;
 

@@ -30,6 +30,21 @@ assert(r.stats.firsts === 10 && r.stats.below === 0 && r.lanes.every(l => l.r.ra
 assert(JSON.stringify(run(ten())) === JSON.stringify(r), '같은 입력이면 같은 편성');
 assert(Math.abs(r.stats.rawR - r.stats.rawD) < 400, '두 팀 평균이 크게 벌어지지 않는다: ' + r.stats.rawR + ' 대 ' + r.stats.rawD);
 
+// 디스코드 공지에 싣는 값: 선수별 MMR, 라인 합, 팀 평균 차이, 기대 승률 (매니저의 보드에 보이는 값)
+const mmrAt = (res, side, role) => res.lanes[role - 1][side].mmr;
+const byName = Object.fromEntries(ten().map(p => [p.id, p.mmr]));
+assert(r.lanes.every(l => l.r.mmr === byName[l.r.id] && l.d.mmr === byName[l.d.id]), '자리마다 선수의 인하우스 MMR을 싣는다');
+const [top, bot] = r.stats.sides;
+assert(top.lane === '탑' && top.rRoles.join() === '3,4' && top.dRoles.join() === '1,5' && top.r === mmrAt(r, 'r', 3) + mmrAt(r, 'r', 4) && top.d === mmrAt(r, 'd', 1) + mmrAt(r, 'd', 5),
+  '탑 라인 합: 래디언트 3·4번 대 다이어 1·5번');
+assert(bot.lane === '봇' && bot.rRoles.join() === '1,5' && bot.dRoles.join() === '3,4' && bot.r === mmrAt(r, 'r', 1) + mmrAt(r, 'r', 5) && bot.d === mmrAt(r, 'd', 3) + mmrAt(r, 'd', 4),
+  '봇 라인 합: 래디언트 1·5번 대 다이어 3·4번');
+assert(Math.abs(Math.abs(r.stats.sR - r.stats.sD) - r.stats.diff) <= 1 && (r.stats.lead === 'r' ? r.stats.sR >= r.stats.sD : r.stats.lead === 'd' ? r.stats.sD >= r.stats.sR : r.stats.diff === 0),
+  '팀 평균 차이와 앞선 팀: ' + r.stats.sR + ' 대 ' + r.stats.sD + ', 차이 ' + r.stats.diff + ', 앞선 팀 ' + r.stats.lead);
+assert(Number.isInteger(r.stats.chanceR) && r.stats.chanceR > 0 && r.stats.chanceR < 100 && (r.stats.lead === 'r' ? r.stats.chanceR >= 50 : r.stats.chanceR <= 50),
+  '기대 승률은 팀 평균이 높은 쪽이 높다: 래디언트 ' + r.stats.chanceR + '%');
+assert(r.lanes.every(l => [l.r, l.d].every(s => Number.isInteger(s.win) && s.win > 0 && Number.isInteger(s.lose) && s.lose < 0)), '자리마다 이기면 오르고 지면 내릴 MMR을 싣는다');
+
 r = run(ten().slice(0, 9));
 assert(!r.ok && /9명/.test(r.error), '아홉 명이면 짜지 않는다');
 r = run(ten(), { participants: ['p1', 'p2', 'nobody'] });
@@ -69,6 +84,21 @@ assert(r.ok && benched(r) === 'p8,p9', '오늘 뛴 사람끼리는 총 판수가
 r = run(twelve());
 assert(r.ok && r.bench.length === 2 && new Set(playing(r)).size === 10, '순번이 모두 같으면 균형이 맞는 열 명을 고른다');
 
+// 오늘 안 뛴 사람만으로 열 명이 넘을 때: 그 안에서 총 판수가 적은 사람부터 뛴다
+const fourteen = () => [...twelve(), player(13, 3300, [3, 1, 2, 4]), player(14, 3400, [4, 1, 2, 3])];
+ps = fourteen();
+ps.forEach((p, i) => { p.wins = i; p.losses = 0; });          // p1부터 0판, 1판, … p12는 11판
+ps[12].wins = 1; ps[13].wins = 1;                          // p13·p14: 총 1판뿐이지만 오늘 뛰었다
+r = run(ps, { matches: [match(KST(2026, 10, 7, 20, 0), ['p13', 'p14'])] });
+assert(r.ok && benched(r) === 'p11,p12,p13,p14', '오늘 안 뛴 사람이 열 명을 넘으면 그중 판수가 많은 사람이 쉰다: ' + benched(r));
+// 판수까지 같은 사람끼리 자리가 모자랄 때만 균형으로 고른다
+ps = fourteen().slice(0, 13);
+ps.forEach((p, i) => { p.wins = i < 9 ? 0 : i < 12 ? 1 : 5; p.losses = 0; });   // p1~p9 0판, p10~p12 1판, p13 5판
+r = run(ps);
+const out = r.bench.map(p => p.id);
+assert(r.ok && out.length === 3 && out.includes('p13') && out.filter(id => ['p10', 'p11', 'p12'].includes(id)).length === 2,
+  '판수가 같은 세 명 가운데 한 명만 균형으로 뽑히고, 판수가 더 많은 사람은 쉰다: ' + benched(r));
+
 // ── 경기 결과 정산과 되돌리기 (봇의 /승리, /승리취소) ──
 assert(['function applyResult', 'function computeDeltas', 'function dropLatest', 'function recalcStreak', 'let seq = 0'].every(s => engine.includes(s)),
   '매니저 파일에서 정산 로직도 읽는다');
@@ -94,6 +124,10 @@ assert(m0.rows.length === 10 && m0.rule.k === 200 && Array.isArray(m0.rule.roleW
 assert(JSON.stringify(r.league.settings) === JSON.stringify(settings), '설정은 받은 그대로 돌려준다');
 const dWin = settle(before, 'd');
 assert(dWin.ok && dire.every(id => of(dWin.league, id).wins === 1) && radiant.every(id => of(dWin.league, id).losses === 1), '다이어 승리도 기록한다');
+// 팀을 짤 때 알린 이기면·지면 점수는 그 편성 그대로 기록한 결과와 같다
+const told = Object.fromEntries(made.lanes.flatMap(l => [l.r, l.d]).map(s => [s.id, s]));
+assert(r.changes.every(c => c.delta === (c.side === 'r' ? told[c.id].win : told[c.id].lose))
+  && dWin.changes.every(c => c.delta === (c.side === 'd' ? told[c.id].win : told[c.id].lose)), '팀을 짤 때 알린 이기면·지면 점수가 실제 정산과 같다');
 
 // 되돌리기: 기록 전과 완전히 같아진다
 let u = makeMatch({ mode: 'undo', league: copy(r.league), matchId: r.match.id });

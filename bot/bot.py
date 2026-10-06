@@ -7,6 +7,7 @@
   · 비우면 모집 시간(기본 5분) 뒤를 분 단위로 올림한 시각. 12:00:30 에 만들면 12:06:00 마감
 - 모집 글(일반 채널이면 그 채널)에서 /참여, /참여취소
 - 마감 시각이 되면 참여 명단을 공지하고, 리그 매니저와 같은 로직으로 팀을 짜서 알림 (matchmaker.js, Node 필요)
+  · 팀 편성 공지에는 선수별 인하우스 MMR, 같은 자리·라인끼리의 MMR 차이, 팀 평균 차이, 기대 승률이 함께 나감
 - 관리자 채널에서 /마감 (지금 인원으로 바로 마감), /연장 (마감을 5분 뒤로, 마감한 뒤에도 가능), /취소 (내전 취소)
 - 경기가 끝나면 관리자 채널에서 /승리 (이긴 팀을 골라 결과 기록과 MMR 정산), /승리취소 (방금 기록한 결과 되돌리기)
   · 정산도 리그 매니저의 로직 그대로 한다. 리그 기록의 원본은 서버에 있고, 봇은 받아서 고친 뒤 다시 올린다
@@ -60,6 +61,7 @@ DAY_STARTS_AT = 6  # 하루는 한국 시간 오전 6시에 바뀐다 (매니저
 ROLE_NAMES = ["캐리", "미드", "오프", "서폿", "서폿"]
 DEADLINE_FORMAT = re.compile(r"(\d{4})-(\d{2})-(\d{2})-(\d{2})-(\d{2})")
 DEADLINE_EXAMPLE = "`2026-10-07-21-30` (연-월-일-시-분, 한국 시간, 24시간제)"
+MESSAGE_LIMIT = 1900  # 디스코드 메시지는 2000자까지라 조금 남겨 두고 나눈다
 
 
 # ── 모집 상태 ────────────────────────────────────────────────
@@ -186,6 +188,27 @@ def safe_name(name: str) -> str:
     return discord.utils.escape_mentions(discord.utils.escape_markdown(name))
 
 
+def split_message(text: str, limit: int = MESSAGE_LIMIT) -> list[str]:
+    """디스코드 메시지 한도에 맞게 글을 나눈다. 빈 줄 → 줄바꿈 → 쉼표 순으로 끊을 곳을 찾고, 그래도 길면 글자 수로 자른다."""
+    def pack(text: str, seps: tuple[str, ...]) -> list[str]:
+        if len(text) <= limit:
+            return [text]
+        if not seps:
+            return [text[i:i + limit] for i in range(0, len(text), limit)]
+        sep, out, cur = seps[0], [], ""
+        for piece in text.split(sep):
+            if cur and len(cur) + len(sep) + len(piece) <= limit:
+                cur += sep + piece
+                continue
+            if cur:
+                out.append(cur)
+            *full, cur = pack(piece, seps[1:])  # 한 덩이가 한도를 넘으면 더 잘게 나눈다
+            out += full
+        return out + [cur]
+
+    return [chunk for chunk in pack(text, ("\n\n", "\n", ", ")) if chunk.strip()]
+
+
 def minutes_text(seconds: int) -> str:
     return f"{seconds / 60:g}분"
 
@@ -267,13 +290,15 @@ async def open_signup(rec: Recruitment, title_ts: float | None = None) -> None:
 
 
 async def post(rec: Recruitment, text: str, quiet: bool = False) -> None:
-    """모집 글(포럼) 또는 참여 신청 채널에 메시지를 보낸다. quiet 면 멘션 알림을 보내지 않는다. 실패해도 모집 처리는 계속한다."""
+    """모집 글(포럼) 또는 참여 신청 채널에 메시지를 보낸다. quiet 면 멘션 알림을 보내지 않는다. 실패해도 모집 처리는 계속한다.
+    글이 길면 여러 메시지로 나눠 보낸다."""
     try:
         place = rec.thread or await get_channel(SIGNUP_CHANNEL_ID)
-        if quiet:
-            await place.send(text, allowed_mentions=discord.AllowedMentions.none())
-        else:
-            await place.send(text)
+        for chunk in split_message(text):
+            if quiet:
+                await place.send(chunk, allowed_mentions=discord.AllowedMentions.none())
+            else:
+                await place.send(chunk)
     except discord.HTTPException as e:
         print(f"참여 신청 채널 전송 실패: {e}")
 
@@ -281,7 +306,8 @@ async def post(rec: Recruitment, text: str, quiet: bool = False) -> None:
 async def tell_admins(text: str) -> None:
     try:
         admin = await get_channel(ADMIN_CHANNEL_ID)
-        await admin.send(text, allowed_mentions=discord.AllowedMentions.none())
+        for chunk in split_message(text):
+            await admin.send(chunk, allowed_mentions=discord.AllowedMentions.none())
     except discord.HTTPException as e:
         print(f"관리자 채널 전송 실패: {e}")
 
@@ -540,26 +566,63 @@ async def run_matchmaker(payload: dict) -> dict:
     return json.loads(out.decode("utf-8"))
 
 
+def signed(v: int) -> str:
+    """+12, −12, 0"""
+    return "0" if v == 0 else f"{'+' if v > 0 else '−'}{abs(v)}"
+
+
 def lineup_text(result: dict, who: dict[str, int], missing: list[int]) -> str:
     """모집 글에 올릴 팀 편성. who 는 {선수 id: 디스코드 사용자 ID}"""
     def seat(p: dict) -> str:
         return f"{safe_name(p['name'])} <@{who[p['id']]}>"
 
     def team(side: str) -> str:
-        return "\n".join(f"`{l['role']} {ROLE_NAMES[l['role'] - 1]}` {seat(l[side])}" for l in result["lanes"])
+        return "\n".join(f"`{l['role']} {ROLE_NAMES[l['role'] - 1]}` {seat(l[side])} · {l[side]['mmr']} · {l[side]['rank'] + 1}지망"
+                         for l in result["lanes"])
 
     stats = result["stats"]
     text = (
         "⚔️ **팀 편성**\n\n"
-        f"🟢 **래디언트** · 평균 MMR {stats['rawR']}\n{team('r')}\n\n"
-        f"🔴 **다이어** · 평균 MMR {stats['rawD']}\n{team('d')}"
+        f"🟢 **래디언트** · 평균 MMR **{stats['sR']}** (그대로 계산하면 {stats['rawR']})\n{team('r')}\n\n"
+        f"🔴 **다이어** · 평균 MMR **{stats['sD']}** (그대로 계산하면 {stats['rawD']})\n{team('d')}"
     )
     if result["bench"]:
         text += ("\n\n🪑 이번 판은 쉬어요: " + ", ".join(seat(p) for p in result["bench"])
-                 + "\n오늘 아직 안 뛴 사람, 그다음은 총 판수가 적은 사람 순으로 출전해요.")
+                 + "\n오늘 아직 안 뛴 사람이 먼저 출전하고, 그 안에서는 총 판수가 적은 사람이 먼저예요. 판수까지 같으면 지망과 균형이 잘 맞는 쪽으로 정해요.")
     if missing:
         text += "\n\n⚠️ 선수 등록이 확인되지 않아 팀에서 빠졌어요: " + " ".join(f"<@{uid}>" for uid in missing)
-    return text
+    return f"{text}\n\n{balance_text(result)}"
+
+
+def balance_text(result: dict) -> str:
+    """팀 편성에 덧붙이는 MMR 비교와 기대 승률. 리그 매니저의 보드에 보이는 값 그대로다 (matchmaker.js 가 매니저의 계산으로 낸다)."""
+    lanes, stats = result["lanes"], result["stats"]
+
+    def ahead(gap: int, side: str) -> str:
+        return f"{'🟢' if side == 'r' else '🔴'} +{gap}" if gap else "같음"
+
+    def versus(r: int, d: int) -> str:
+        return f"{r} 대 {d} · {ahead(abs(r - d), 'r' if r > d else 'd')}"
+
+    def span(values: list[int]) -> str:
+        lo, hi = sorted((min(values), max(values)), key=abs)  # 변동이 작은 쪽부터
+        return signed(lo) if lo == hi else f"{signed(lo)}~{signed(hi)}"
+
+    def stakes(side: str) -> str:
+        return f"이기면 MMR {span([l[side]['win'] for l in lanes])} · 지면 {span([l[side]['lose'] for l in lanes])}"
+
+    def seats(roles: list[int]) -> str:
+        return "·".join(map(str, roles)) + "번"
+
+    rows = [f"`팀 평균` {stats['sR']} 대 {stats['sD']} · {ahead(stats['diff'], stats['lead'])}"]
+    rows += [f"`{l['role']} {ROLE_NAMES[l['role'] - 1]}` {versus(l['r']['mmr'], l['d']['mmr'])}" for l in lanes]
+    rows += [f"`{s['lane']} 라인` {versus(s['r'], s['d'])} (래디언트 {seats(s['rRoles'])} 대 다이어 {seats(s['dRoles'])}의 합)" for s in stats["sides"]]
+    return (
+        "📊 **MMR 비교** · 래디언트 대 다이어 (🟢🔴 는 높은 쪽과 차이)\n" + "\n".join(rows) + "\n\n"
+        f"🎯 **기대 승률** 🟢 {stats['chanceR']}% · 🔴 {100 - stats['chanceR']}%\n"
+        f"🟢 래디언트: {stakes('r')}\n🔴 다이어: {stakes('d')}\n"
+        "-# 팀 평균과 기대 승률은 리그 매니저와 같이 자리별 배율과 지망을 반영해 계산해요."
+    )
 
 
 async def auto_match(rec: Recruitment) -> None:
