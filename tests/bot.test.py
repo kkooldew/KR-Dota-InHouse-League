@@ -381,10 +381,11 @@ async def main():
             await mod.check_setup()
         return buf.getvalue().splitlines()
 
-    def named(ch, name, **perms):
+    def named(ch, name, everyone=False, **perms):
+        """채널 이름과 봇의 권한을 정한다. everyone 은 서버의 모든 사람(@everyone)이 그 채널을 볼 수 있는지"""
         ch.name = name
         ch.guild = Mock()
-        ch.permissions_for = Mock(return_value=Mock(**perms))
+        ch.permissions_for = Mock(side_effect=lambda who: Mock(view_channel=everyone) if who is ch.guild.default_role else Mock(**perms))
 
     w = World(mod, forum=True)
     named(w.admin, "운영진", view_channel=True, send_messages=True)
@@ -396,6 +397,17 @@ async def main():
     named(w.signup, "내전모집", view_channel=True, send_messages=False, send_messages_in_threads=True, manage_threads=False)
     out = await startup(w)
     check(out[1] == "참여 신청 채널: #내전모집 (포럼) [확인 필요] 봇에 없는 권한: 글 올리기, 스레드 관리(글 잠그기)", "켤 때 확인: 없는 권한 안내")
+    # 운영진 역할을 정하지 않았는데 관리자 채널이 모두에게 보이면, 누구나 운영진 명령어를 쓸 수 있다고 알린다
+    named(w.admin, "운영진", everyone=True, view_channel=True, send_messages=True)
+    named(w.signup, "내전모집", everyone=True, view_channel=True, send_messages=True, send_messages_in_threads=True, manage_threads=True)
+    out = await startup(w)
+    check(len(out) == 4 and out[1].startswith("[확인 필요] 관리자 채널을 서버의 모든 사람이 볼 수 있습니다.") and "admin_role_id" in out[1]
+          and out[2] == "참여 신청 채널: #내전모집 (포럼) - 권한 확인", "켤 때 확인: 관리자 채널이 모두에게 열려 있으면 알린다 (참여 신청 채널은 열려 있어도 된다)")
+    mod.ADMIN_ROLE_ID = 77
+    out = await startup(w)
+    check(len(out) == 3, "운영진 역할을 정해 두었으면 관리자 채널이 열려 있어도 알리지 않는다")
+    mod.ADMIN_ROLE_ID = 0
+    named(w.admin, "운영진", view_channel=True, send_messages=True)
 
     async def missing_channel(cid):
         raise discord.NotFound(Mock(status=404, reason="Not Found"), "Unknown Channel")

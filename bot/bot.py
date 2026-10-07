@@ -191,6 +191,10 @@ async def check_setup() -> None:
         missing = [name for attr, name in wanted.items() if not getattr(perms, attr)]
         print(f"{label}: #{channel.name} ({'포럼' if forum else '일반 채널'})"
               + (f" [확인 필요] 봇에 없는 권한: {', '.join(missing)}" if missing else " - 권한 확인"))
+        # 운영진 역할을 정해 두지 않았으면 관리자 채널을 볼 수 있는 사람이 곧 운영진이다. 그 채널이 모두에게 열려 있으면 누구나 운영진 명령어를 쓸 수 있다
+        if channel_id == ADMIN_CHANNEL_ID and ADMIN_ROLE_ID == 0 and channel.permissions_for(channel.guild.default_role).view_channel:
+            print("[확인 필요] 관리자 채널을 서버의 모든 사람이 볼 수 있습니다. 지금은 그 채널에 글을 쓸 수 있는 사람이면 누구나 /내전생성·/승리 같은 운영진 명령어를 쓸 수 있습니다. "
+                  "디스코드에서 그 채널을 운영진만 보게 바꾸거나, config.json 의 admin_role_id 에 운영진 역할의 ID를 넣어 주세요.")
     print(f"자동 팀 편성: {match_problem() or '켜짐'}")
 
 
