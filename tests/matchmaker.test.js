@@ -30,7 +30,7 @@ assert(r.stats.firsts === 10 && r.stats.below === 0 && r.lanes.every(l => l.r.ra
 assert(JSON.stringify(run(ten())) === JSON.stringify(r), '같은 입력이면 같은 편성');
 assert(Math.abs(r.stats.rawR - r.stats.rawD) < 400, '두 팀 평균이 크게 벌어지지 않는다: ' + r.stats.rawR + ' 대 ' + r.stats.rawD);
 
-// 디스코드 공지에 싣는 값: 선수별 MMR, 라인 합, 팀 평균 차이, 기대 승률 (매니저의 보드에 보이는 값)
+// 디스코드 공지에 쓰는 값: 선수별 MMR, 라인 합, 팀 평균 (매니저의 보드에 보이는 값. 기대 승률도 내지만 공지에는 싣지 않는다)
 const mmrAt = (res, side, role) => res.lanes[role - 1][side].mmr;
 const byName = Object.fromEntries(ten().map(p => [p.id, p.mmr]));
 assert(r.lanes.every(l => l.r.mmr === byName[l.r.id] && l.d.mmr === byName[l.d.id]), '자리마다 선수의 인하우스 MMR을 싣는다');

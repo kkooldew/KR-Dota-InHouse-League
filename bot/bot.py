@@ -7,7 +7,7 @@
   · 비우면 모집 시간(기본 5분) 뒤를 분 단위로 올림한 시각. 12:00:30 에 만들면 12:06:00 마감
 - 모집 글(일반 채널이면 그 채널)에서 /참여, /참여취소
 - 마감 시각이 되면 참여 명단을 공지하고, 리그 매니저와 같은 로직으로 팀을 짜서 알림 (matchmaker.js, Node 필요)
-  · 팀 편성 공지에는 선수별 인하우스 MMR, 같은 자리·라인끼리의 MMR 차이, 팀 평균 차이, 기대 승률이 함께 나감
+  · 팀 편성 공지에는 선수별 인하우스 MMR과 이기면·지면 바뀌는 점수, 팀 평균과 같은 자리·라인끼리의 MMR 차이가 함께 나감
 - 관리자 채널에서 /마감 (지금 인원으로 바로 마감), /연장 (마감을 5분 뒤로, 마감한 뒤에도 가능), /취소 (내전 취소)
 - 경기가 끝나면 관리자 채널에서 /승리 (이긴 팀을 골라 결과 기록과 MMR 정산), /승리취소 (방금 기록한 결과 되돌리기)
   · 정산도 리그 매니저의 로직 그대로 한다. 리그 기록의 원본은 서버에 있고, 봇은 받아서 고친 뒤 다시 올린다
@@ -622,58 +622,49 @@ def signed(v: int) -> str:
     return "0" if v == 0 else f"{'+' if v > 0 else '−'}{abs(v)}"
 
 
+def ahead(r: int, d: int) -> str:
+    """높은 쪽(🟢 래디언트, 🔴 다이어)과 차이. 같으면 ⚪ 0"""
+    return f"{'🟢' if r > d else '🔴'} {abs(r - d)}" if r != d else "⚪ 0"
+
+
 def lineup_text(result: dict, who: dict[str, int], missing: list[int]) -> str:
-    """모집 글에 올릴 팀 편성. who 는 {선수 id: 디스코드 사용자 ID}"""
-    def seat(p: dict) -> str:
-        return f"{safe_name(p['name'])} <@{who[p['id']]}>"
+    """모집 글에 올릴 팀 편성. who 는 {선수 id: 디스코드 사용자 ID}.
+    양식은 운영자가 정했다(2026-10-07): 선수는 닉네임 없이 디스코드 멘션으로만 적고, 열 명 → 쉬는 사람 → MMR 비교(팀 평균, 1~5번, 탑·봇 라인) 순서다.
+    값은 리그 매니저의 보드에 보이는 것 그대로다 (matchmaker.js 가 매니저의 계산으로 낸다. 같은 자리끼리의 차이만 여기서 뺀다)."""
+    lanes, stats = result["lanes"], result["stats"]
+    by_role = {l["role"]: l for l in lanes}
 
-    def team(side: str) -> str:
-        return "\n".join(f"`{l['role']} {ROLE_NAMES[l['role'] - 1]}` {seat(l[side])} · {l[side]['mmr']} · {l[side]['rank'] + 1}지망"
-                         for l in result["lanes"])
+    def at(p: dict) -> str:
+        return f"<@{who[p['id']]}>"
 
-    stats = result["stats"]
+    def seat(lane: dict, side: str) -> str:
+        p = lane[side]
+        return (f"`{lane['role']} {ROLE_NAMES[lane['role'] - 1]}({p['rank'] + 1}지망)` · {at(p)} · {p['mmr']}"
+                f" · ({signed(p['win'])} / {signed(p['lose'])})")
+
+    def pair(side: str, roles: list[int]) -> str:
+        return " + ".join(at(by_role[r][side]) for r in roles)  # 그 라인에 서는 두 사람
+
     text = (
         "⚔️ **팀 편성**\n\n"
-        f"🟢 **래디언트** · 평균 MMR **{stats['sR']}** (그대로 계산하면 {stats['rawR']})\n{team('r')}\n\n"
-        f"🔴 **다이어** · 평균 MMR **{stats['sD']}** (그대로 계산하면 {stats['rawD']})\n{team('d')}"
+        f"🟢 **래디언트** (평균 {stats['sR']})\n" + "\n".join(seat(l, "r") for l in lanes) + "\n\n"
+        f"🔴 **다이어** (평균 {stats['sD']})\n" + "\n".join(seat(l, "d") for l in lanes) + "\n"
+        "-# 괄호 안은 이기면 얻는 점수 / 지면 잃는 점수예요."
     )
     if result["bench"]:
-        text += ("\n\n🪑 이번 판은 쉬어요: " + ", ".join(seat(p) for p in result["bench"])
-                 + "\n오늘 아직 안 뛴 사람이 먼저 출전하고, 그 안에서는 총 판수가 적은 사람이 먼저예요. 판수까지 같으면 지망과 균형이 잘 맞는 쪽으로 정해요.")
+        text += ("\n\n🪑 **이번 판은 쉬어요**: " + ", ".join(at(p) for p in result["bench"])
+                 + "\n-# 오늘 아직 안 뛴 사람이 먼저, 그 안에서는 총 판수가 적은 사람이 먼저 출전해요. 판수까지 같으면 지망과 균형으로 정해요.")
     if missing:
         text += "\n\n⚠️ 선수 등록이 확인되지 않아 팀에서 빠졌어요: " + " ".join(f"<@{uid}>" for uid in missing)
-    return f"{text}\n\n{balance_text(result)}"
 
-
-def balance_text(result: dict) -> str:
-    """팀 편성에 덧붙이는 MMR 비교와 기대 승률. 리그 매니저의 보드에 보이는 값 그대로다 (matchmaker.js 가 매니저의 계산으로 낸다)."""
-    lanes, stats = result["lanes"], result["stats"]
-
-    def ahead(gap: int, side: str) -> str:
-        return f"{'🟢' if side == 'r' else '🔴'} +{gap}" if gap else "같음"
-
-    def versus(r: int, d: int) -> str:
-        return f"{r} 대 {d} · {ahead(abs(r - d), 'r' if r > d else 'd')}"
-
-    def span(values: list[int]) -> str:
-        lo, hi = sorted((min(values), max(values)), key=abs)  # 변동이 작은 쪽부터
-        return signed(lo) if lo == hi else f"{signed(lo)}~{signed(hi)}"
-
-    def stakes(side: str) -> str:
-        return f"이기면 MMR {span([l[side]['win'] for l in lanes])} · 지면 {span([l[side]['lose'] for l in lanes])}"
-
-    def seats(roles: list[int]) -> str:
-        return "·".join(map(str, roles)) + "번"
-
-    rows = [f"`팀 평균` {stats['sR']} 대 {stats['sD']} · {ahead(stats['diff'], stats['lead'])}"]
-    rows += [f"`{l['role']} {ROLE_NAMES[l['role'] - 1]}` {versus(l['r']['mmr'], l['d']['mmr'])}" for l in lanes]
-    rows += [f"`{s['lane']} 라인` {versus(s['r'], s['d'])} (래디언트 {seats(s['rRoles'])} 대 다이어 {seats(s['dRoles'])}의 합)" for s in stats["sides"]]
-    return (
-        "📊 **MMR 비교** · 래디언트 대 다이어 (🟢🔴 는 높은 쪽과 차이)\n" + "\n".join(rows) + "\n\n"
-        f"🎯 **기대 승률** 🟢 {stats['chanceR']}% · 🔴 {100 - stats['chanceR']}%\n"
-        f"🟢 래디언트: {stakes('r')}\n🔴 다이어: {stakes('d')}\n"
-        "-# 팀 평균과 기대 승률은 리그 매니저와 같이 자리별 배율과 지망을 반영해 계산해요."
-    )
+    # 팀 평균의 차이는 화면에 보이는 두 평균(반올림한 값)을 뺀 것이다. 매니저의 보드와 같다
+    rows = [f"`팀 평균`({ahead(stats['sR'], stats['sD'])}) · 래디언트({stats['sR']}) vs 다이어({stats['sD']})"]
+    rows += [f"`{l['role']} {ROLE_NAMES[l['role'] - 1]}`({ahead(l['r']['mmr'], l['d']['mmr'])}) · {at(l['r'])}({l['r']['mmr']}) vs {at(l['d'])}({l['d']['mmr']})"
+             for l in lanes]
+    rows += [f"`{s['lane']} 라인`({ahead(s['r'], s['d'])}) · {pair('r', s['rRoles'])} ({s['r']}) vs {pair('d', s['dRoles'])} ({s['d']})"
+             for s in stats["sides"]]
+    return (text + "\n\n📊 **MMR 비교**\n" + "\n".join(rows)
+            + "\n-# 🟢는 래디언트가, 🔴는 다이어가 그만큼 높다는 뜻이에요. 팀 평균은 자리별 배율과 지망을 반영한 값이에요.")
 
 
 async def auto_match(rec: Recruitment) -> None:
@@ -781,11 +772,12 @@ async def change_league(payload: dict) -> dict:
 
 
 def result_text(winner: str, changes: list[dict], who: dict) -> str:
-    """모집 글에 올릴 경기 결과. 선수마다 MMR이 어떻게 바뀌었는지 보여 준다. who 는 {선수 id: 디스코드 사용자 ID}"""
+    """모집 글에 올릴 경기 결과. 선수마다 MMR이 어떻게 바뀌었는지 보여 준다. who 는 {선수 id: 디스코드 사용자 ID}
+    팀 편성 공지처럼 선수는 디스코드 멘션으로만 적는다 (디스코드 계정을 모르는 선수만 닉네임으로)."""
     def line(c: dict) -> str:
         uid = who.get(c["id"])
-        return (f"`{c['role']} {ROLE_NAMES[c['role'] - 1]}` {safe_name(c['name'])}" + (f" <@{uid}>" if uid else "")
-                + f"  {c['before']} → **{c['after']}** ({'+' if c['delta'] >= 0 else '−'}{abs(c['delta'])})")
+        return (f"`{c['role']} {ROLE_NAMES[c['role'] - 1]}` · {f'<@{uid}>' if uid else safe_name(c['name'])}"
+                f" · {c['before']} → **{c['after']}** ({'+' if c['delta'] >= 0 else '−'}{abs(c['delta'])})")
 
     def team(side: str) -> str:
         return "\n".join(line(c) for c in sorted((c for c in changes if c["side"] == side), key=lambda c: c["role"]))

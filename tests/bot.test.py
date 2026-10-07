@@ -523,19 +523,22 @@ async def main():
     lineup = posts[-1]
     check(len(asked) == 1 and sorted(asked[0]["participants"]) == sorted(f"p{k}" for k in range(12)) and asked[0]["busy"] == [], "마감하면 선수단과 맞는 참가자로 팀 편성을 요청")
     check("내전 참여 명단" in posts[-2] and lineup.startswith("⚔️ **팀 편성**"), "명단 공지 다음에 팀 편성 공지")
-    check("🟢 **래디언트** · 평균 MMR **3510** (그대로 계산하면 3500)" in lineup and "🔴 **다이어** · 평균 MMR **3470** (그대로 계산하면 3480)" in lineup,
-          "팀마다 평균 MMR (매니저와 같은 계산 값과 그대로 낸 값)")
-    check("`1 캐리` Rp0 <@100> · 3000 · 1지망" in lineup and "`3 오프` Rp2 <@102> · 3200 · 2지망" in lineup and "`5 서폿` Dp9 <@109> · 3300 · 1지망" in lineup
-          and lineup.count("<@") == 13, "자리마다 선수 이름, 디스코드 계정, 인하우스 MMR, 몇 지망인지")
-    check("🪑 이번 판은 쉬어요: Bp10 <@110>, Bp11 <@111>" in lineup and "등록이 확인되지 않아 팀에서 빠졌어요: <@999>" in lineup, "쉬는 사람과 등록되지 않은 참가자 안내")
-    check("총 판수가 적은 사람이 먼저" in lineup and lineup.index("🪑") < lineup.index("⚠️") < lineup.index("📊"), "출전 순서 안내, 그리고 MMR 비교는 맨 아래")
-    check("`팀 평균` 3510 대 3470 · 🟢 +40" in lineup, "MMR 비교: 팀 평균 차이와 앞선 팀")
-    check(all(row in lineup for row in ("`1 캐리` 3000 대 3100 · 🔴 +100", "`2 미드` 3100 대 3150 · 🔴 +50", "`3 오프` 3200 대 3200 · 같음",
-                                         "`4 서폿` 3300 대 3250 · 🟢 +50", "`5 서폿` 3400 대 3300 · 🟢 +100")), "MMR 비교: 같은 자리끼리의 차이")
-    check("`탑 라인` 6500 대 6400 · 🟢 +100 (래디언트 3·4번 대 다이어 1·5번의 합)" in lineup
-          and "`봇 라인` 6400 대 6450 · 🔴 +50 (래디언트 1·5번 대 다이어 3·4번의 합)" in lineup, "MMR 비교: 라인에서 만나는 두 사람의 합")
-    check("🎯 **기대 승률** 🟢 52% · 🔴 48%" in lineup and "🟢 래디언트: 이기면 MMR +18~+22 · 지면 −22~−26" in lineup
-          and "🔴 다이어: 이기면 MMR +22~+26 · 지면 −18~−22" in lineup, "기대 승률과 이기면·지면 바뀌는 MMR")
+    check("🟢 **래디언트** (평균 3510)\n`1 캐리" in lineup and "🔴 **다이어** (평균 3470)\n`1 캐리" in lineup, "팀 이름 줄에 그 팀의 평균 MMR (매니저 보드의 값)")
+    check("`1 캐리(1지망)` · <@100> · 3000 · (+18 / −22)" in lineup and "`3 오프(2지망)` · <@102> · 3200 · (+20 / −24)" in lineup
+          and "`5 서폿(1지망)` · <@109> · 3300 · (+26 / −22)" in lineup, "자리마다 자리(몇 지망) · 디스코드 멘션 · 인하우스 MMR · (이기면 / 지면)")
+    check(not re.search(r"[RDB]p\d", lineup) and lineup.count("<@") == 31, "선수는 닉네임 없이 디스코드 멘션으로만 적는다 (열 명 + 쉬는 두 명 + 미등록 한 명 + MMR 비교 열여덟 번)")
+    check("기대 승률" not in lineup and "%" not in lineup, "기대 승률은 적지 않는다")
+    check("🪑 **이번 판은 쉬어요**: <@110>, <@111>\n" in lineup and "등록이 확인되지 않아 팀에서 빠졌어요: <@999>" in lineup, "쉬는 사람과 등록되지 않은 참가자 안내")
+    check("총 판수가 적은 사람이 먼저" in lineup and lineup.index("🔴 **다이어**") < lineup.index("🪑") < lineup.index("⚠️") < lineup.index("📊"),
+          "열 명 다음에 쉬는 사람과 출전 순서 안내, 그리고 MMR 비교는 맨 아래")
+    check("📊 **MMR 비교**\n`팀 평균`(🟢 40) · 래디언트(3510) vs 다이어(3470)\n`1 캐리`" in lineup, "MMR 비교: 팀 평균이 맨 위 (높은 쪽과 차이)")
+    check(all(row in lineup for row in ("`1 캐리`(🔴 100) · <@100>(3000) vs <@105>(3100)", "`2 미드`(🔴 50) · <@101>(3100) vs <@106>(3150)",
+                                         "`3 오프`(⚪ 0) · <@102>(3200) vs <@107>(3200)", "`4 서폿`(🟢 50) · <@103>(3300) vs <@108>(3250)",
+                                         "`5 서폿`(🟢 100) · <@104>(3400) vs <@109>(3300)")), "MMR 비교: 같은 자리끼리 (같으면 ⚪ 0)")
+    check("`탑 라인`(🟢 100) · <@102> + <@103> (6500) vs <@105> + <@109> (6400)" in lineup
+          and "`봇 라인`(🔴 50) · <@100> + <@104> (6400) vs <@107> + <@108> (6450)" in lineup, "MMR 비교: 라인에서 만나는 두 사람씩과 그 합 (래디언트 3·4번 대 다이어 1·5번, 래디언트 1·5번 대 다이어 3·4번)")
+    check(lineup.index("`5 서폿`(") < lineup.index("`탑 라인`") < lineup.index("`봇 라인`") and lineup.rstrip().split("\n")[-1].startswith("-# 🟢는 래디언트가"),
+          "MMR 비교의 순서: 팀 평균 → 1~5번 → 탑 → 봇, 끝에 색의 뜻을 작은 글씨로")
     check(len(lineup) < 2000 and len(posts) == 2, "보통은 메시지 하나에 다 들어간다")
 
     # 쉬는 사람이 아주 많아 글이 길어지면 여러 메시지로 나눠 보낸다 (디스코드는 2000자가 넘는 메시지를 받지 않는다)
@@ -544,10 +547,10 @@ async def main():
     parts = mod.split_message(long_text)
     joined = "\n".join(parts)
     check(len(long_text) > 4000 and len(parts) > 2 and all(len(p) <= mod.MESSAGE_LIMIT for p in parts), "긴 글은 한도에 맞게 나눈다")
-    check(parts[0].startswith("⚔️ **팀 편성**") and joined.index("🔴 **다이어**") < joined.index("🪑") < joined.index("📊") and "🎯 **기대 승률**" in parts[-1],
+    check(parts[0].startswith("⚔️ **팀 편성**") and joined.index("🔴 **다이어**") < joined.index("🪑") < joined.index("📊") and "`봇 라인`(" in parts[-1],
           "나눠도 순서는 그대로")
-    check(all(f"Bp{k} <@{10**17 + k}>" in joined for k in range(10, 130)) and sum(p.count("<@") for p in parts) == 130
-          and all(p.count("<@") == p.count(">") for p in parts), "한 줄이 한도를 넘으면 쉼표에서 끊어, 이름과 멘션이 중간에 잘리지 않는다")
+    check(all(f"<@{10**17 + k}>" in joined for k in range(10, 130)) and sum(p.count("<@") for p in parts) == 148
+          and all(p.count("<@") == p.count(">") for p in parts), "한 줄이 한도를 넘으면 쉼표에서 끊어, 멘션이 중간에 잘리지 않는다")
     sent = w.thread.send.call_count
     await mod.post(rec, long_text, quiet=True)
     check(w.texts(w.thread.send)[sent:] == parts, "나눈 순서대로 보낸다")
@@ -636,7 +639,10 @@ async def main():
     check(len(saves) == 1 and saves[0]["baseRev"] == 1 and w.rev == 2 and w.league["matches"] == [{"id": "m1"}], "정산한 기록을 서버에 올린다 (보고 고친 번호와 함께)")
     shown = w.texts(w.thread.send)[-1]
     check(shown.startswith("🏆 **래디언트 승리!**") and "🟢 **래디언트** · 승\n" in shown and "🔴 **다이어**\n" in shown, "모집 글에 경기 결과")
-    check("`1 캐리` Rp0 <@100>  3000 → **3020** (+20)" in shown and "`5 서폿` Dp9 <@109>  3000 → **2980** (−20)" in shown, "선수별 MMR 변동")
+    check("`1 캐리` · <@100> · 3000 → **3020** (+20)" in shown and "`5 서폿` · <@109> · 3000 → **2980** (−20)" in shown and not re.search(r"[RD]p\d", shown),
+          "선수별 MMR 변동 (선수는 디스코드 멘션으로만)")
+    check(mod.result_text("r", [{"id": "p0", "name": "가*나", "side": "r", "role": 1, "before": 3000, "delta": 20, "after": 3020}], {}).split("\n")[3]
+          == "`1 캐리` · 가\\*나 · 3000 → **3020** (+20)", "디스코드 계정을 모르는 선수만 닉네임으로 적는다")
     check(w.thread.send.call_args.kwargs.get("allowed_mentions") is not None and shown in t and "/승리취소" in t and i.followup.send.call_args.kwargs.get("allowed_mentions") is not None,
           "결과 공지는 알림을 울리지 않고, 운영진에게 되돌리는 방법도 알린다")
     check(entry["result"] == {"winner": "r", "match_id": "m1"} and json.loads(mod.STATE_PATH.read_text(encoding="utf-8"))["lineups"][0]["result"]["winner"] == "r", "기록한 결과를 적어 둔다")
@@ -651,7 +657,7 @@ async def main():
     check(asked[-1]["mode"] == "undo" and asked[-1]["matchId"] == "m1" and entry["result"] is None and w.rev == 3 and w.league["matches"] == [], "/승리취소 → 그 경기를 되돌려 서버에 올린다")
     check("결과 기록을 취소" in t and "경기 결과 기록을 취소했어요" in w.texts(w.thread.send)[-1], "되돌린 것을 모집 글과 운영진에게 알린다")
     t, _ = await run(mod.record_win, 100, ADMIN, "d")
-    check(t.startswith("🏆 **다이어 승리!**") and "🔴 **다이어** · 승" in t and entry["result"]["winner"] == "d" and "`1 캐리` Dp5 <@105>  3000 → **3020** (+20)" in t, "되돌린 뒤 다시 기록")
+    check(t.startswith("🏆 **다이어 승리!**") and "🔴 **다이어** · 승" in t and entry["result"]["winner"] == "d" and "`1 캐리` · <@105> · 3000 → **3020** (+20)" in t, "되돌린 뒤 다시 기록")
 
     mod.bot.current, mod.bot.lineups = None, []              # 봇이 꺼졌다 켜져도 결과 기록 여부를 기억한다
     await mod.restore_state()
@@ -710,24 +716,27 @@ async def main():
         rec = await gather(w, 12)
         await run(mod.close_now, 100, ADMIN)
         lineup = w.texts(w.thread.send)[-1]
-        seats = re.findall(r"`(\d) (캐리|미드|오프|서폿)` (선수\d+) <@(\d+)> · (\d+) · (\d)지망", lineup)
-        check(lineup.startswith("⚔️ **팀 편성**") and len(seats) == 10 and len({s[2] for s in seats}) == 10, "실제 매니저 로직으로 열 명을 두 팀에 배치")
-        check([s[0] for s in seats] == list("12345") * 2 and all(int(s[3]) - 100 == int(s[2][2:]) for s in seats), "자리 순서와 디스코드 계정이 맞다")
-        check(all(int(s[4]) == 3000 + int(s[2][2:]) * 150 for s in seats), "선수마다 인하우스 MMR을 보여 준다")
-        check(lineup.count("이번 판은 쉬어요") == 1 and len(re.findall(r"선수\d+ <@\d+>", lineup.split("쉬어요: ")[1].split("\n")[0])) == 2, "열두 명이면 두 명이 쉰다")
+        # 자리 한 줄: `1 캐리(1지망)` · <@멘션> · MMR · (+이기면 / −지면). 가짜 선수는 디스코드 ID가 100 + k, MMR이 3000 + 150k 다
+        seats = re.findall(r"`(\d) (캐리|미드|오프|서폿)\((\d)지망\)` · <@(\d+)> · (\d+) · \(\+(\d+) / −(\d+)\)", lineup)
+        check(lineup.startswith("⚔️ **팀 편성**") and len(seats) == 10 and len({s[3] for s in seats}) == 10, "실제 매니저 로직으로 열 명을 두 팀에 배치")
+        check([s[0] for s in seats] == list("12345") * 2 and all(int(s[4]) == 3000 + (int(s[3]) - 100) * 150 for s in seats), "자리 순서가 맞고, 멘션한 선수의 인하우스 MMR을 보여 준다")
+        check("선수" not in lineup.split("-# 괄호")[0] and lineup.count("<@") == 30, "실제 편성: 닉네임 없이 멘션으로만 (열 명 + 쉬는 두 명 + MMR 비교 열여덟 번)")
+        check(lineup.count("이번 판은 쉬어요") == 1 and len(re.findall(r"<@\d+>", lineup.split("쉬어요**: ")[1].split("\n")[0])) == 2, "열두 명이면 두 명이 쉰다")
         check(len(w.server[-1]["lineup"]["lanes"]) == 5 and len(w.server[-1]["lineup"]["bench"]) == 2, "실제 편성을 서버에 올린다")
         rad, dire = [int(s[4]) for s in seats[:5]], [int(s[4]) for s in seats[5:]]
-        gap = lambda r, d: "같음" if r == d else f"{'🟢' if r > d else '🔴'} +{abs(r - d)}"
-        check(all(f"`{k + 1} {seats[k][1]}` {rad[k]} 대 {dire[k]} · {gap(rad[k], dire[k])}" in lineup for k in range(5)), "실제 편성: 같은 자리끼리의 MMR 차이")
+        at = lambda s: f"<@{s[3]}>"
+        gap = lambda r, d: "⚪ 0" if r == d else f"{'🟢' if r > d else '🔴'} {abs(r - d)}"
+        check(all(f"`{k + 1} {seats[k][1]}`({gap(rad[k], dire[k])}) · {at(seats[k])}({rad[k]}) vs {at(seats[k + 5])}({dire[k]})" in lineup for k in range(5)),
+              "실제 편성: 같은 자리끼리의 MMR 차이")
         top, bottom = (rad[2] + rad[3], dire[0] + dire[4]), (rad[0] + rad[4], dire[2] + dire[3])
-        check(f"`탑 라인` {top[0]} 대 {top[1]} · {gap(*top)} (래디언트 3·4번 대 다이어 1·5번의 합)" in lineup
-              and f"`봇 라인` {bottom[0]} 대 {bottom[1]} · {gap(*bottom)} (래디언트 1·5번 대 다이어 3·4번의 합)" in lineup, "실제 편성: 라인에서 만나는 두 사람의 합")
-        avg = re.search(r"`팀 평균` (\d+) 대 (\d+) · (🟢|🔴) \+(\d+)", lineup)
-        odds = re.search(r"기대 승률\*\* 🟢 (\d+)% · 🔴 (\d+)%", lineup)
-        check(avg and abs(int(avg[1]) - int(avg[2])) == int(avg[4]) and (avg[3] == "🟢") == (int(avg[1]) > int(avg[2]))
-              and f"평균 MMR **{avg[1]}** (그대로 계산하면 {round(sum(rad) / 5)})" in lineup, "실제 편성: 팀 평균과 그 차이")
-        check(odds and int(odds[1]) + int(odds[2]) == 100 and (int(odds[1]) >= 50 if avg[3] == "🟢" else int(odds[1]) <= 50), "실제 편성: 기대 승률은 평균이 높은 팀이 높다 (차이가 작으면 반올림해 50%)")
-        told = {side: [int(x) for x in re.search(rf"{side}: 이기면 MMR \+(\d+)~\+(\d+) · 지면 −(\d+)~−(\d+)", lineup).groups()] for side in ("래디언트", "다이어")}
+        check(f"`탑 라인`({gap(*top)}) · {at(seats[2])} + {at(seats[3])} ({top[0]}) vs {at(seats[5])} + {at(seats[9])} ({top[1]})" in lineup
+              and f"`봇 라인`({gap(*bottom)}) · {at(seats[0])} + {at(seats[4])} ({bottom[0]}) vs {at(seats[7])} + {at(seats[8])} ({bottom[1]})" in lineup,
+              "실제 편성: 라인에서 만나는 두 사람씩과 그 합")
+        avg = re.search(r"\*\*MMR 비교\*\*\n`팀 평균`\((🟢|🔴|⚪) (\d+)\) · 래디언트\((\d+)\) vs 다이어\((\d+)\)", lineup)
+        check(avg and abs(int(avg[3]) - int(avg[4])) == int(avg[2]) and avg[1] == gap(int(avg[3]), int(avg[4]))[0]
+              and f"🟢 **래디언트** (평균 {avg[3]})\n" in lineup and f"🔴 **다이어** (평균 {avg[4]})\n" in lineup, "실제 편성: 팀 이름 줄의 평균과 MMR 비교 맨 위의 팀 평균이 같고, 차이는 그 둘을 뺀 값")
+        check("기대 승률" not in lineup and "%" not in lineup, "실제 편성: 기대 승률은 적지 않는다")
+        told = {int(s[3]): (int(s[5]), int(s[6])) for s in seats}  # {디스코드 ID: (이기면 얻는 점수, 지면 잃는 점수)}
 
         start = json.dumps(league_of(12), ensure_ascii=False, sort_keys=True)
         entry = mod.bot.lineups[0]
@@ -739,8 +748,9 @@ async def main():
         check(all(mmr[i]["wins"] == 3 and mmr[i]["mmr"] > 3000 + int(i[1:]) * 150 for i in won) and all(mmr[i]["losses"] == 3 and mmr[i]["mmr"] < 3000 + int(i[1:]) * 150 for i in lost),
               "실제 정산: 이긴 팀은 승과 MMR이 오르고 진 팀은 패와 MMR이 내린다")
         check(len(re.findall(r"\d+ → \*\*\d+\*\* \([+−]\d+\)", t)) == 10 and t.count("(+") == 5 and t.count("(−") == 5, "실제 정산: 열 명의 MMR 변동을 보여 준다")
-        gains, drops = [int(x) for x in re.findall(r"\(\+(\d+)\)", t)], [int(x) for x in re.findall(r"\(−(\d+)\)", t)]
-        check([min(gains), max(gains)] == told["다이어"][:2] and [min(drops), max(drops)] == told["래디언트"][2:], "실제 정산: 팀을 짤 때 알린 이기면·지면 범위와 같다")
+        moved = {int(uid): int(n) * (1 if sign == "+" else -1) for uid, sign, n in re.findall(r"<@(\d+)> · \d+ → \*\*\d+\*\* \(([+−])(\d+)\)", t)}
+        check(len(moved) == 10 and all(moved[int(s[3])] == told[int(s[3])][0] for s in seats[5:]) and all(moved[int(s[3])] == -told[int(s[3])][1] for s in seats[:5]),
+              "실제 정산: 팀을 짤 때 선수마다 알린 이기면·지면 점수 그대로 바뀐다")
         bench = [p["id"] for p in after["players"] if p["id"] not in won + lost]
         check(len(bench) == 2 and all(mmr[i]["wins"] == 2 and mmr[i]["losses"] == 2 for i in bench), "실제 정산: 쉰 사람의 전적은 그대로")
         t, _ = await run(mod.undo_win, 100, ADMIN)
