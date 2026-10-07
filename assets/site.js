@@ -73,7 +73,8 @@
   }
 
   let toastTimer;
-  function toast(msg){
+  // ms: 보여 주는 시간. 읽을 내용이 긴 알림은 더 길게 준다
+  function toast(msg, ms){
     let t = document.getElementById('toast');
     if(!t){
       t = document.createElement('div');
@@ -82,7 +83,7 @@
     }
     t.textContent = msg; t.hidden = false;
     clearTimeout(toastTimer);
-    toastTimer = setTimeout(() => { t.hidden = true; }, 3200);
+    toastTimer = setTimeout(() => { t.hidden = true; }, ms || 3200);
   }
 
   window.Site = {L, esc, api, mountChrome, setSeason, toast, PREF_LABEL};

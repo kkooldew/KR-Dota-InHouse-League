@@ -565,6 +565,8 @@ async def main():
     posts = w.texts(w.thread.send)
     lineup = posts[-1]
     check(len(asked) == 1 and sorted(asked[0]["participants"]) == sorted(f"p{k}" for k in range(12)) and asked[0]["busy"] == [], "마감하면 선수단과 맞는 참가자로 팀 편성을 요청")
+    # 팀을 짜기 전에는 sync 를 붙여 리그 기록을 받는다: 승인됐는데 선수단에 빠진 선수가 있으면 서버가 먼저 채워 넣는다 (서버 버전 10)
+    check([p for p in w.server if p["action"] == "adminLeague"] == [{"action": "adminLeague", "sync": True}], "팀을 짜기 전에 서버가 승인한 선수를 선수단에 맞추게 한다")
     check("내전 참여 명단" in posts[-2] and lineup.startswith("⚔️ **팀 편성**"), "명단 공지 다음에 팀 편성 공지")
     check("🟢 **래디언트** (평균 3510)\n`1 캐리" in lineup and "🔴 **다이어** (평균 3470)\n`1 캐리" in lineup, "팀 이름 줄에 그 팀의 평균 MMR (매니저 보드의 값)")
     check("`1 캐리(1지망)` · <@100> · 3000 · (+18 / −22)" in lineup and "`3 오프(2지망)` · <@102> · 3200 · (+20 / −24)" in lineup
@@ -627,6 +629,8 @@ async def main():
     n = len(asked)
     await run(mod.close_now, 100, ADMIN)
     check(len(asked) == n and "선수 등록이 확인된 참가자가 9명" in w.texts(w.thread.send)[-1] and any("선수단에 없는 참가자: <@999>" in x for x in w.texts(w.admin.send)), "등록된 선수가 열 명이 안 되면 짜지 않고 알린다")
+    check(any("등록을 승인했는지" in x and "`/연장` → `/마감`" in x for x in w.texts(w.admin.send)) and not any("매니저에 불러" in x for x in w.texts(w.admin.send)),
+          "그때의 안내: 승인했는지와 디스코드 사용자명을 확인하라고 한다 (매니저에 명단을 불러오라는 말은 이제 없다)")
 
     # 서버 별명을 다른 선수의 닉네임으로 바꾼 사람이 그 선수의 자리(MMR과 전적)에 들어가지 못한다.
     # 선수0 은 디스코드(ID 100)가 적혀 있으니 그 계정으로만 맞추고, 디스코드를 적지 않은 선수1 만 이름으로 맞춘다
@@ -640,7 +644,8 @@ async def main():
     w.league = None
     await gather(w, 10)
     await run(mod.close_now, 100, ADMIN)
-    check(len(asked) == n and any("리그 기록에 선수가 없어" in x for x in w.texts(w.admin.send)) and not any("팀 편성" in x for x in w.texts(w.thread.send)), "서버에 리그 기록이 없으면 관리자에게 알린다")
+    check(len(asked) == n and any("선수단에 선수가 없어" in x and "**승인**" in x and "선수단 다시 맞추기" in x for x in w.texts(w.admin.send))
+          and not any("팀 편성" in x for x in w.texts(w.thread.send)), "서버의 선수단이 비어 있으면 관리자에게 알린다 (승인하면 들어간다고 안내)")
 
     w = World(mod, forum=True, league=league_of(12))
     w.fail.add("adminLeague")
@@ -1039,6 +1044,20 @@ async def main():
     check(PLAYER not in kim.roles and PLAYER in lee.roles and "역할을 줬어요: <@23>" in admin_said()[-1] and "역할을 뺐어요: <@21>" in admin_said()[-1]
           and admin_said()[-1].startswith("🎫 **참여 선수 역할**"), "상태가 바뀌면 역할도 따라 바뀌고 관리자 채널에 알린다")
     check(w.admin.send.call_args.kwargs.get("allowed_mentions") is not None, "관리자 채널 알림도 조용히")
+
+    # 승인했다가 대기로 돌려도 역할을 뺀다 (제외와 같다). 처음부터 대기인 등록은 건드리지 않는다
+    w.registered[2]["status"] = "대기"                                     # 방금 승인한 lee 를 대기로
+    await mod.role_tick()
+    check(PLAYER not in lee.roles and "승인 취소(대기·제외) → 역할을 뺐어요: <@23>" in admin_said()[-1] and mod.bot.role_seen["s:3"]["status"] == "대기",
+          "승인했다가 대기로 돌린 선수에게서도 역할을 뺀다")
+    check(lee.remove_roles.await_args.kwargs.get("reason") == "인하우스 리그 등록 승인 취소(대기)" and PLAYER in park.roles and "s:4" not in mod.bot.role_seen,
+          "처음부터 대기인 선수(막 등록한 사람)의 역할은 그대로 두고, 찾아보지도 않는다")
+    n = len(guild.queries)
+    await mod.role_tick()
+    check(len(guild.queries) == n, "대기로 맞춘 뒤에는 다시 묻지 않는다")
+    w.registered[2]["status"] = "승인"
+    await mod.role_tick()
+    check(PLAYER in lee.roles and "역할을 줬어요: <@23>" in admin_said()[-1], "대기로 돌렸던 선수를 다시 승인하면 역할을 다시 준다")
 
     ghost = member(26, "ghost")
     guild.members[26] = ghost                                             # 찾지 못했던 사람이 서버에 들어왔다

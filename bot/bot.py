@@ -739,15 +739,17 @@ async def auto_match(rec: Recruitment) -> None:
     """마감한 모집의 참가자로 팀을 짜서 모집 글과 관리자 채널에 알리고, 매니저가 불러올 수 있게 서버에 올린다.
     어디서 막히든 모집 마감은 끝까지 가야 하므로, 문제는 관리자 채널에 알리고 넘어간다."""
     try:
-        league = (await call_server({"action": "adminLeague"})).get("league")
+        # sync: 승인돼 있는데 선수단에 빠진 선수가 있으면 서버가 먼저 채워 넣고 기록을 준다(서버 버전 10부터. 예전 서버는 이 값을 모른 채 기록만 준다).
+        # 승인한 선수는 승인할 때 선수단에 들어가지만, 그때 드라이브가 답하지 않았거나 매니저가 예전 기록으로 덮어쓴 경우가 여기서 메워진다
+        league = (await call_server({"action": "adminLeague", "sync": True})).get("league")
     except Exception as e:
         print(f"리그 기록을 받지 못했습니다: {e!r}")
         await tell_admins("리그 서버에서 기록을 받지 못해 팀을 자동으로 짜지 못했습니다. 매니저에서 직접 짜 주세요.")
         return
     if not league or not league.get("players"):
-        await tell_admins("서버의 리그 기록에 선수가 없어 팀을 자동으로 짜지 못했습니다(새 시즌을 막 시작했거나, 매니저를 아직 서버에 연결하지 않은 경우입니다). "
-                          "운영진 페이지의 **매니저용 명단 받기**로 받은 파일을 리그 매니저에 불러오고, 데이터 · 설정 탭의 **서버와 자동으로 맞추기**가 켜져 있는지 확인한 뒤 "
-                          "`/연장` → `/마감` 하면 다시 짭니다.")
+        await tell_admins("서버의 선수단에 선수가 없어 팀을 자동으로 짜지 못했습니다. 선수단에는 운영진 페이지에서 **승인**한 선수가 들어갑니다(새 시즌을 시작하면 비워집니다). "
+                          "참가자들의 등록을 승인한 뒤 `/연장` → `/마감` 하면 다시 짭니다. "
+                          "승인한 선수가 있는데도 이 글이 나오면 운영진 페이지의 **선수단 다시 맞추기**를 눌러 보세요.")
         return
 
     who, missing = match_players(rec, league["players"])
@@ -755,7 +757,8 @@ async def auto_match(rec: Recruitment) -> None:
         await post(rec, f"⚠️ 선수 등록이 확인된 참가자가 {len(who)}명이라 팀을 자동으로 짜지 못했어요. 운영진의 안내를 기다려 주세요.", quiet=True)
         await tell_admins(f"선수단과 맞는 참가자가 {len(who)}명이라 팀을 자동으로 짜지 못했습니다. 선수단에 없는 참가자: "
                           + (" ".join(f"<@{uid}>" for uid in missing) or "없음")
-                          + "\n승인한 선수를 리그 매니저에 불러왔는지, 등록한 디스코드 사용자명이 맞는지 확인해 주세요.")
+                          + "\n운영진 페이지에서 그 선수의 등록을 승인했는지, 등록할 때 적은 디스코드 사용자명이 실제 계정과 같은지 확인해 주세요. "
+                            "고친 뒤 `/연장` → `/마감` 하면 다시 짭니다.")
         return
 
     start = day_start()
@@ -902,7 +905,8 @@ async def send_to(place_id: int, text: str) -> None:
 
 
 # ── 참여 선수 역할 자동 부여 ──────────────────────────────────
-# 운영진 페이지에서 승인한 선수에게 역할을 주고, 제외한 선수에게서는 뺀다. 대기는 건드리지 않는다.
+# 운영진 페이지에서 승인한 선수에게 역할을 주고, 승인을 푼 선수(대기로 돌렸거나 제외한 선수)에게서는 뺀다.
+# 처음부터 대기인 등록(막 등록하고 아직 확인을 기다리는 선수)은 건드리지 않는다.
 # 봇에는 서버가 승인을 알려 올 길이 없어서(봇은 밖에서 들어오는 요청을 받지 않는다) 등록 명단을 주기적으로 읽어 맞춘다.
 async def get_guild() -> discord.Guild:
     guild = bot.get_guild(GUILD.id)
@@ -998,9 +1002,13 @@ async def sync_roles(force: bool = False) -> dict:
         seen, now, tried, changed = bot.role_seen, time.time(), 0, False
         for p in data.get("players") or []:
             key, status, name = str(p.get("steamKey") or p.get("discord") or ""), p.get("status"), str(p.get("discord") or "")
-            if not key or status not in ("승인", "제외"):
+            if not key or status not in ("승인", "제외", "대기"):
                 continue
             last = seen.get(key) or {}
+            # 대기는 봇이 승인이나 제외로 본 적이 있는 등록만 본다: 승인했다가 대기로 돌린 선수에게서 역할을 뺀다(운영자가 2026-10-08에 확인한 규칙).
+            # 처음부터 대기인 등록은 넘어간다. 등록만 한 사람을 하나하나 디스코드에 물어보지 않고, 운영진이 손으로 준 역할을 빼지도 않으려는 것이다
+            if status == "대기" and not last:
+                continue
             same = last.get("status") == status and last.get("discord") == name
             if same and last.get("ok"):
                 continue
@@ -1014,15 +1022,15 @@ async def sync_roles(force: bool = False) -> dict:
             try:
                 member = await find_member(guild, name)
                 if member is None:
-                    # 제외한 사람이 서버에 없으면 뺄 역할도 없다. 승인한 사람이 없으면 나중에 다시 찾아본다
-                    done = status == "제외"
+                    # 승인을 푼 사람이 서버에 없으면 뺄 역할도 없다. 승인한 사람이 없으면 나중에 다시 찾아본다
+                    done = status != "승인"
                     if not done and not same:  # 처음 못 찾았을 때만 알린다
                         out["missing"].append(p)
                 elif status == "승인" and role not in member.roles:
                     await member.add_roles(role, reason="인하우스 리그 등록 승인")
                     out["added"].append(member)
-                elif status == "제외" and role in member.roles:
-                    await member.remove_roles(role, reason="인하우스 리그 등록 제외")
+                elif status != "승인" and role in member.roles:
+                    await member.remove_roles(role, reason="인하우스 리그 등록 " + ("제외" if status == "제외" else "승인 취소(대기)"))
                     out["removed"].append(member)
             except discord.Forbidden:
                 out["problem"] = "역할을 바꿀 권한이 없어요. 봇에 **역할 관리** 권한이 있는지, 봇의 역할이 그 역할보다 위에 있는지 확인해 주세요."
@@ -1098,7 +1106,7 @@ def roles_text(out: dict) -> str:
     if out["added"]:
         lines.append("✅ 승인 → 역할을 줬어요: " + ", ".join(m.mention for m in out["added"]))
     if out["removed"]:
-        lines.append("🚫 제외 → 역할을 뺐어요: " + ", ".join(m.mention for m in out["removed"]))
+        lines.append("🚫 승인 취소(대기·제외) → 역할을 뺐어요: " + ", ".join(m.mention for m in out["removed"]))
     if out["missing"]:
         lines.append("⚠️ 디스코드 서버에서 찾지 못했어요: "
                      + ", ".join(f"{safe_name(str(p.get('nickname') or '?'))} (`{str(p.get('discord') or '').replace('`', '')}`)" for p in out["missing"])
@@ -1526,7 +1534,7 @@ async def undo_win(interaction: discord.Interaction) -> None:
     await answer(interaction, f"{actor}님이 결과 기록을 취소하고 MMR을 되돌렸어요. 다시 기록하려면 `/승리` 를 쓰세요.")
 
 
-@bot.tree.command(name="선수역할", description="승인한 선수에게 자동으로 줄 역할을 정합니다. 제외한 선수에게서는 뺍니다 (운영진 전용)", guild=GUILD)
+@bot.tree.command(name="선수역할", description="승인한 선수에게 자동으로 줄 역할을 정합니다. 승인을 풀면(대기·제외) 뺍니다 (운영진 전용)", guild=GUILD)
 @app_commands.rename(role="역할", off="끄기")
 @app_commands.describe(role="승인한 선수에게 줄 역할. 비우면 지금 설정을 보여 주고 바로 한 번 맞춥니다", off="자동으로 역할 주기를 끕니다")
 async def player_role(interaction: discord.Interaction, role: Optional[discord.Role] = None, off: Optional[bool] = None) -> None:
@@ -1549,7 +1557,7 @@ async def player_role(interaction: discord.Interaction, role: Optional[discord.R
             bot.player_role_id, bot.role_seen, bot.role_revoke = role.id, {}, None  # 역할이 바뀌면 처음부터 다시 맞춘다
             save_state()
     if not bot.player_role_id:
-        await answer(interaction, f"{actor}님, 참여 선수 역할 자동 부여가 꺼져 있어요. `/선수역할` 에서 **역할**을 고르면, 운영진 페이지에서 승인한 선수에게 그 역할을 주고 제외한 선수에게서는 뺍니다.")
+        await answer(interaction, f"{actor}님, 참여 선수 역할 자동 부여가 꺼져 있어요. `/선수역할` 에서 **역할**을 고르면, 운영진 페이지에서 승인한 선수에게 그 역할을 주고 승인을 푼(대기·제외) 선수에게서는 뺍니다.")
         return
     if not (SYNC_URL and SYNC_KEY):
         await answer(interaction, f"{actor}님, 역할은 정했지만, 봇이 등록 명단을 읽을 수 없어요. `config.json` 에 `sync_url` 과 `sync_key` 를 넣고 봇을 다시 켜 주세요.")
@@ -1568,7 +1576,7 @@ async def player_role(interaction: discord.Interaction, role: Optional[discord.R
         text = (f"{actor}님, 시즌이 바뀌어 지난 시즌 선수의 <@&{bot.player_role_id}> 역할을 거두는 중이에요. "
                 f"(남은 사람 {len(bot.role_revoke['left'])}명) 다 거둔 뒤에 새 시즌의 승인 선수에게 줍니다.")
     else:
-        head = f"{actor}: 🎫 승인한 선수에게 <@&{bot.player_role_id}> 역할을 자동으로 줍니다. 제외하면 뺍니다. (1분마다 확인)"
+        head = f"{actor}: 🎫 승인한 선수에게 <@&{bot.player_role_id}> 역할을 자동으로 줍니다. 승인을 풀면(대기·제외) 뺍니다. (1분마다 확인)"
         more = f"\n나머지 {out['left']}명은 이어서 처리합니다." if out["left"] else ""
         text = f"{head}\n{done or '지금은 새로 주거나 뺄 사람이 없어요.'}{more}"
     await answer(interaction, text)

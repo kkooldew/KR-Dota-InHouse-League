@@ -7,6 +7,7 @@
  *    그 시즌이 끝났을 때의 인하우스 MMR을 이어받는다
  *  - 운영진 키가 있는 사람에게만 등록 명단을 돌려주고, 승인 상태와 등록 기간을 바꾸고 새 시즌을 시작하게 한다
  *    (새 시즌을 시작하면 끝난 시즌의 리그 기록을 따로 보관하고, 새 시즌은 빈 기록에서 시작한다)
+ *  - 운영진이 승인한 선수를 리그 기록의 선수단에 바로 넣는다 (봇이 그 선수로 팀을 짤 수 있게)
  *  - 리그 매니저가 올린 경기 기록을 받아, 개인 정보를 뺀 공개용 기록으로 내보낸다
  *  - 디스코드 봇이 올린 참가 명단을 보관했다가 리그 매니저에 넘겨준다
  *
@@ -14,7 +15,7 @@
  * 코드를 고친 뒤에는 배포 → 배포 관리 → 수정(연필) → 버전: 새 버전 → 배포 를 눌러야 반영됩니다.
  */
 
-const SERVER_VERSION = 9;                              // 서버를 고칠 때마다 올린다. 상태 응답에 실려서 새 버전이 배포됐는지 밖에서 확인할 수 있다
+const SERVER_VERSION = 10;                             // 서버를 고칠 때마다 올린다. 상태 응답에 실려서 새 버전이 배포됐는지 밖에서 확인할 수 있다
 const SHEET_NAME = '선수등록';                             // 등록 탭 이름의 앞부분. 시즌마다 '선수등록 (시즌 이름)' 탭을 따로 쓴다
 // 칸을 더할 때는 맨 뒤에 붙이고 LAYOUT 을 올린다. 이미 있는 탭에는 ready_ 가 새 머리글을 채워 넣는다
 const HEADERS = ['등록시각', '수정시각', '상태', '닉네임', '스팀프로필', '스팀키', '디스코드', 'MMR', '1지망', '2지망', '3지망', '4지망', '비고', '최고MMR'];
@@ -28,6 +29,7 @@ const ROSTER_MAX = 60;
 const STEAM_TRIES = 4;                                     // 스팀 조회를 몇 번까지 시도할지
 const LEAGUE_MAX = 8000000;                                // 리그 기록의 최대 크기(글자 수)
 const SEASON_WORD = '시즌 변경';                            // 새 시즌을 시작할 때 운영진이 직접 입력해야 하는 확인 문구
+const LINKED = '1';                                        // 승인한 선수를 선수단에 넣기 시작했다는 표시 (버전 10). ready_ 가 처음 한 번 맞춘다
 
 /* =========================================================
    설치: 편집기에서 setup 을 한 번 실행하세요
@@ -85,12 +87,17 @@ function doPost(e) {
       case 'ping': requireAdmin_(body); return adminStatus_();
       case 'adminList': requireAdmin_(body); return listSeason_(body);
       case 'adminSetStatus': requireAdmin_(body); return setStatus_(body);
+      case 'adminSyncPlayers': requireAdmin_(body); return syncNow_();
       case 'adminConfig': requireAdmin_(body); return setConfig_(body);
       case 'adminNewSeason': requireAdmin_(body); return newSeason_(body);
       case 'publishRecords': requireAdmin_(body); return publishRecords_(body);
       case 'pushRoster': requireAdmin_(body); return pushRoster_(body);
       case 'adminRoster': requireAdmin_(body); return { roster: getRoster_() };
-      case 'adminLeague': requireAdmin_(body); return getLeague_();
+      case 'adminLeague':
+        requireAdmin_(body);
+        // 봇은 팀을 짜기 직전에 sync 를 붙여 받는다. 승인됐는데 선수단에 빠져 있는 선수가 있으면 그때 채워진다. 맞추지 못해도 기록은 돌려준다
+        if (body.sync === true) { try { syncNow_(); } catch (err) { console.warn('선수단을 맞추지 못한 채 기록을 돌려줍니다: ' + err); } }
+        return getLeague_();
       case 'adminLeagueRev': requireAdmin_(body); return { rev: leagueRev_() };
       case 'saveLeague': requireAdmin_(body); return saveLeague_(body);
       case 'pushLineup': requireAdmin_(body); return pushLineup_(body);
@@ -195,11 +202,12 @@ function initSeasons_() {
 
 // 요청을 처리하기 전에 시트가 지금 버전의 모양인지 본다. 서버를 새 버전으로 올린 뒤 첫 요청에서만 일이 있고,
 // 그때는 한 번에 하나씩만 하게 잠근다: 시즌 목록이 없으면 만들고, 칸이 늘었으면 모든 시즌 탭에 새 머리글을 채운다.
+// 버전 10으로 올린 뒤 첫 요청에서는 그때까지 승인돼 있던 선수를 선수단에 넣는다.
 function ready_() {
   const props = PropertiesService.getScriptProperties();
   const raw = props.getProperty('SEASONS') || '';
   const pending = raw.indexOf('"leaguePending":true') >= 0;      // 새 시즌을 시작하다 리그 기록을 비우지 못한 채 남은 경우
-  if (raw && !pending && props.getProperty('LAYOUT') === LAYOUT) return;
+  if (raw && !pending && props.getProperty('LAYOUT') === LAYOUT && props.getProperty('LINKED') === LINKED) return;
   withLock_(() => {
     const list = seasons_();
     if (props.getProperty('LAYOUT') !== LAYOUT) {
@@ -209,6 +217,11 @@ function ready_() {
     }
     try { finishSeason_(list); }
     catch (err) { console.error('리그 기록을 새로 시작하지 못했습니다. 다음 요청에서 다시 합니다: ' + (err && err.stack || err)); }
+    if (props.getProperty('LINKED') !== LINKED) {
+      // 한 번만 해 본다. 여기서 못 해도 다음에 누군가를 승인할 때나 운영진 페이지의 "선수단 다시 맞추기"로 채워진다
+      props.setProperty('LINKED', LINKED);
+      linkPlayers_(readRows_(getSheet_()), [], []);
+    }
   });
 }
 
@@ -317,6 +330,8 @@ function finishSeason_(list) {
   startLeague_(live && live.settings, list.length > 1 ? list[list.length - 2].name : '');
   delete cur.leaguePending;
   saveSeasons_(list);
+  // 기록을 비우지 못하고 있던 사이에 새 시즌에서 승인한 선수가 있으면 이제 선수단에 넣는다 (새 시즌을 막 시작한 때에는 명단이 비어 있어 할 일이 없다)
+  linkPlayers_(readRows_(getSheet_()), [], []);
 }
 
 // 리그 기록을 선수와 경기가 없는 상태로 새로 시작한다. 번호를 올려서 매니저가 새 기록을 받아 가게 한다.
@@ -607,7 +622,8 @@ function normDiscord_(v) {
   if (/^[a-z0-9_.]{2,32}$/.test(s) && !/\.\./.test(s)) return s;
   if (/#\d{4}$/.test(s))
     fail_('이름#1234 모양은 이제 쓰이지 않습니다. 디스코드 프로필에 보이는 지금 사용자명을 넣어 주세요.', 'discord');
-  fail_('디스코드 사용자명을 확인해 주세요. 영문 소문자·숫자·밑줄(_)·마침표(.)만 쓸 수 있습니다.', 'discord');
+  // 닉네임(표시 이름)을 적어 내는 선수가 많다. 무엇을 넣어야 하는지를 함께 알려 준다
+  fail_('디스코드 사용자명을 확인해 주세요. 닉네임이 아니라 디스코드 설정 → 내 계정에 있는 사용자명입니다. 영문 소문자·숫자·밑줄(_)·마침표(.)로만 되어 있습니다.', 'discord');
 }
 
 function parseMmr_(v) {
@@ -711,14 +727,188 @@ function setStatus_(body) {
   if (!want.size) fail_('바꿀 선수가 없습니다');
   return withLock_(() => {
     const sheet = getSheet_();
+    const rows = readRows_(sheet);
+    const fresh = [], gone = [];                           // 방금 승인한 줄, 방금 승인을 푼 줄
     let changed = 0;
-    readRows_(sheet).forEach(r => {
+    rows.forEach(r => {
       if (!want.has(r.steamKey)) return;
       sheet.getRange(r.rowNumber, COL['상태'] + 1).setValue(status);
       changed++;
+      if (r.status !== status) {
+        if (status === '승인') fresh.push(r);
+        else if (r.status === '승인') gone.push(r);
+        r.status = status;
+      }
     });
-    return { changed };
+    const out = { changed };
+    // 승인이 바뀌었으면 선수단도 맞춘다. 맞추지 못해도 상태는 이미 바뀌었으니 실패로 돌려주지 않고, league.ok 로 알린다
+    if (fresh.length || gone.length) out.league = linkPlayers_(rows, fresh, gone);
+    return out;
   });
+}
+
+/* =========================================================
+   승인한 선수를 선수단에 넣기 (버전 10)
+   ========================================================= */
+// 운영진이 등록을 승인하면 그 선수를 리그 기록의 선수단에 바로 넣는다. 전에는 운영진이 명단 파일을 받아 리그 매니저에 불러와야 했고,
+// 그 일을 빠뜨리면 봇이 그 선수를 몰라 팀을 짜지 못했다. 리그 매니저가 명단 파일을 "같은 선수면 갱신"으로 불러올 때와 같은 기준으로 한다.
+//  - 같은 선수인지는 디스코드 → 스팀 → 닉네임 순서로 본다. 닉네임이 같아도 디스코드가 서로 다르면 다른 사람이다.
+//  - 방금 승인한 선수(fresh): 선수단에 없으면 넣는다. 있으면 닉네임·디스코드·스팀·등록 MMR·지망을 등록한 값으로 맞춘다.
+//    경기를 치른 선수의 인하우스 MMR과 전적은 건드리지 않는다.
+//  - 그 밖의 승인된 선수: 선수단에 없을 때만 넣는다. 이미 있으면 그대로 두고(매니저에서 고친 값을 덮어쓰지 않으려고) 비어 있는 디스코드·스팀만 채운다.
+//    전에 넣지 못했던 선수(드라이브가 잠깐 답하지 않았거나, 매니저가 예전 기록으로 서버를 덮어쓴 경우)가 이때 함께 들어간다.
+//  - 방금 승인을 푼 선수(gone): 아직 경기를 치르지 않았으면 선수단에서 뺀다. 경기를 치른 선수는 전적과 경기 기록이 이어지게 남겨 둔다.
+// rows 는 지금 시즌의 등록 명단(바뀐 상태까지 반영한 것)이다. 잠금을 잡은 상태에서 부른다.
+// 돌려주는 값(선수 이름들): added 방금 승인해 넣은 선수, filled 전부터 승인돼 있었는데 빠져 있어 넣은 선수, updated 방금 승인했는데 이미 있어 정보를 맞춘 선수,
+// removed 승인을 풀어 뺀 선수, kept 승인을 풀었지만 경기를 치러 남긴 선수, skipped 닉네임이 없어 넣지 못한 줄. players 는 선수단 인원, rev 는 기록 번호.
+// 바뀐 것이 없으면 기록을 다시 쓰지 않는다.
+function syncPlayers_(rows, fresh, gone) {
+  const out = { added: [], filled: [], updated: [], removed: [], kept: [], skipped: [] };
+  const approved = rows.filter(r => r.status === '승인');
+  if (!approved.length && !gone.length) return out;         // 넣을 선수도 뺄 선수도 없으면 기록을 읽지도 않는다
+  const list = seasons_();
+  if (list[list.length - 1].leaguePending)
+    fail_('새 시즌의 리그 기록을 아직 준비하지 못했습니다. 잠시 뒤에 다시 해 주세요.', 'pending');
+
+  const league = readLeague_() || { players: [], matches: [], settings: {} };
+  const players = league.players;
+  const item = p => !!p && typeof p === 'object';
+  const games = p => (Number(p.wins) || 0) + (Number(p.losses) || 0);
+  const inMatch = {}, taken = {};
+  league.matches.forEach(m => { if (m && Array.isArray(m.rows)) m.rows.forEach(x => { if (x && x.id) inMatch[x.id] = true; }); });
+  players.forEach(p => { if (item(p)) taken[p.id] = true; });
+  const nameUsed = (name, own) => players.some(p => item(p) && p !== own && p.name === name);
+  const steamUsed = (key, own) => players.some(p => item(p) && p !== own && steamKeyOf_(p.steam) === key);
+  let dirty = false;
+
+  const add = (np, names) => {
+    // 다른 사람인데 닉네임이 같으면 뒤에 번호를 붙인다. 매니저는 선수단 안에서 이름이 겹치지 않는다고 보고 움직인다
+    const base = np.name;
+    for (let k = 2; nameUsed(np.name, null); k++) np.name = base + ' (' + k + ')';
+    np.id = newPlayerId_(taken);
+    players.push(np);
+    names.push(np.name);
+    dirty = true;
+  };
+
+  gone.forEach(r => {
+    const np = playerFromRow_(r);
+    const sk = steamKeyOf_(np.steam);
+    // 빼는 일은 넣는 일보다 조심스럽게: 디스코드나 스팀이 같은 선수만 찾고, 이름으로는 둘 다 적혀 있지 않은 선수만 찾는다
+    const old = players.filter(item).filter(p => (np.discord && discordKey_(p.discord) === np.discord) || (sk && steamKeyOf_(p.steam) === sk) ||
+      (np.name && p.name === np.name && !discordKey_(p.discord) && !steamKeyOf_(p.steam)))[0];
+    if (!old) return;
+    if (games(old) > 0 || inMatch[old.id]) { out.kept.push(old.name); return; }
+    players.splice(players.indexOf(old), 1);
+    out.removed.push(old.name);
+    dirty = true;
+  });
+
+  const justApproved = {};
+  fresh.forEach(r => { justApproved[r.rowNumber] = true; });
+  approved.forEach(r => {
+    const np = playerFromRow_(r);
+    if (!np.name) { out.skipped.push(r.discord || r.steamKey || (r.rowNumber + '번째 줄')); return; }   // 시트에서 닉네임을 지운 줄. 이름 없는 선수는 매니저가 받지 않는다
+    const old = samePlayer_(players.filter(item), np);
+    if (!old) { add(np, justApproved[r.rowNumber] ? out.added : out.filled); return; }
+    const before = JSON.stringify(old);
+    const sk = steamKeyOf_(np.steam);
+    if (justApproved[r.rowNumber]) {
+      if (np.name !== old.name && !nameUsed(np.name, old)) old.name = np.name;
+      if (np.discord) old.discord = np.discord;
+      if (np.steam && !steamUsed(sk, old)) old.steam = np.steam;
+      old.baseMMR = np.baseMMR;
+      if (games(old) === 0) old.mmr = np.baseMMR;            // 경기를 치른 선수의 인하우스 MMR은 되돌리지 않는다
+      old.prefs = np.prefs;
+    } else {
+      if (np.discord && !discordKey_(old.discord)) old.discord = np.discord;
+      if (np.steam && !steamKeyOf_(old.steam) && !steamUsed(sk, old)) old.steam = np.steam;
+    }
+    if (JSON.stringify(old) !== before) { if (justApproved[r.rowNumber]) out.updated.push(old.name); dirty = true; }
+  });
+
+  if (dirty) storeLeague_(league, leagueText_(league), sanitizeRecords_(league));
+  out.players = players.filter(item).length;
+  out.rev = leagueRev_();
+  return out;
+}
+
+// 상태를 바꾼 뒤(또는 서버를 올린 뒤 처음, 봇이 팀을 짜기 전)에 선수단을 맞춘다. 여기서는 실패해도 멈추지 않는다:
+// 이미 바꾼 승인 상태는 그대로 두고, 무슨 일이 있었는지만 돌려준다. 잠금을 잡은 상태에서 부른다
+function linkPlayers_(rows, fresh, gone) {
+  try {
+    return Object.assign({ ok: true }, syncPlayers_(rows, fresh, gone));
+  } catch (err) {
+    if (err && err.userFacing) return { ok: false, error: err.message, code: err.code || '' };
+    console.error('선수단을 맞추지 못했습니다: ' + (err && err.stack || err));
+    return { ok: false, error: '서버의 리그 기록을 읽거나 쓰지 못했습니다.', code: '' };
+  }
+}
+
+// 운영진 페이지의 "선수단 다시 맞추기": 승인돼 있는데 선수단에 없는 선수를 모두 넣는다. 이미 있는 선수는 건드리지 않는다
+function syncNow_() {
+  return withLock_(() => ({ league: linkPlayers_(readRows_(getSheet_()), [], []) }));
+}
+
+// 등록한 줄을 선수단의 선수 모양으로 바꾼다. 리그 매니저가 새 선수를 만들 때(newPlayer)와 같은 칸, 같은 순서다.
+// 매니저는 서버에서 받은 기록의 모양이 하나라도 어긋나면 통째로 받지 않으므로(backupProblem), 값의 모양을 여기서 맞춰 둔다
+function playerFromRow_(r) {
+  const mmr = Math.max(0, Math.min(MAX_MMR, Math.round(Number(r.mmr) || 0)));
+  const prefs = [];
+  (Array.isArray(r.prefs) ? r.prefs : []).concat([1, 2, 3, 4]).forEach(v => {     // 읽지 못한 지망은 남은 번호 순으로 뒤에 채운다
+    if (Number.isInteger(v) && v >= 1 && v <= 4 && prefs.indexOf(v) < 0) prefs.push(v);
+  });
+  const id64 = String(r.steamKey || '').match(/^s:(7656\d{13})$/);
+  return {
+    id: '',
+    name: String(r.nickname || '').trim().slice(0, 40),
+    baseMMR: mmr,
+    mmr: mmr,
+    prefs: prefs,
+    wins: 0, losses: 0, streak: 0, roleCount: [0, 0, 0, 0, 0],
+    discord: discordKey_(r.discord),
+    steam: String(r.steamUrl || (id64 ? 'https://steamcommunity.com/profiles/' + id64[1] : '')).trim().slice(0, 200)
+  };
+}
+
+// 선수단에서 이 등록과 같은 선수를 찾는다. 리그 매니저의 명단 불러오기(sameAs)와 같은 순서다
+function samePlayer_(players, np) {
+  if (np.discord) {
+    const a = players.filter(p => discordKey_(p.discord) === np.discord)[0];
+    if (a) return a;
+  }
+  const sk = steamKeyOf_(np.steam);
+  if (sk) {
+    const b = players.filter(p => steamKeyOf_(p.steam) === sk)[0];
+    if (b) return b;
+  }
+  const c = players.filter(p => p.name === np.name)[0];
+  return c && !(np.discord && discordKey_(c.discord) && discordKey_(c.discord) !== np.discord) ? c : null;   // 이름은 같아도 디스코드가 다르면 다른 사람
+}
+
+// 리그 매니저의 normDiscordId 와 같다: 앞의 @와 대소문자 차이는 같은 사람으로 본다
+function discordKey_(v) {
+  return String(v == null ? '' : v).trim().replace(/^@/, '').toLowerCase().slice(0, 40);
+}
+
+// 리그 매니저의 steamKeyOf 와 같다: 스팀 프로필 주소에서 같은 계정을 가리키는 키를 뽑는다
+function steamKeyOf_(v) {
+  const t = String(v == null ? '' : v).trim();
+  if (!t) return '';
+  let m = t.match(/steamcommunity\.com\/profiles\/(\d{17})/i) || t.match(/^(7656\d{13})$/);
+  if (m) return 's:' + m[1];
+  m = t.match(/steamcommunity\.com\/id\/([A-Za-z0-9_-]+)/i);
+  if (m) return 'id:' + m[1].toLowerCase();
+  return 'x:' + t.toLowerCase();
+}
+
+// 새 선수의 ID. 매니저가 만드는 ID(p + 시각 + 순번)와 같은 영숫자 모양이고, 선수단 안에서 겹치지 않게 한다.
+// 스팀 번호 같은 개인 정보로 만들지 않는다: 선수 ID는 공개 기록에도 실린다
+function newPlayerId_(taken) {
+  for (let n = 0; ; n++) {
+    const id = 'ps' + Date.now().toString(36) + n.toString(36);
+    if (!taken[id]) { taken[id] = true; return id; }
+  }
 }
 
 /* =========================================================
@@ -803,6 +993,18 @@ function getLeague_() {
   return { league: text ? JSON.parse(text) : null, rev, leagueAt: text ? (props.getProperty('LEAGUE_AT') || '') : '' };
 }
 
+// 서버가 직접 고치려고 읽는 리그 기록. 한 번도 올라온 적이 없으면 null 이다.
+// getLeague_ 와 달리, 있어야 할 기록을 읽지 못하면 없는 것으로 치지 않고 멈춘다(오류를 낸다).
+// 드라이브가 잠깐 답하지 않은 것을 "기록이 없다"로 알고 새로 써 버리면 선수와 경기가 통째로 사라지기 때문이다.
+function readLeague_() {
+  const id = PropertiesService.getScriptProperties().getProperty('LEAGUE_FILE_ID');
+  if (!leagueRev_() || !id) return null;
+  const league = JSON.parse(alive_(DriveApp.getFileById(id)).getBlob().getDataAsString('UTF-8'));
+  if (!league || typeof league !== 'object' || !Array.isArray(league.players) || !Array.isArray(league.matches))
+    throw new Error('리그 기록의 모양이 다릅니다');
+  return league;
+}
+
 // 리그 기록을 받아 원본으로 둔다. 받은 기록으로 공개 기록(순위 페이지)과 시트의 순위·경기 기록 탭도 다시 쓴다.
 function saveLeague_(body) {
   const text = leagueText_(body.league);
@@ -810,17 +1012,23 @@ function saveLeague_(body) {
   const clean = sanitizeRecords_(league);
   const base = Number(body.baseRev) || 0;
   return withLock_(() => {
-    const props = PropertiesService.getScriptProperties();
-    const rev = leagueRev_();
-    if (base !== rev && body.force !== true)
+    if (base !== leagueRev_() && body.force !== true)
       fail_('서버에 더 새로운 기록이 있습니다. 서버 기록을 먼저 불러와 주세요.', 'conflict');
-    const out = writePublic_(clean);
-    driveFile_('LEAGUE_FILE_ID', '인하우스_리그기록.json').setContent(text);
-    props.setProperty('LEAGUE_AT', out.publishedAt);
-    props.setProperty('LEAGUE_REV', String(rev + 1));
-    writeMirror_(league);
-    return Object.assign(out, { rev: rev + 1 });
+    return storeLeague_(league, text, clean);
   });
+}
+
+// 리그 기록을 원본으로 쓰고 번호를 하나 올린다. 공개 기록과 시트의 순위·경기 기록 탭도 이 기록으로 다시 쓴다.
+// text 는 leagueText_ 로 만든 글, clean 은 sanitizeRecords_ 로 거른 공개 기록이다. 잠금을 잡은 상태에서 부른다
+function storeLeague_(league, text, clean) {
+  const props = PropertiesService.getScriptProperties();
+  const rev = leagueRev_();
+  const out = writePublic_(clean);
+  driveFile_('LEAGUE_FILE_ID', '인하우스_리그기록.json').setContent(text);
+  props.setProperty('LEAGUE_AT', out.publishedAt);
+  props.setProperty('LEAGUE_REV', String(rev + 1));
+  writeMirror_(league);
+  return Object.assign(out, { rev: rev + 1 });
 }
 
 /* ---- 시트의 순위·경기 기록 탭 ----
