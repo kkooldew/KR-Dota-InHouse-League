@@ -371,10 +371,10 @@ function register_(body) {
   const result = withLock_(() => {
     const sheet = getSheet_();
     const rows = readRows_(sheet);
-    if (rows.length >= MAX_ROWS) fail_('등록 인원이 가득 찼습니다. 운영진에게 문의해 주세요.');
 
     // 예전에 사용자 지정 주소로 저장된 줄(id:이름)도 같은 사람으로 알아본다
     const mine = rows.find(r => sameSteam_(r, steam));
+    if (!mine && rows.length >= MAX_ROWS) fail_('등록 인원이 가득 찼습니다. 운영진에게 문의해 주세요.');   // 이미 등록한 사람의 수정은 가득 차도 받는다
     const nickOwner = rows.find(r => nameKey_(r.nickname) === nameKey_(nickname));
     const discordOwner = rows.find(r => r.discord === discord);
 

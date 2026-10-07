@@ -434,7 +434,9 @@ ol.steps li + li{margin-top:3px}
     const prev = p.status;
     sel.disabled = true;
     try{
-      await adminPost({action: 'adminSetStatus', steamKey: p.steamKey, status: sel.value});
+      const r = await adminPost({action: 'adminSetStatus', steamKey: p.steamKey, status: sel.value});
+      // 그사이 시트에서 그 줄이 지워졌거나 새 시즌이 시작됐으면 바뀐 줄이 없다. 바뀐 척하지 않고 명단을 다시 읽는다
+      if(!r.changed){ toast('명단에서 ' + p.nickname + ' 선수를 찾지 못했습니다. 명단을 새로 읽습니다.'); await reload(); return; }
       p.status = sel.value;
       toast(p.nickname + ' 선수를 ' + ({승인: '승인했습니다', 대기: '대기로 돌렸습니다', 제외: '제외했습니다'})[p.status]);
     }catch(err){
@@ -447,7 +449,8 @@ ol.steps li + li{margin-top:3px}
     const keys = players.filter(p => p.status === '대기').map(p => p.steamKey);
     if(!keys.length || !confirm('대기 중인 ' + keys.length + '명을 모두 승인할까요?')) return;
     try{
-      await adminPost({action: 'adminSetStatus', steamKeys: keys, status: '승인'});
+      const r = await adminPost({action: 'adminSetStatus', steamKeys: keys, status: '승인'});
+      if(r.changed !== keys.length){ toast(r.changed + '명을 승인했습니다. 명단이 그사이 바뀌어 새로 읽습니다.'); await reload(); return; }
       players.forEach(p => { if(p.status === '대기') p.status = '승인'; });
       render(); toast(keys.length + '명을 승인했습니다');
     }catch(err){ toast(err.message); }

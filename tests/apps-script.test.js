@@ -461,6 +461,24 @@ assert(props.ADMIN_KEY === key, 'running setup again keeps the admin key');
     'upgrade: missing headers are filled in on every season tab, rows untouched');
 })();
 
+// 등록이 가득 찼을 때(3000줄): 새 등록은 받지 않지만, 이미 등록한 사람은 승인 전이면 계속 고칠 수 있다
+(() => {
+  const S = makeEnv({ fresh: true });
+  S.env.setup();
+  const post = body => JSON.parse(S.env.doPost({ postData: { contents: JSON.stringify(body) } }).text);
+  const form = { action: 'register', nickname: '먼저온선수', steam: 'https://steamcommunity.com/profiles/76561198000000001', discord: 'early_bird', mmr: 3000, prefs: [1, 2, 3, 4] };
+  assert(post(form).ok, 'full sheet: someone registered before it filled up');
+  const grid = S.tabs[0].grid;
+  S.tabs[0].insertRowsAfter(1000, 2500);                   // 가짜 시트는 1000줄로 시작한다. 실제 시트는 줄을 더하면 저절로 늘어난다
+  for (let i = grid.length; i <= 3000; i++)
+    grid.push(['', '', '대기', '채움' + i, '', 's:76561199' + String(i).padStart(8, '0'), 'filler' + i, 1000, '캐리', '미드', '오프', '서폿', '', '']);
+  Object.keys(S.cache).filter(k => k.startsWith('rl:')).forEach(k => delete S.cache[k]);
+  let r = post({ ...form, nickname: '늦게온선수', steam: 'https://steamcommunity.com/profiles/76561198000000002', discord: 'late_bird' });
+  assert(!r.ok && /가득 찼습니다/.test(r.error) && grid.length === 3001, 'full sheet: a new registration is refused');
+  r = post({ ...form, mmr: 3200 });
+  assert(r.ok && r.updated === true && grid[1][7] === 3200, 'full sheet: an existing registration can still be edited');
+})();
+
 // 리그 기록이 한 번도 올라오지 않은 채 시즌을 바꾸면 보관할 것도 비울 것도 없다
 (() => {
   const S = makeEnv({ fresh: true });
