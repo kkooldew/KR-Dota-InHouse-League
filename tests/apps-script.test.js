@@ -289,9 +289,25 @@ assert(props.ADMIN_KEY === key, 'running setup again keeps the admin key');
   // 새 시즌 시작
   r = post({ action: 'adminNewSeason', key: 'nope', season: '시즌 2' }); assert(!r.ok && r.code === 'auth', 'starting a season needs key');
   r = post({ action: 'adminNewSeason', key, season: '   ' }); assert(!r.ok && r.code === 'season', 'a new season needs a name');
-  r = post({ action: 'adminNewSeason', key, season: ' 시즌1 ' }); assert(!r.ok && r.code === 'season' && S.tabs.length === 3, 'a new season cannot reuse a name (spaces ignored)');
+  // 되돌릴 수 없는 일이라 확인 문구("시즌 변경")를 함께 보낸 요청만 받는다
+  const newSeason = (season, word = '시즌 변경') => post({ action: 'adminNewSeason', key, season, confirm: word });
   r = post({ action: 'adminNewSeason', key, season: '시즌 2' });
+  assert(!r.ok && r.code === 'confirm' && r.error.includes('시즌 변경') && S.tabs.length === 3 && status().season === '시즌 1', 'starting a season without the confirmation phrase is refused');
+  assert(['시즌변경', ' 시즌 변경', '시즌 변경!', 'yes', true].every(word => newSeason('시즌 2', word).code === 'confirm') && S.tabs.length === 3 && post({ action: 'adminLeague', key }).rev === 1,
+    'a wrong confirmation phrase changes nothing');
+  r = newSeason(' 시즌1 '); assert(!r.ok && r.code === 'season' && S.tabs.length === 3, 'a new season cannot reuse a name (spaces ignored)');
+  r = post({ action: 'adminList', key });
+  assert(r.seasonNo === 0 && r.current === 0 && r.season === '시즌 1' && r.players.length === 11, 'the admin list tells which season it is (by number)');
+  r = newSeason('시즌 2');
   assert(r.ok && r.season === '시즌 2' && r.registered === 0 && r.pastSeasons.join() === '시즌 1', 'new season starts with an empty roster');
+  // 끝난 시즌의 명단은 시즌 번호로 다시 볼 수 있다 (봇이 지난 시즌 선수에게서 역할을 거둘 때 쓴다)
+  r = post({ action: 'adminList', key });
+  assert(r.seasonNo === 1 && r.current === 1 && r.season === '시즌 2' && r.players.length === 0, 'the season number goes up with a new season');
+  r = post({ action: 'adminList', key, seasonNo: 0 });
+  assert(r.ok && r.season === '시즌 1' && r.seasonNo === 0 && r.current === 1 && r.players.length === 11 && r.players.filter(p => p.status === '승인').length === 8
+    && r.players.some(p => p.discord === '223456789012345678'), 'a past season\'s roster can be read by its number');
+  assert([5, -1, 1.5, 'x'].every(no => post({ action: 'adminList', key, seasonNo: no }).code === 'season') && post({ action: 'adminList', key: 'nope', seasonNo: 0 }).code === 'auth',
+    'unknown season numbers are refused; the key is still needed');
   assert(S.tabs[0].getName() === '선수등록 (시즌 2)' && S.sheets['선수등록 (시즌 1)'].grid.length === 12 && S.sheets['선수등록 (시즌 2)'].grid.length === 1
     && S.sheets['선수등록 (시즌 2)'].grid[0][C.peak] === '최고MMR', 'new season: a new tab in front, last season kept in its own tab');
   assert(post({ action: 'adminList', key }).players.length === 0 && status().season === '시즌 2', 'admin list and public status follow the new season');
@@ -366,7 +382,7 @@ assert(props.ADMIN_KEY === key, 'running setup again keeps the admin key');
   post({ action: 'adminSetStatus', key, steamKeys: [2, 5, 6, 7, 8, 10].map(n => 's:' + steamId(n)), status: '승인' });       // 3번은 시즌 2에서 대기로 남는다
   r = post({ action: 'saveLeague', key, league: { settings, matches: [], players: [member(1, 3500), member(7, 3650)] }, baseRev: 2 });
   assert(r.ok && r.rev === 3, 'season 2 league saved');
-  r = post({ action: 'adminNewSeason', key, season: '시즌 3' });
+  r = newSeason('시즌 3');
   assert(r.ok && r.pastSeasons.join() === '시즌 1,시즌 2' && tabNames().startsWith('선수등록 (시즌 3) | 선수등록 (시즌 2) | 선수등록 (시즌 1)')
     && S.sheets['순위 (시즌 2)'] && S.sheets['순위 (시즌 1)'] && post({ action: 'adminLeague', key }).rev === 4, 'third season');
   r = reg(1);
@@ -384,12 +400,14 @@ assert(props.ADMIN_KEY === key, 'running setup again keeps the admin key');
   S.tabs.splice(S.tabs.findIndex(t => t.getName() === '선수등록 (시즌 2)'), 1);     // 운영진이 지난 시즌의 등록 탭을 지웠다
   r = reg(5, { steam: 'https://steamcommunity.com/id/Returner' });
   assert(r.returning && r.from === '시즌 1' && r.mmr === 3777, 'a deleted season tab is skipped');
+  r = post({ action: 'adminList', key, seasonNo: 1 });
+  assert(r.ok && r.season === '시즌 2' && r.players.length === 0, 'a deleted season tab reads as an empty roster');
 
   // 새 시즌을 시작하다 리그 기록을 비우지 못한 경우(구글 드라이브가 잠깐 답하지 않을 때): 시즌은 바뀌고, 다음 요청에서 이어서 비운다
   post({ action: 'saveLeague', key, league: { settings, matches: [], players: [member(1, 3600)] }, baseRev: 4 });
   const getFile = S.env.DriveApp.getFileById;
   S.env.DriveApp.getFileById = id => Object.assign(getFile(id), { setContent() { throw new Error('드라이브 오류'); } });
-  r = post({ action: 'adminNewSeason', key, season: '시즌 4' });
+  r = newSeason('시즌 4');
   assert(r.ok && r.season === '시즌 4' && seasons()[3].leaguePending === true && post({ action: 'adminLeague', key }).league.players.length === 1 && seasons()[2].league,
     'drive failing during the reset: the season still starts and the ended league is already archived');
   S.env.DriveApp.getFileById = getFile;
@@ -403,12 +421,15 @@ assert(props.ADMIN_KEY === key, 'running setup again keeps the admin key');
   r = post({ action: 'adminConfig', key, season: '시즌1' }); assert(!r.ok && r.code === 'season' && status().season === '시즌 4', 'the current season cannot take a past season\'s name');
   r = post({ action: 'adminConfig', key, season: '2027 봄: 시즌/4' });
   assert(r.ok && r.season === '2027 봄: 시즌/4' && S.tabs[0].getName() === '선수등록 (2027 봄 시즌 4)' && r.registered === 1, 'renaming: characters a tab cannot hold are dropped from the tab name only');
+  assert(post({ action: 'adminList', key }).seasonNo === 3, 'renaming the season does not change its number (so the bot does not take it for a new season)');
   S.tabs.push(Object.assign(Object.create(S.tabs[0]), { getName: () => '선수등록 (시즌 5)', getSheetId: () => -1 }));   // 운영진이 손으로 만든 같은 이름의 탭
-  r = post({ action: 'adminNewSeason', key, season: '시즌 5' });
+  r = newSeason('시즌 5');
   assert(r.ok && S.tabs[0].getName() === '선수등록 (시즌 5) 2' && r.registered === 0 && S.sheets['순위 (2027 봄 시즌 4)'], 'tab name already taken: a number is added');
   S.tabs.splice(0, 1);                                     // 지금 시즌의 탭이 지워졌다
   r = ping();
   assert(r.ok && r.registered === 0 && r.season === '시즌 5' && S.tabs[0].grid[0][C.nick] === '닉네임' && reg(40).ok && S.tabs[0].grid.length === 2, 'a deleted current tab is made again');
+  r = post({ action: 'adminList', key });
+  assert(r.seasonNo === 4 && r.players.length === 1, 'and the season keeps its number');
 
   // 칸이 늘어난 버전으로 올렸을 때: 이미 있는 시즌 탭들에 새 머리글을 채운다
   const season1 = S.sheets['선수등록 (시즌 1)'].grid;
@@ -424,7 +445,7 @@ assert(props.ADMIN_KEY === key, 'running setup again keeps the admin key');
   const post = body => JSON.parse(S.env.doPost({ postData: { contents: JSON.stringify(body) } }).text);
   S.env.setup();
   const key = S.props.ADMIN_KEY;
-  const r = post({ action: 'adminNewSeason', key, season: '시즌 2' });
+  const r = post({ action: 'adminNewSeason', key, season: '시즌 2', confirm: '시즌 변경' });
   const list = JSON.parse(S.props.SEASONS);
   assert(r.ok && !('league' in list[0]) && list[0].endedAt && !('leaguePending' in list[1]) && post({ action: 'adminLeague', key }).rev === 0 && !S.sheets['순위'],
     'starting a season before any league record exists changes the registration tab only');

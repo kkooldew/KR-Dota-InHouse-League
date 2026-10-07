@@ -14,7 +14,7 @@
  * 코드를 고친 뒤에는 배포 → 배포 관리 → 수정(연필) → 버전: 새 버전 → 배포 를 눌러야 반영됩니다.
  */
 
-const SERVER_VERSION = 7;                                // 서버를 고칠 때마다 올린다. 상태 응답에 실려서 새 버전이 배포됐는지 밖에서 확인할 수 있다
+const SERVER_VERSION = 8;                                // 서버를 고칠 때마다 올린다. 상태 응답에 실려서 새 버전이 배포됐는지 밖에서 확인할 수 있다
 const SHEET_NAME = '선수등록';                             // 등록 탭 이름의 앞부분. 시즌마다 '선수등록 (시즌 이름)' 탭을 따로 쓴다
 // 칸을 더할 때는 맨 뒤에 붙이고 LAYOUT 을 올린다. 이미 있는 탭에는 ready_ 가 새 머리글을 채워 넣는다
 const HEADERS = ['등록시각', '수정시각', '상태', '닉네임', '스팀프로필', '스팀키', '디스코드', 'MMR', '1지망', '2지망', '3지망', '4지망', '비고', '최고MMR'];
@@ -27,6 +27,7 @@ const MAX_ROWS = 3000;
 const ROSTER_MAX = 60;
 const STEAM_TRIES = 4;                                     // 스팀 조회를 몇 번까지 시도할지
 const LEAGUE_MAX = 8000000;                                // 리그 기록의 최대 크기(글자 수)
+const SEASON_WORD = '시즌 변경';                            // 새 시즌을 시작할 때 운영진이 직접 입력해야 하는 확인 문구
 
 /* =========================================================
    설치: 편집기에서 setup 을 한 번 실행하세요
@@ -80,7 +81,7 @@ function doPost(e) {
     switch (body.action) {
       case 'register': return register_(body);
       case 'ping': requireAdmin_(body); return adminStatus_();
-      case 'adminList': requireAdmin_(body); return { players: listRegistrations_(), season: statusInfo_().season };   // 시즌 이름은 봇이 시즌이 바뀐 것을 알아보는 데 쓴다
+      case 'adminList': requireAdmin_(body); return listSeason_(body);
       case 'adminSetStatus': requireAdmin_(body); return setStatus_(body);
       case 'adminConfig': requireAdmin_(body); return setConfig_(body);
       case 'adminNewSeason': requireAdmin_(body); return newSeason_(body);
@@ -272,6 +273,9 @@ function renameSeason_(v) {
 function newSeason_(body) {
   const name = seasonName_(body.season);
   if (!name) fail_('새 시즌의 이름을 넣어 주세요', 'season');
+  // 되돌릴 수 없는 일이라, 운영진 페이지에서 바뀌는 것들을 보고 확인 문구를 직접 입력한 요청만 받는다
+  if (body.confirm !== SEASON_WORD)
+    fail_('새 시즌을 시작하려면 확인 문구("' + SEASON_WORD + '")를 입력해야 합니다. 운영진 페이지를 새로 고친 뒤 다시 해 주세요.', 'confirm');
   return withLock_(() => {
     const props = PropertiesService.getScriptProperties();
     const list = seasons_();
@@ -666,8 +670,20 @@ function toIso_(v) {
   return v instanceof Date && !isNaN(v) ? v.toISOString() : '';
 }
 
-function listRegistrations_() {
-  return readRows_(getSheet_()).map(r => ({
+// 등록 명단. 보통은 지금 시즌의 것이고, seasonNo(시즌 번호: 첫 시즌이 0)를 주면 그 시즌의 명단을 돌려준다.
+// 시즌 번호는 시즌 이름을 고치거나 탭을 다시 만들어도 바뀌지 않는다. 봇이 시즌이 넘어간 것을 알아보고,
+// 끝난 시즌의 선수에게서 역할을 거둘 때 쓴다.
+function listSeason_(body) {
+  const list = seasons_();
+  const last = list.length - 1;
+  const no = body.seasonNo === undefined || body.seasonNo === null ? last : Number(body.seasonNo);
+  if (!Number.isInteger(no) || no < 0 || no > last) fail_('그런 시즌이 없습니다', 'season');
+  const sheet = no === last ? getSheet_() : sheetById_(SpreadsheetApp.getActiveSpreadsheet(), list[no].id);
+  return { players: sheet ? listRegistrations_(sheet) : [], season: list[no].name, seasonNo: no, current: last };
+}
+
+function listRegistrations_(sheet) {
+  return readRows_(sheet).map(r => ({
     registeredAt: r.registeredAt,
     updatedAt: r.updatedAt,
     status: r.status,

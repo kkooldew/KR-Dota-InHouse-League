@@ -126,6 +126,10 @@ class InhouseBot(discord.Client):
         self.player_role_id = PLAYER_ROLE_ID
         self.role_seen: dict[str, dict] = {}
         self.role_season = ""
+        # 마지막으로 맞춘 시즌의 번호(서버가 알려 준다. 아직 모르면 None). 서버의 번호가 더 크면 시즌이 넘어간 것이라 역할을 거둔다.
+        # role_revoke 는 거두는 중인 일 {"to": 새 시즌 번호, "left": [아직 확인하지 않은 디스코드], "removed": 거둔 수, "total": 전체}
+        self.role_season_no: int | None = None
+        self.role_revoke: dict | None = None
         self.role_note = ""  # 마지막으로 관리자 채널에 알린 문제. 같은 문제를 1분마다 다시 알리지 않으려고 적어 둔다
         self.role_lock: asyncio.Lock | None = None
         self.role_task: asyncio.Task | None = None
@@ -383,7 +387,8 @@ def save_state() -> None:
         data = {
             "current": cur.to_dict() if cur is not None and cur.message is not None else None,
             "lineups": bot.lineups,
-            "roles": {"role_id": bot.player_role_id, "season": bot.role_season, "seen": bot.role_seen},
+            "roles": {"role_id": bot.player_role_id, "season": bot.role_season, "season_no": bot.role_season_no,
+                      "seen": bot.role_seen, "revoke": bot.role_revoke},
         }
         tmp = STATE_PATH.with_suffix(".tmp")
         tmp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
@@ -403,7 +408,9 @@ async def restore_state() -> None:
     if isinstance(roles, dict):  # /선수역할 로 정한 역할과, 누구까지 맞췄는지
         bot.player_role_id = int(roles.get("role_id") or 0) or PLAYER_ROLE_ID
         bot.role_season = str(roles.get("season") or "")
+        bot.role_season_no = roles.get("season_no") if isinstance(roles.get("season_no"), int) else None
         bot.role_seen = {k: v for k, v in (roles.get("seen") or {}).items() if isinstance(v, dict)}
+        bot.role_revoke = roles.get("revoke") if isinstance(roles.get("revoke"), dict) else None
     cur = data.get("current")
     if not cur or not cur.get("message_id"):
         return
@@ -864,8 +871,9 @@ async def find_member(guild: discord.Guild, name: str) -> discord.Member | None:
 async def sync_roles(force: bool = False) -> dict:
     """등록 명단의 상태에 맞춰 역할을 주고 뺀다. 이미 맞춘 등록은 건너뛰고, 상태나 디스코드가 바뀐 등록만 다시 본다.
     force 면 서버에서 찾지 못했던 사람도 기다리지 않고 다시 찾아본다.
-    돌려주는 값: {"added": [멤버], "removed": [멤버], "missing": [등록], "problem": 까닭, "left": 다음 차례로 미룬 수}"""
-    out = {"added": [], "removed": [], "missing": [], "problem": "", "left": 0}
+    시즌이 넘어간 것을 알면 먼저 지난 시즌 선수의 역할을 거둔다(봇이 꺼져 있는 동안 넘어갔으면 켠 뒤의 첫 차례에 한다).
+    돌려주는 값: {"added": [멤버], "removed": [멤버], "missing": [등록], "problem": 까닭, "left": 다음 차례로 미룬 수, "revoked": 거둔 결과}"""
+    out = {"added": [], "removed": [], "missing": [], "problem": "", "left": 0, "revoked": None}
     if not bot.player_role_id or not (SYNC_URL and SYNC_KEY):
         return out
     async with bot.role_lock:
@@ -876,9 +884,23 @@ async def sync_roles(force: bool = False) -> dict:
         if out["problem"]:
             return out
 
-        season = str(data.get("season") or "")
-        if season != bot.role_season:  # 시즌이 바뀌면 명단이 새로 시작하므로 처음부터 다시 맞춘다
-            bot.role_season, bot.role_seen = season, {}
+        season, no = str(data.get("season") or ""), data.get("seasonNo")
+        if not isinstance(no, int):  # 시즌 번호를 주지 않는 예전 서버: 이름이 바뀌면 명단을 처음부터 다시 맞추기만 한다
+            if season != bot.role_season:
+                bot.role_seen = {}
+        elif bot.role_season_no is None:  # 처음 본 시즌. 거둘 것은 없다
+            bot.role_season_no = no
+            save_state()
+        elif no < bot.role_season_no:  # 번호가 줄었다: 다른 시트(서버)로 옮긴 경우. 처음부터 다시 맞춘다
+            bot.role_season_no, bot.role_seen, bot.role_revoke = no, {}, None
+            save_state()
+        elif no > bot.role_season_no and bot.role_revoke is None:  # 시즌이 넘어갔다. 끝난 시즌의 선수에게서 역할을 거둔다
+            bot.role_revoke = await revoke_plan(bot.role_season_no, no, data)
+            save_state()
+        bot.role_season = season
+        if bot.role_revoke is not None:
+            if not await revoke_step(guild, role, out):
+                return out  # 다 거둔 뒤에 새 시즌의 승인 선수에게 준다
         seen, now, tried, changed = bot.role_seen, time.time(), 0, False
         for p in data.get("players") or []:
             key, status, name = str(p.get("steamKey") or p.get("discord") or ""), p.get("status"), str(p.get("discord") or "")
@@ -921,9 +943,64 @@ async def sync_roles(force: bool = False) -> dict:
     return out
 
 
+async def revoke_plan(old_no: int, new_no: int, current: dict) -> dict:
+    """시즌이 넘어갔을 때 역할을 거둘 사람을 모은다: 끝난 시즌들(old_no 부터 new_no 앞까지)의 등록 명단에 있는 사람과, 봇이 역할을 줬던 사람.
+    새 시즌에 이미 승인된 사람은 뺀다(거뒀다가 바로 다시 주지 않으려고).
+    누가 역할을 갖고 있는지를 디스코드에 물을 수는 없어서(특권 인텐트가 필요하다) 명단으로 찾는다.
+    그래서 등록한 적 없이 손으로 역할을 받은 사람은 여기에 들어가지 않는다."""
+    keep = {str(p.get("discord") or "") for p in current.get("players") or [] if p.get("status") == "승인"}
+    names: list[str] = []
+
+    def add(name) -> None:
+        name = str(name or "")
+        if name and name not in keep and name not in names:
+            names.append(name)
+
+    for k in range(old_no, new_no):
+        past = await call_server({"action": "adminList", "seasonNo": k})
+        for p in past.get("players") or []:
+            add(p.get("discord"))
+    for v in bot.role_seen.values():
+        add(v.get("discord"))
+    return {"to": new_no, "left": names, "removed": 0, "total": len(names), "stuck": 0}
+
+
+async def revoke_step(guild: discord.Guild, role: discord.Role, out: dict) -> bool:
+    """거둘 사람을 한 번에 ROLE_BATCH 명까지 확인해 역할을 뺀다. 다 끝났으면 True (그때 새 시즌으로 넘어간다)."""
+    plan = bot.role_revoke
+    for _ in range(ROLE_BATCH):
+        if not plan["left"]:
+            break
+        name = plan["left"][0]
+        try:
+            member = await find_member(guild, name)
+            if member is not None and role in member.roles:
+                await member.remove_roles(role, reason="인하우스 리그 시즌 종료")
+                plan["removed"] += 1
+        except discord.Forbidden:
+            out["problem"] = "시즌이 바뀌어 역할을 거두려 했지만 권한이 없어요. 봇에 **역할 관리** 권한이 있는지, 봇의 역할이 그 역할보다 위에 있는지 확인해 주세요."
+            break
+        except (discord.HTTPException, asyncio.TimeoutError) as e:  # 디스코드가 잠깐 답하지 않았다. 다음 차례에 이어서 한다
+            print(f"참여 선수 역할: {name} 의 역할을 거두지 못했습니다: {e!r}")
+            plan["stuck"] = plan.get("stuck", 0) + 1
+            if plan["stuck"] < 5:
+                break
+        plan["left"].pop(0)  # 다섯 번 내리 실패한 사람은 건너뛴다 (한 사람 때문에 멈춰 있지 않게)
+        plan["stuck"] = 0
+    if plan["left"]:
+        save_state()
+        return False
+    out["revoked"] = {"removed": plan["removed"], "total": plan["total"]}
+    bot.role_season_no, bot.role_seen, bot.role_revoke = plan["to"], {}, None
+    save_state()
+    return True
+
+
 def roles_text(out: dict) -> str:
     """역할을 맞춘 결과를 관리자 채널에 알릴 글. 알릴 것이 없으면 빈 글."""
     lines = []
+    if out.get("revoked"):
+        lines.append(f"🔄 시즌이 바뀌어 지난 시즌 선수의 역할을 거뒀어요: {out['revoked']['removed']}명 (명단 {out['revoked']['total']}명 확인)")
     if out["added"]:
         lines.append("✅ 승인 → 역할을 줬어요: " + ", ".join(m.mention for m in out["added"]))
     if out["removed"]:
@@ -1137,7 +1214,8 @@ async def player_role(interaction: discord.Interaction, role: Optional[discord.R
     await interaction.response.defer()
     quiet = discord.AllowedMentions.none()
     if off:
-        bot.player_role_id, bot.role_seen = 0, {}
+        # 꺼 둔 동안 시즌이 넘어가도, 다시 켰을 때 역할을 거두지 않도록 시즌 번호도 잊는다
+        bot.player_role_id, bot.role_seen, bot.role_season_no, bot.role_revoke = 0, {}, None, None
         save_state()
         await interaction.followup.send("🎫 참여 선수 역할 자동 부여를 껐어요. 이미 준 역할은 그대로 둡니다. 다시 켜려면 `/선수역할` 에서 역할을 골라 주세요.")
         return
@@ -1147,7 +1225,7 @@ async def player_role(interaction: discord.Interaction, role: Optional[discord.R
             await interaction.followup.send(f"🎫 {role.mention} 역할로는 켤 수 없어요. {problem}", allowed_mentions=quiet)
             return
         if role.id != bot.player_role_id:
-            bot.player_role_id, bot.role_seen = role.id, {}  # 역할이 바뀌면 처음부터 다시 맞춘다
+            bot.player_role_id, bot.role_seen, bot.role_revoke = role.id, {}, None  # 역할이 바뀌면 처음부터 다시 맞춘다
             save_state()
     if not bot.player_role_id:
         await interaction.followup.send("🎫 참여 선수 역할 자동 부여가 꺼져 있어요. `/선수역할` 에서 **역할**을 고르면, 운영진 페이지에서 승인한 선수에게 그 역할을 주고 제외한 선수에게서는 뺍니다.")
@@ -1165,6 +1243,9 @@ async def player_role(interaction: discord.Interaction, role: Optional[discord.R
     done = roles_text(out).replace("🎫 **참여 선수 역할**\n", "")  # 문제가 생기기 전에 처리한 것이 있으면 그것도 알린다
     if out["problem"]:
         text = "🎫 **참여 선수 역할**을 맞추지 못했어요. " + out["problem"] + (f"\n{done}" if done else "")
+    elif bot.role_revoke is not None:  # 시즌이 넘어가 역할을 거두는 중이다. 한 번에 다 하지 못하면 다음 차례에 이어서 한다
+        text = (f"🎫 시즌이 바뀌어 지난 시즌 선수의 <@&{bot.player_role_id}> 역할을 거두는 중이에요. "
+                f"(남은 사람 {len(bot.role_revoke['left'])}명) 다 거둔 뒤에 새 시즌의 승인 선수에게 줍니다.")
     else:
         head = f"🎫 승인한 선수에게 <@&{bot.player_role_id}> 역할을 자동으로 줍니다. 제외하면 뺍니다. (1분마다 확인)"
         more = f"\n나머지 {out['left']}명은 이어서 처리합니다." if out["left"] else ""

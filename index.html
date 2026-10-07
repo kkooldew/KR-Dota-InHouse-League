@@ -8,9 +8,49 @@
 <meta name="theme-color" content="#141a20">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Oswald:wght@400;500;600&family=Noto+Sans+KR:wght@400;500;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Oswald:wght@400;500;600&family=Noto+Sans+KR:wght@400;500;700;900&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="assets/site.css">
 <style>
+/* 첫 화면: 시즌과 모집 여부를 크게 보여 주고, 시작하기를 누르면 입력 화면으로 넘어간다 */
+body.at-intro{background:
+  radial-gradient(880px 520px at 6% -8%, rgba(189,68,56,.17), transparent 70%),
+  radial-gradient(900px 560px at 98% 110%, rgba(216,171,63,.13), transparent 70%),
+  var(--ink);background-attachment:fixed}
+body.at-intro .site-head{background:transparent}
+body.at-intro .site-foot{margin-top:0}
+.intro{min-height:calc(100vh - 190px);min-height:calc(100dvh - 190px);display:flex;flex-direction:column;align-items:center;justify-content:center;
+  text-align:center;padding:28px 0 52px}
+.intro-eyebrow{margin:0 0 20px;font-family:var(--num);font-weight:600;font-size:14px;letter-spacing:.42em;text-indent:.42em;color:var(--gold)}
+.intro-title{margin:0;min-height:2.24em;font-size:clamp(46px,11.5vw,108px);font-weight:900;line-height:1.12;letter-spacing:-.03em;color:#f3eee2}
+.intro-title.long{font-size:clamp(36px,8.2vw,76px)}
+.intro-title span{display:block}
+.intro-state{color:var(--gold)}
+.intro-title.closed .intro-state{color:var(--bone-dim)}
+.intro-steps{list-style:none;display:flex;flex-wrap:wrap;justify-content:center;gap:8px 10px;margin:34px 0 0;padding:0;counter-reset:step;font-size:15px;font-weight:500}
+.intro-steps li{counter-increment:step;display:flex;align-items:center;gap:8px}
+.intro-steps li::before{content:counter(step);display:grid;place-items:center;width:24px;height:24px;border-radius:50%;
+  border:1px solid var(--gold-dim);color:var(--gold);font-family:var(--num);font-size:13px}
+.intro-steps li + li::after{content:"→";order:-1;color:var(--faint);margin-right:2px}
+.intro-lead{margin:14px 0 0;max-width:54ch;font-size:clamp(15px,2vw,17px);color:var(--bone-dim);text-wrap:balance}
+.start{display:inline-flex;align-items:center;justify-content:center;min-width:250px;margin-top:38px;padding:21px 46px;border:0;border-radius:999px;
+  background:linear-gradient(135deg,#f6d36a,#c5942a);color:#241d09;font-size:22px;font-weight:900;text-decoration:none;
+  box-shadow:0 14px 44px rgba(216,171,63,.24);transition:transform .12s,box-shadow .12s}
+.start:hover{transform:translateY(-2px);box-shadow:0 20px 50px rgba(216,171,63,.32)}
+.start:active{transform:translateY(1px)}
+.start.plain{background:none;border:1px solid var(--line);color:var(--bone);box-shadow:none;font-weight:700;font-size:17px;padding:16px 34px}
+.start.plain:hover{border-color:var(--bone-dim);box-shadow:none}
+.intro-fine{margin:18px 0 0;font-size:13px;color:var(--faint)}
+.back{display:inline-block;margin:0 0 14px;font-size:13px;color:var(--bone-dim);text-decoration:none}
+.back:hover{color:var(--bone)}
+@media (max-width:640px){
+  .intro{min-height:calc(100dvh - 230px);padding:20px 0 40px}
+  .intro-eyebrow{font-size:12px;letter-spacing:.34em;text-indent:.34em}
+  .intro-steps{flex-direction:column;align-items:center;gap:8px;font-size:14.5px}
+  .intro-steps li + li::after{content:none}
+  .start{width:100%;min-width:0}
+}
+@media (prefers-reduced-motion:reduce){ .start{transition:none} }
+
 .reg{max-width:640px}
 .state-line{margin:-14px 0 22px;font-size:14px;color:var(--bone-dim)}
 /* 칸 번호는 순서대로 세어 붙인다 (칸을 더하거나 빼도 번호를 고칠 필요가 없다) */
@@ -72,7 +112,22 @@
 <header id="site-head"></header>
 
 <main class="wrap">
-  <div class="reg">
+  <section class="intro" id="intro">
+    <p class="intro-eyebrow">DOTA 2 IN-HOUSE LEAGUE</p>
+    <h1 class="intro-title" id="introTitle"><span id="introSeason" hidden></span><span class="intro-state" id="introState"></span></h1>
+    <ol class="intro-steps" id="introSteps" hidden>
+      <li>정보 입력</li>
+      <li>운영진 승인</li>
+      <li>디스코드에서 내전 참여</li>
+    </ol>
+    <p class="intro-lead" id="introLead">등록 상태를 확인하고 있습니다.</p>
+    <button class="start" type="button" id="btnStart" hidden>시작하기</button>
+    <a class="start plain" id="introDiscord" target="_blank" rel="noopener" hidden>디스코드 서버 들어가기</a>
+    <p class="intro-fine" id="introFine" hidden>지난 시즌에 참가한 선수도 같은 양식으로 등록합니다.</p>
+  </section>
+
+  <div class="reg" id="reg" hidden>
+    <a class="back" href="#">← 처음 화면</a>
     <h1 class="page-title">선수 등록</h1>
     <p class="page-lead">시즌에 참가하려면 아래 내용을 입력해 주세요. 운영진이 승인하기 전까지는 같은 스팀 프로필로 다시 제출해 정보를 고칠 수 있습니다. 지난 시즌에 참가한 선수도 같은 양식으로 등록합니다.</p>
     <p class="state-line" id="stateLine" hidden></p>
@@ -419,23 +474,55 @@
   });
   $('#again').addEventListener('click', () => { showForm(); $('#nickname').focus(); });
 
+  /* ---------- 첫 화면과 입력 화면 ---------- */
+  // 첫 화면에는 시즌과 모집 여부를 크게 보이고, 시작하기를 누르면 입력 화면으로 넘어간다.
+  // 주소 끝의 #form 으로 두 화면을 가르므로 브라우저의 뒤로 가기가 그대로 통한다.
+  let regOpen = false;                  // 서버가 등록을 받고 있는지. 상태를 받은 뒤에 정해지고, 닫혀 있으면 입력 화면으로 넘어가지 않는다
+  function route(){
+    const form = regOpen && location.hash === '#form';
+    $('#intro').hidden = form;
+    $('#reg').hidden = !form;
+    document.body.classList.toggle('at-intro', !form);
+  }
+  function intro(season, state, lead, closed){
+    $('#introSeason').textContent = season || '';
+    $('#introSeason').hidden = !season;
+    $('#introState').textContent = state;
+    $('#introTitle').className = 'intro-title' + (closed ? ' closed' : '') + ((season || '').length > 7 ? ' long' : '');
+    $('#introLead').textContent = lead;
+  }
+  window.addEventListener('hashchange', () => { route(); window.scrollTo(0, 0); });
+  $('#btnStart').addEventListener('click', () => { location.hash = 'form'; });
+
   /* ---------- 시작 ---------- */
-  if(L.discordInvite){ $('#doneInvite').href = L.discordInvite; $('#doneInvite').hidden = false; }
+  if(L.discordInvite){
+    $('#doneInvite').href = L.discordInvite; $('#doneInvite').hidden = false;
+    $('#introDiscord').href = L.discordInvite;
+  }
   syncPrefs();
+  route();
   if(!api.ready){
-    block('<p>등록 서버가 아직 연결되지 않았습니다.</p><p class="dim">운영진: config.js의 apiUrl에 Apps Script 웹 앱 주소를 넣어 주세요.</p>');
+    intro('', '준비 중입니다', '등록 서버가 아직 연결되지 않았습니다. 운영진: config.js의 apiUrl에 Apps Script 웹 앱 주소를 넣어 주세요.', true);
     return;
   }
   api.get('status').then(s => {
     setSeason(s.season);
-    if(!s.open){ block('<p>지금은 선수 등록 기간이 아닙니다. 다음 시즌 등록이 열리면 디스코드에서 알려 드립니다.</p>' + inviteHtml()); return; }
+    if(!s.open){
+      intro(s.season, '모집 마감', '지금은 선수 등록 기간이 아닙니다. 다음 시즌 등록이 열리면 디스코드에서 알려 드립니다.', true);
+      $('#introDiscord').hidden = !L.discordInvite;
+      return;
+    }
+    regOpen = true;
+    intro(s.season, '선수 모집 중', '닉네임, 스팀 프로필, 디스코드, MMR, 포지션 순서만 적으면 됩니다. 1분이면 충분합니다.');
+    $('#introSteps').hidden = false; $('#btnStart').hidden = false; $('#introFine').hidden = false;
     $('#stateLine').textContent = (s.season ? s.season + ' ' : '') + '선수 등록을 받고 있습니다.';
     $('#stateLine').hidden = false;
     // 최고 MMR은 서버 버전 7부터 저장한다. 서버가 아직 예전 버전이면 적어도 남지 않으므로 칸을 보이지 않는다
     fieldEl('peak').hidden = !((s.version || 0) >= 7);
     showForm();
+    route();
   }).catch(err => {
-    block('<p>' + Site.esc(err.message) + '</p>');
+    intro('', '연결하지 못했습니다', err.message, true);
   });
 })();
 </script>

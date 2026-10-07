@@ -93,6 +93,8 @@ class World:
         self.conflicts = 0        # 이 횟수만큼, 봇이 받아 간 사이에 매니저가 기록을 바꾼 것처럼 군다
         self.registered = []      # 서버의 등록 명단 (운영진 페이지에서 승인·제외하는 그 명단)
         self.season = "시즌 1"
+        self.season_no = None     # 시즌 번호. None 이면 번호를 주지 않는 예전 서버처럼 군다
+        self.past = {}            # 끝난 시즌의 등록 명단 {시즌 번호: 명단}
 
         async def call_server(payload):
             self.server.append(payload)
@@ -100,7 +102,12 @@ class World:
             if action in self.fail:
                 raise RuntimeError("서버 오류")
             if action == "adminList":
-                return {"ok": True, "players": [dict(p) for p in self.registered], "season": self.season}
+                k = payload.get("seasonNo")
+                if self.season_no is None:
+                    return {"ok": True, "players": [dict(p) for p in self.registered], "season": self.season}
+                if k is not None and k != self.season_no:
+                    return {"ok": True, "players": [dict(p) for p in self.past.get(k, [])], "season": f"시즌 {k + 1}", "seasonNo": k, "current": self.season_no}
+                return {"ok": True, "players": [dict(p) for p in self.registered], "season": self.season, "seasonNo": self.season_no, "current": self.season_no}
             if action == "adminLeague":
                 return {"ok": True, "league": self.league, "rev": self.rev}
             if action == "saveLeague":
@@ -123,6 +130,7 @@ class World:
         mod.bot.lineups = []
         mod.bot.role_lock = asyncio.Lock()
         mod.bot.player_role_id, mod.bot.role_seen, mod.bot.role_season, mod.bot.role_note = 0, {}, "", ""
+        mod.bot.role_season_no, mod.bot.role_revoke = None, None
         mod.STATE_PATH.unlink(missing_ok=True)
 
     def texts(self, mock):
@@ -942,6 +950,82 @@ async def main():
     n = len(w.server)
     await mod.role_tick()
     check("껐어요" in t and mod.bot.player_role_id == 0 and len(w.server) == n and json.loads(mod.STATE_PATH.read_text(encoding="utf-8"))["roles"]["role_id"] == 0, "/선수역할 끄기")
+
+    # ── 시즌이 넘어가면 지난 시즌 선수의 역할을 거둔다 (시즌 번호를 주는 서버) ──
+    w = World(mod, forum=True)
+    aa, bb, cc, dd, ee = member(31, "aa", [PLAYER]), member(32, "bb", [PLAYER]), member(33, "cc", [PLAYER]), member(34, "dd"), member(35, "ee", [PLAYER])
+    guild = Guild([aa, bb, cc, dd, ee])
+    guild.roles[500] = PLAYER
+    w.season_no = 0
+    w.registered = [entry(1, "승인", "aa"), entry(2, "승인", "bb"), entry(3, "대기", "cc"), entry(4, "제외", "dd")]      # ee 는 등록 없이 손으로 역할을 받은 사람
+    mod.bot.player_role_id = 500
+    await mod.role_tick()
+    check(mod.bot.role_season_no == 0 and mod.bot.role_revoke is None and not admin_said() and all(PLAYER in m.roles for m in (aa, bb, cc)), "처음 본 시즌에서는 아무것도 거두지 않는다")
+
+    w.season = "시즌 1 (이름 고침)"                                        # 운영진이 시즌 이름만 고쳤다
+    await mod.role_tick()
+    check(mod.bot.role_season_no == 0 and not admin_said() and PLAYER in aa.roles and "s:1" in mod.bot.role_seen, "시즌 이름만 바뀐 것은 새 시즌으로 보지 않는다")
+
+    w.past[0], w.season, w.season_no = w.registered, "시즌 2", 1
+    w.registered = [entry(2, "승인", "bb")]                               # bb 는 새 시즌에 벌써 다시 승인됐다
+    await mod.role_tick()
+    check(PLAYER not in aa.roles and PLAYER not in cc.roles and PLAYER in bb.roles and PLAYER in ee.roles,
+          "시즌이 넘어가면 지난 시즌 명단에 있던 사람의 역할을 거둔다 (새 시즌에 승인된 사람과, 명단에 없던 사람은 그대로)")
+    check("지난 시즌 선수의 역할을 거뒀어요: 2명 (명단 3명 확인)" in admin_said()[-1] and mod.bot.role_season_no == 1 and mod.bot.role_revoke is None and bb.remove_roles.await_count == 0,
+          "거둔 결과를 관리자 채널에 알리고, 새 시즌에 승인된 사람은 거뒀다 다시 주지 않는다")
+    check({"action": "adminList", "seasonNo": 0} in w.server, "끝난 시즌의 명단을 서버에서 받아 온다")
+    n = len(admin_said())
+    await mod.role_tick()
+    check(len(admin_said()) == n, "한 번 거둔 뒤에는 다시 하지 않는다")
+
+    # 봇이 꺼져 있는 동안 시즌이 넘어간 경우: 켠 뒤의 첫 차례에 거둔다
+    w.past[1], w.season, w.season_no, w.registered = w.registered, "시즌 3", 2, []
+    mod.bot.player_role_id, mod.bot.role_season_no, mod.bot.role_seen = 0, None, {}
+    await mod.restore_state()
+    check(mod.bot.player_role_id == 500 and mod.bot.role_season_no == 1, "껐다 켜도 마지막으로 맞춘 시즌을 기억한다")
+    await mod.role_tick()
+    check(PLAYER not in bb.roles and "역할을 거뒀어요: 1명" in admin_said()[-1] and mod.bot.role_season_no == 2, "봇이 꺼져 있는 동안 시즌이 넘어갔으면 켠 뒤에 거둔다")
+
+    # 거둘 사람이 많으면 여러 차례에 나눠 하고, 다 거둔 뒤에 새 시즌의 승인 선수에게 준다
+    many = [member(2000 + k, f"z{k:02d}", [PLAYER]) for k in range(70)]
+    guild.members.update({m.id: m for m in many})
+    w.past[2], w.season, w.season_no = [entry(500 + k, "승인", f"z{k:02d}") for k in range(70)], "시즌 4", 3
+    w.registered = [entry(900, "승인", "dd")]
+    n = len(admin_said())
+    await mod.role_tick()
+    check(sum(PLAYER in m.roles for m in many) == 40 and PLAYER not in dd.roles and mod.bot.role_season_no == 2 and len(mod.bot.role_revoke["left"]) == 40 and len(admin_said()) == n,
+          "한 번에 서른 명씩 거두고, 다 거둘 때까지 새 시즌의 역할은 주지 않는다")
+    saved = json.loads(mod.STATE_PATH.read_text(encoding="utf-8"))["roles"]
+    check(saved["season_no"] == 2 and len(saved["revoke"]["left"]) == 40, "거두던 일은 파일에 적어 두어, 껐다 켜도 이어서 한다")
+    t, _ = await run(mod.player_role, 100, ADMIN, None, None)
+    check("거두는 중이에요" in t and "남은 사람 10명" in t and "지금은 새로 주거나 뺄 사람이 없어요" not in t and PLAYER not in dd.roles,
+          "거두는 중에 /선수역할 을 입력하면 한 차례 더 거두고, 아직 남았다고 알린다")
+    await mod.role_tick()
+    await mod.role_tick()
+    check(all(PLAYER not in m.roles for m in many) and PLAYER in dd.roles and mod.bot.role_season_no == 3 and mod.bot.role_revoke is None, "다 거둔 뒤에 새 시즌의 승인 선수에게 역할을 준다")
+    check("역할을 거뒀어요: 70명 (명단 70명 확인)" in admin_said()[-1] and "역할을 줬어요: <@34>" in admin_said()[-1], "거둔 것과 준 것을 한 번에 알린다")
+
+    # 권한이 없으면 거두던 일을 남겨 두고 알린다
+    w.past[3], w.season, w.season_no, w.registered = w.registered, "시즌 5", 4, []
+    dd.remove_roles.side_effect = discord.Forbidden(Mock(status=403, reason="Forbidden"), "Missing Permissions")
+    await mod.role_tick()
+    check("시즌이 바뀌어 역할을 거두려 했지만 권한이 없어요" in admin_said()[-1] and PLAYER in dd.roles and mod.bot.role_revoke["left"] == ["dd"] and mod.bot.role_season_no == 3,
+          "거둘 권한이 없으면 까닭을 알리고 다음에 이어서 한다")
+
+    async def remove_ok(role, reason=None):
+        dd.roles.remove(role)
+
+    dd.remove_roles.side_effect = remove_ok
+    await mod.role_tick()
+    check(PLAYER not in dd.roles and mod.bot.role_season_no == 4 and mod.bot.role_revoke is None, "권한을 고치면 마저 거둔다")
+
+    # 꺼 둔 동안 시즌이 넘어간 것은, 다시 켰을 때 거두지 않는다
+    await run(mod.player_role, 100, ADMIN, None, True)
+    check(mod.bot.role_season_no is None and mod.bot.role_revoke is None, "/선수역할 끄기: 시즌 번호도 잊는다")
+    w.past[4], w.season, w.season_no, w.registered = [entry(1, "승인", "ee")], "시즌 6", 5, []
+    n = len(admin_said())
+    t, _ = await run(mod.player_role, 100, ADMIN, PLAYER, None)
+    check(PLAYER in ee.roles and mod.bot.role_season_no == 5 and "거뒀어요" not in t and len(admin_said()) == n, "다시 켜면 그때의 시즌부터 맞춘다 (지난 시즌 역할은 건드리지 않는다)")
     mod.SYNC_URL, mod.SYNC_KEY = "", ""
 
     for task in asyncio.all_tasks() - {asyncio.current_task()}:
