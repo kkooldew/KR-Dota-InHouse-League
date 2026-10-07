@@ -1,5 +1,5 @@
 const makeEnv = require('./gas-harness');
-const { env, grid, props, cache, steam, sheets } = makeEnv();
+const { env, grid, props, cache, steam, sheets, trashed } = makeEnv();
 const post = body => JSON.parse(env.doPost({ postData: { contents: JSON.stringify(body) } }).text);
 const get = action => JSON.parse(env.doGet({ parameter: action ? { action } : {} }).text);
 const assert = (c, m) => { if(!c){ console.log('FAIL', m); process.exitCode = 1; } else console.log('ok  ', m); };
@@ -72,6 +72,15 @@ const bad = [
 ];
 bad.forEach(([patch, code]) => { clearRL(); const res = post({ ...base, steam:'https://steamcommunity.com/profiles/76561198000000001', discord:'fresh_user', nickname:'신규', ...patch }); assert(!res.ok && res.code === code, 'invalid ' + code + ' ' + JSON.stringify(patch)); });
 
+// 예전 방식의 디스코드(이름#1234)는 받지 않는다. 이름 부분에 아무 글자나 넣을 수 있어서, 운영진 화면이나 디스코드 메시지로 흘러가면 위험했다
+['oldname#1234', '"><svg/onload=alert(1)>#1234', 'x@everyone#0001', '`x`**y**#9999'].forEach(d => {
+  clearRL();
+  const res = post({ ...base, steam:'https://steamcommunity.com/profiles/76561198000000001', discord: d, nickname:'신규' });
+  assert(!res.ok && res.code === 'discord' && /이름#1234 모양은 이제 쓰이지 않습니다/.test(res.error) && grid.length === 3, 'legacy discord tag is refused: ' + d);
+});
+r = JSON.parse(env.doPost({ postData: { contents: ' '.repeat(9200000) } }).text);
+assert(!r.ok && /너무 큽니다/.test(r.error), 'an oversized request is refused before it is parsed');
+
 clearRL();
 r = post({ ...base, website: 'spam' }); assert(r.ok && grid.length === 3, 'honeypot pretends success, writes nothing');
 
@@ -141,6 +150,16 @@ assert(!r.ok && r.code === 'conflict' && post({ action:'adminLeagueRev', key }).
   'save based on an older rev is refused and changes nothing');
 r = post({ action:'saveLeague', key, league: grown, baseRev: 1 });
 assert(r.ok && r.rev === 2 && get('records').records.players[0].mmr === 5200, 'save based on the current rev is accepted; ranking page follows');
+
+// 운영자가 드라이브를 정리하다 기록 파일을 휴지통에 버렸어도, 쓰는 파일이면 도로 꺼낸다 (그대로 두면 30일 뒤에 기록이 통째로 사라진다)
+trashed.add(props.LEAGUE_FILE_ID); trashed.add(props.RECORDS_FILE_ID);
+r = post({ action:'adminLeague', key });
+assert(r.ok && r.league.players[0].mmr === 5200 && !trashed.has(props.LEAGUE_FILE_ID), 'a league file found in the trash is taken back out when read');
+delete cache.records;
+assert(get('records').records.players[0].mmr === 5200 && !trashed.has(props.RECORDS_FILE_ID), 'the public records file too');
+// 모양이 깨진 항목이 섞여 있어도 공개 기록을 만들다 멈추지 않는다
+const cleaned = env.sanitizeRecords_({ players: [null, 'x', records.players[0]], matches: [{ id:'m', at:'', winner:'r', rows:[null, records.matches[0].rows[0]] }] });
+assert(cleaned.players.length === 1 && cleaned.players[0].name === 'A' && cleaned.matches[0].rows.length === 1, 'broken entries are dropped from the public records instead of failing');
 r = post({ action:'saveLeague', key, league, baseRev: 0, force: true });
 assert(r.ok && r.rev === 3 && post({ action:'adminLeague', key }).league.players[0].mmr === 5100, 'forced save overwrites');
 r = post({ action:'saveLeague', key, league: { players: 'x' }, baseRev: 3 });
@@ -394,6 +413,9 @@ assert(props.ADMIN_KEY === key, 'running setup again keeps the admin key');
   assert(r.returning && r.from === '시즌 1' && r.mmr === 3301, 'left waiting last season: recognized by the season before, where approved');
   r = reg(4, { mmr: 4000 });
   assert(r.returning === false && rowOf('선수등록 (시즌 3)', 4)[C.note] === '시즌 2에도 등록함 (그때 대기)', 'never approved in any season: still new');
+  S.trashed.add(seasons()[0].league); S.trashed.add(seasons()[1].league);  // 운영자가 지난 시즌의 보관 파일을 휴지통에 버렸다
+  r = reg(8);
+  assert(r.returning && !S.trashed.has(seasons()[1].league), 'an archived league found in the trash is taken back out when a returning player needs it');
   delete S.files[seasons()[1].league];                                  // 시즌 2의 보관 파일이 지워졌다
   r = reg(7);
   assert(r.returning && r.from === '시즌 2' && r.mmr === 3700, 'a lost archive falls back to an older one, then to the registered MMR');

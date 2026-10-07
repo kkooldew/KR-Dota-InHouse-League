@@ -119,7 +119,8 @@ class Recruitment:
 
 class InhouseBot(discord.Client):
     def __init__(self) -> None:
-        super().__init__(intents=discord.Intents.default())
+        # 봇이 보내는 글로는 @everyone 과 역할 멘션 알림이 절대 울리지 않게 한다 (닉네임 같은 남의 글이 섞여 들어가도 안전하도록)
+        super().__init__(intents=discord.Intents.default(), allowed_mentions=discord.AllowedMentions(everyone=False, roles=False))
         self.tree = app_commands.CommandTree(self)
         self.current: Recruitment | None = None  # 모집 중이거나 가장 최근에 마감한 내전
         self.lock: asyncio.Lock | None = None
@@ -154,7 +155,10 @@ class InhouseBot(discord.Client):
         if not self.restored:  # 연결이 끊겼다 다시 붙을 때는 다시 읽지 않는다
             self.restored = True
             async with self.lock:
-                await restore_state()
+                try:
+                    await restore_state()
+                except Exception as e:  # 상태 파일의 모양이 어긋나 있어도 봇은 켜져야 한다 (역할 맞추기도 여기서 시작한다)
+                    print(f"꺼지기 전의 상태를 이어받지 못해 새로 시작합니다. ({e!r})")
             print(f"참여 선수 역할 자동 부여: {await role_status()}")
             print(f"음성 채널 이동(/시작·/종료): {await voice_status()}")
             self.role_task = asyncio.create_task(role_loop())
@@ -418,6 +422,8 @@ async def restore_state() -> None:
         data = json.loads(STATE_PATH.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return
+    if not isinstance(data, dict):
+        return
     bot.lineups = [x for x in data.get("lineups") or [] if isinstance(x, dict)]
     roles = data.get("roles")
     if isinstance(roles, dict):  # /선수역할 로 정한 역할과, 누구까지 맞췄는지
@@ -603,13 +609,15 @@ async def push_roster(rec: Recruitment, clear: bool = False) -> bool | None:
 
 # ── 자동 팀 편성 ──────────────────────────────────────────────
 def match_players(rec: Recruitment, players: list[dict]) -> tuple[dict[str, int], list[int]]:
-    """참가자를 리그 기록의 선수와 맞춘다. 매니저의 '명단대로 고르기'와 같은 순서: 디스코드 사용자 ID → 사용자명 → 이름.
+    """참가자를 리그 기록의 선수와 맞춘다. 디스코드 사용자 ID → 사용자명 순서로 찾고, 디스코드가 적혀 있지 않은 선수만 이름(서버 별명)으로 찾는다.
+    디스코드가 적힌 선수까지 이름으로 찾으면, 서버 별명을 그 선수의 닉네임으로 바꾼 다른 사람이 그 선수의 자리에 들어가
+    남의 MMR과 전적으로 경기를 치르게 된다. 리그 매니저는 운영진이 고른 명단을 눈으로 보지만, 봇은 그대로 팀을 짜고 정산한다.
     돌려주는 값: ({선수 id: 디스코드 사용자 ID}, 선수단에서 찾지 못한 참가자의 디스코드 사용자 ID)"""
     def norm(v) -> str:
         return str(v or "").strip().lstrip("@").lower()
 
     by_discord = {norm(p.get("discord")): p for p in players if norm(p.get("discord"))}
-    by_name = {norm(p.get("name")): p for p in players if norm(p.get("name"))}
+    by_name = {norm(p.get("name")): p for p in players if norm(p.get("name")) and not norm(p.get("discord"))}
     found: dict[str, int] = {}
     missing: list[int] = []
     for uid, v in rec.participants.items():
@@ -1206,7 +1214,8 @@ async def create_inhouse(interaction: discord.Interaction, deadline: Optional[st
     await answer(
         interaction,
         f"{actor}님이 모집을 시작했어요! {rec.message.jump_url}\n마감: {when(rec.end_ts)} (<t:{rec.end_ts}:R>)"
-        + ("\n⚠️ 결과를 아직 기록하지 않은 판이 있어요. 끝났다면 `/승리` 로 기록해 주세요." if waiting else ""),
+        + ("\n⚠️ 결과를 아직 기록하지 않은 판이 있어요. 끝났다면 `/승리` 로 기록하고, 팀만 짜고 열리지 않은 판이면 `/승리` 에서 **경기 안 함**을 골라 주세요."
+           if waiting else ""),
     )
 
 
@@ -1355,8 +1364,9 @@ async def end_game(interaction: discord.Interaction) -> None:
 
 @bot.tree.command(name="승리", description="봇이 짠 팀의 경기 결과를 기록하고 MMR을 정산합니다 (운영진 전용)", guild=GUILD)
 @app_commands.rename(team="팀")
-@app_commands.describe(team="이긴 팀")
-@app_commands.choices(team=[app_commands.Choice(name="래디언트", value="r"), app_commands.Choice(name="다이어", value="d")])
+@app_commands.describe(team="이긴 팀. 팀만 짜고 경기를 하지 않은 판이면 '경기 안 함'을 고르세요")
+@app_commands.choices(team=[app_commands.Choice(name="래디언트", value="r"), app_commands.Choice(name="다이어", value="d"),
+                            app_commands.Choice(name="경기 안 함 (이 판을 기록 없이 정리)", value="x")])
 async def record_win(interaction: discord.Interaction, team: str) -> None:
     if not await admin_only(interaction):
         return
@@ -1373,6 +1383,24 @@ async def record_win(interaction: discord.Interaction, team: str) -> None:
                 else f"{actor}님, 결과를 기록할 팀이 없어요. 봇이 팀을 짜서 알린 뒤에 쓸 수 있어요.",
             )
             return
+        waiting = sum(1 for x in bot.lineups if x.get("lanes") and not x.get("result")) - 1  # 이 판 말고 결과를 기다리는 판
+        more = f"\n결과를 기다리는 판이 {waiting}개 더 있어요. 이어서 `/승리` 로 정리해 주세요." if waiting else ""
+        if team == "x":
+            # 팀만 짜고 열리지 않은 판은 기록 없이 치운다. 그대로 두면 다음 /승리 가 이 판에 적용되고, 이 판의 열 명이 오늘 뛴 사람으로 남는다
+            newest = entry is bot.lineups[-1]
+            bot.lineups.remove(entry)
+            cur = bot.current
+            if cur is not None and cur.message is not None and cur.message.id == entry.get("message_id"):
+                cur.lineup = False
+            save_state()
+            if newest:  # 서버에 올려 둔 편성이 이 판의 것이다. 매니저가 열리지 않은 판을 불러오지 않게 비운다
+                try:
+                    await call_server({"action": "pushLineup", "lineup": None})
+                except Exception as e:
+                    print(f"리그 서버의 팀 편성을 비우지 못했습니다: {e!r}")
+            await send_to(entry["place_id"], f"{actor}님이 이 판을 경기 없이 정리했어요. 결과는 기록되지 않습니다.")
+            await answer(interaction, f"{actor}님이 <#{entry['place_id']}> 의 판을 경기 없이 정리했어요. 결과와 MMR은 바뀌지 않습니다.{more}")
+            return
         try:
             result = await change_league({"mode": "result", "lanes": entry["lanes"], "winner": team})
         except Exception as e:
@@ -1383,7 +1411,7 @@ async def record_win(interaction: discord.Interaction, team: str) -> None:
         save_state()
         text = f"{actor}님이 경기 결과를 기록했어요.\n" + result_text(team, result["changes"], entry.get("who") or {})
         await send_to(entry["place_id"], text)
-    await answer(interaction, f"{text}\n\n순위 페이지와 구글 시트에 반영했어요. 잘못 기록했다면 `/승리취소` 로 되돌릴 수 있어요.")
+    await answer(interaction, f"{text}\n\n순위 페이지와 구글 시트에 반영했어요. 잘못 기록했다면 `/승리취소` 로 되돌릴 수 있어요.{more}")
 
 
 @bot.tree.command(name="승리취소", description="/승리 로 기록한 마지막 결과를 되돌립니다 (운영진 전용)", guild=GUILD)

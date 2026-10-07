@@ -14,7 +14,7 @@
  * 코드를 고친 뒤에는 배포 → 배포 관리 → 수정(연필) → 버전: 새 버전 → 배포 를 눌러야 반영됩니다.
  */
 
-const SERVER_VERSION = 8;                                // 서버를 고칠 때마다 올린다. 상태 응답에 실려서 새 버전이 배포됐는지 밖에서 확인할 수 있다
+const SERVER_VERSION = 9;                              // 서버를 고칠 때마다 올린다. 상태 응답에 실려서 새 버전이 배포됐는지 밖에서 확인할 수 있다
 const SHEET_NAME = '선수등록';                             // 등록 탭 이름의 앞부분. 시즌마다 '선수등록 (시즌 이름)' 탭을 따로 쓴다
 // 칸을 더할 때는 맨 뒤에 붙이고 LAYOUT 을 올린다. 이미 있는 탭에는 ready_ 가 새 머리글을 채워 넣는다
 const HEADERS = ['등록시각', '수정시각', '상태', '닉네임', '스팀프로필', '스팀키', '디스코드', 'MMR', '1지망', '2지망', '3지망', '4지망', '비고', '최고MMR'];
@@ -74,7 +74,9 @@ function doGet(e) {
 function doPost(e) {
   return respond_(() => {
     let body;
-    try { body = JSON.parse((e && e.postData && e.postData.contents) || ''); }
+    const raw = (e && e.postData && e.postData.contents) || '';
+    if (raw.length > LEAGUE_MAX + 1000000) fail_('요청이 너무 큽니다');   // 가장 큰 요청(리그 기록 올리기)보다 큰 것은 읽지도 않는다
+    try { body = JSON.parse(raw); }
     catch (err) { fail_('요청 형식이 잘못됐습니다'); }
     if (!body || typeof body !== 'object') fail_('요청 형식이 잘못됐습니다');
 
@@ -333,7 +335,7 @@ function startLeague_(settings, endedSeason) {
 function archivedLeague_(season) {
   if (!season.league) return null;
   try {
-    const league = JSON.parse(DriveApp.getFileById(season.league).getBlob().getDataAsString('UTF-8'));
+    const league = JSON.parse(alive_(DriveApp.getFileById(season.league)).getBlob().getDataAsString('UTF-8'));
     return league && Array.isArray(league.players) ? league : null;
   } catch (err) {
     console.warn('보관해 둔 리그 기록을 읽지 못했습니다 (' + season.name + '): ' + err);
@@ -596,12 +598,15 @@ function migrateSteamKeys_() {
   return out;
 }
 
-// 디스코드 사용자명(영문 소문자·숫자·밑줄·마침표) 또는 숫자로 된 사용자 ID를 받는다
+// 디스코드 사용자명(영문 소문자·숫자·밑줄·마침표) 또는 숫자로 된 사용자 ID를 받는다.
+// 예전 방식(이름#1234)은 받지 않는다(버전 9). 지금의 디스코드 계정에는 없는 모양이라 봇이 그 선수를 찾지 못하고,
+// 이름 부분에 아무 글자나 들어갈 수 있어서 운영진 화면이나 디스코드 메시지에 그대로 실리면 위험하다.
 function normDiscord_(v) {
   const s = String(v == null ? '' : v).trim().replace(/^@/, '').toLowerCase();
   if (/^\d{17,20}$/.test(s)) return s;
   if (/^[a-z0-9_.]{2,32}$/.test(s) && !/\.\./.test(s)) return s;
-  if (/^[^#\s]{2,32}#\d{4}$/.test(s)) return s;               // 예전 방식(이름#1234)
+  if (/#\d{4}$/.test(s))
+    fail_('이름#1234 모양은 이제 쓰이지 않습니다. 디스코드 프로필에 보이는 지금 사용자명을 넣어 주세요.', 'discord');
   fail_('디스코드 사용자명을 확인해 주세요. 영문 소문자·숫자·밑줄(_)·마침표(.)만 쓸 수 있습니다.', 'discord');
 }
 
@@ -724,7 +729,8 @@ function sanitizeRecords_(r) {
   if (!r || typeof r !== 'object' || !Array.isArray(r.players)) fail_('기록 형식이 잘못됐습니다');
   const int = v => { const n = Math.round(Number(v)); return Number.isFinite(n) ? n : 0; };
   const str = (v, max) => String(v == null ? '' : v).slice(0, max);
-  const players = r.players.slice(0, 1000).map(p => ({
+  const item = x => !!x && typeof x === 'object';       // 모양이 깨진 항목은 버린다
+  const players = r.players.slice(0, 1000).filter(item).map(p => ({
     id: str(p.id, 40),
     name: str(p.name, 40),
     baseMMR: int(p.baseMMR),
@@ -741,7 +747,7 @@ function sanitizeRecords_(r) {
       id: str(m.id, 40),
       at: str(m.at, 40),
       winner: m.winner,
-      rows: m.rows.slice(0, 10).map(x => ({
+      rows: m.rows.slice(0, 10).filter(item).map(x => ({
         id: str(x.id, 40), name: str(x.name, 40), side: x.side === 'd' ? 'd' : 'r',
         role: int(x.role), rank: int(x.rank), before: int(x.before), delta: int(x.delta)
       }))
@@ -792,7 +798,7 @@ function getLeague_() {
   const id = props.getProperty('LEAGUE_FILE_ID');
   let text = '';
   if (rev && id) {
-    try { text = DriveApp.getFileById(id).getBlob().getDataAsString('UTF-8') || ''; } catch (err) { /* 파일이 지워졌으면 없는 것으로 본다 */ }
+    try { text = alive_(DriveApp.getFileById(id)).getBlob().getDataAsString('UTF-8') || ''; } catch (err) { /* 파일이 지워졌으면 없는 것으로 본다 */ }
   }
   return { league: text ? JSON.parse(text) : null, rev, leagueAt: text ? (props.getProperty('LEAGUE_AT') || '') : '' };
 }
@@ -954,10 +960,24 @@ function driveFile_(prop, name) {
   const props = PropertiesService.getScriptProperties();
   const id = props.getProperty(prop);
   if (id) {
-    try { return DriveApp.getFileById(id); } catch (err) { /* 지워졌으면 새로 만든다 */ }
+    try { return alive_(DriveApp.getFileById(id)); } catch (err) { /* 지워졌으면 새로 만든다 */ }
   }
   const file = DriveApp.createFile(name, JSON.stringify({ players: [], matches: [] }), 'application/json');
   props.setProperty(prop, file.getId());
+  return file;
+}
+
+// 휴지통에 들어간 드라이브 파일은 30일 뒤에 영영 지워진다. 그때까지는 이 스크립트가 아무 일 없이 읽고 쓰므로,
+// 운영자가 드라이브를 정리하다 기록 파일을 버린 것을 모르고 지내다 기록을 통째로 잃을 수 있다. 쓰는 파일이 휴지통에 있으면 도로 꺼내 둔다.
+function alive_(file) {
+  try {
+    if (file.isTrashed()) {
+      file.setTrashed(false);
+      console.warn('휴지통에 있던 기록 파일을 도로 꺼냈습니다: ' + file.getName());
+    }
+  } catch (err) {
+    console.warn('기록 파일이 휴지통에 있는지 확인하지 못했습니다: ' + err);
+  }
   return file;
 }
 

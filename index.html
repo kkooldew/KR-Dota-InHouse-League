@@ -351,7 +351,8 @@ body.at-intro .site-foot{margin-top:0}
     discord: v => {
       const s = normDiscord(v);
       if(!s) return '디스코드 사용자명을 넣어 주세요';
-      if(/^\d{17,20}$/.test(s) || (/^[a-z0-9_.]{2,32}$/.test(s) && !/\.\./.test(s)) || /^[^#\s]{2,32}#\d{4}$/.test(s)) return '';
+      if(/^\d{17,20}$/.test(s) || (/^[a-z0-9_.]{2,32}$/.test(s) && !/\.\./.test(s))) return '';
+      if(/#\d{4}$/.test(s)) return '이름#1234 모양은 이제 쓰이지 않습니다. 디스코드 프로필에 보이는 지금 사용자명을 넣어 주세요.';
       return '영문 소문자, 숫자, 밑줄(_), 마침표(.)로 된 사용자명을 넣어 주세요. 서버 별명이 아니라 프로필의 사용자명입니다.';
     },
     mmr: v => {

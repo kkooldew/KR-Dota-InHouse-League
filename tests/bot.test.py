@@ -473,6 +473,9 @@ async def main():
     mod.bot.current = None
     await mod.restore_state()
     check(mod.bot.current is None, "상태 파일이 깨져 있으면 새로 시작")
+    mod.STATE_PATH.write_text("[1, 2, 3]", encoding="utf-8")
+    await mod.restore_state()
+    check(mod.bot.current is None and mod.bot.lineups == [], "상태 파일이 JSON 이어도 모양이 다르면 읽지 않고 새로 시작")
 
     # ── 자동 팀 편성 ──
     FIRSTS = [1, 1, 2, 2, 3, 3, 4, 4, 4, 4, 1, 2]
@@ -599,6 +602,14 @@ async def main():
     await run(mod.close_now, 100, ADMIN)
     check(len(asked) == n and "선수 등록이 확인된 참가자가 9명" in w.texts(w.thread.send)[-1] and any("선수단에 없는 참가자: <@999>" in x for x in w.texts(w.admin.send)), "등록된 선수가 열 명이 안 되면 짜지 않고 알린다")
 
+    # 서버 별명을 다른 선수의 닉네임으로 바꾼 사람이 그 선수의 자리(MMR과 전적)에 들어가지 못한다.
+    # 선수0 은 디스코드(ID 100)가 적혀 있으니 그 계정으로만 맞추고, 디스코드를 적지 않은 선수1 만 이름으로 맞춘다
+    fake = mod.Recruitment(1, int(time.time()) + 600)
+    fake.participants = {555: {"name": "선수0", "username": "u555"}, 101: {"name": "선수1", "username": "u101"},
+                         102: {"name": "아무 별명", "username": "u102"}, 556: {"name": "선수1", "username": "u556"}}
+    who, missing = mod.match_players(fake, league_of(12)["players"])
+    check(who == {"p1": 101, "p2": 102} and missing == [555, 556], "디스코드가 적힌 선수는 그 계정으로만 맞춘다 (닉네임을 흉내 낸 다른 계정은 등록되지 않은 참가자로 본다)")
+
     w = World(mod, forum=True, league=league_of(12))
     w.league = None
     await gather(w, 10)
@@ -693,6 +704,37 @@ async def main():
     await run(mod.cancel, 100, ADMIN)
     t, _ = await run(mod.create_inhouse, 100, ADMIN)
     check("결과를 아직 기록하지 않은 판" not in t, "결과를 모두 기록했으면 알리지 않는다")
+    await run(mod.cancel, 100, ADMIN)
+
+    # 팀만 짜고 열리지 않은 판: /승리 에서 '경기 안 함'을 고르면 기록 없이 치운다. 그대로 두면 다음 /승리 가 그 판에 적용된다
+    w = World(mod, forum=True, league=league_of(12))
+    t, _ = await run(mod.record_win, 100, ADMIN, "x")
+    check("결과를 기록할 팀이 없어요" in t, "팀을 짜기 전의 경기 안 함")
+    await gather(w, 10)                                      # 앞 판: 팀만 짜고 열리지 않았다
+    await run(mod.close_now, 100, ADMIN)
+    w.message.id = 301                                       # 다음 판
+    t, _ = await run(mod.create_inhouse, 100, ADMIN)
+    check("열리지 않은 판이면 `/승리` 에서 **경기 안 함**" in t, "앞 판의 결과가 없으면 정리하는 법도 알려 준다")
+    for k in reversed(range(10)):                            # 참여 순서가 거꾸로라 앞 판과 팀이 다르다
+        await run(mod.join, 300, user(100 + k, f"선수{k}"))
+    await run(mod.close_now, 100, ADMIN)
+    ghost, real = mod.bot.lineups
+    n, sent = len(w.server), len(w.texts(w.thread.send))
+    t, _ = await run(mod.record_win, 100, ADMIN, "x")
+    check(mod.bot.lineups == [real] and w.rev == 1 and not any(p["action"] in ("saveLeague", "pushLineup") for p in w.server[n:]),
+          "경기 안 함: 가장 먼저 짠 판을 기록 없이 치운다 (리그 기록은 그대로, 서버에 올려 둔 나중 판의 편성도 그대로)")
+    check(w.texts(w.thread.send)[sent:] == ["<@1>님이 이 판을 경기 없이 정리했어요. 결과는 기록되지 않습니다."] and t.startswith("<@1>님이 <#300> 의 판을 경기 없이 정리했어요.")
+          and "결과를 기다리는 판이 1개 더 있어요" in t, "모집 글과 운영진에게 알리고, 남은 판이 있으면 함께 알린다")
+    check(json.loads(mod.STATE_PATH.read_text(encoding="utf-8"))["lineups"] == [real], "치운 판은 상태 파일에서도 지운다")
+    t, _ = await run(mod.record_win, 100, ADMIN, "r")
+    check("🏆" in t and real["result"]["winner"] == "r" and asked[-1]["lanes"] == real["lanes"] and "더 있어요" not in t, "그다음 /승리 는 실제로 치른 판에 적용된다")
+    await run(mod.undo_win, 100, ADMIN)
+    rec = mod.bot.current
+    t, _ = await run(mod.record_win, 100, ADMIN, "x")         # 하나 남은(가장 나중에 짠) 판을 치우는 경우
+    check(mod.bot.lineups == [] and w.server[-1] == {"action": "pushLineup", "lineup": None} and not rec.lineup and "더 있어요" not in t,
+          "가장 나중에 짠 판을 치우면 서버에 올려 둔 편성도 비운다")
+    t, _ = await run(mod.extend, 100, ADMIN)
+    check("다시 열었어요" in t and not rec.closed, "치운 판의 모집은 다시 열 수 있다")
     await run(mod.cancel, 100, ADMIN)
 
     w = World(mod, forum=True, league=league_of(12))         # 봇이 기록을 받아 간 사이에 매니저가 기록을 바꾼 경우

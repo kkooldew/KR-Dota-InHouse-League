@@ -207,6 +207,8 @@ ol.steps li + li{margin-top:3px}
 (function(){
   const {api, esc, mountChrome, setSeason, toast, PREF_LABEL} = window.Site;
   const $ = s => document.querySelector(s);
+  // 다른 사이트가 이 페이지를 틀(iframe) 안에 띄워 놓고, 위에 다른 그림을 덮어 승인 같은 버튼을 누르게 만드는 속임수를 막는다
+  if(window.top !== window.self){ document.body.textContent = '운영진 페이지는 다른 사이트 안에서 열 수 없습니다. 주소를 직접 열어 주세요.'; return; }
   mountChrome('admin');
 
   const KEY_NAME = 'inhouse_admin_key';
@@ -418,7 +420,8 @@ ol.steps li + li{margin-top:3px}
         '<td class="n num peak">' + (p.peak == null ? '-' : p.peak) + '</td>' +
         '<td class="prefs">' + p.prefs.map(v => '<span>' + (PREF_LABEL[v] || '?') + '</span>').join('') + '</td>' +
         '<td class="disc">' + esc(p.discord) + '</td>' +
-        '<td>' + (p.steamUrl ? '<a href="' + esc(p.steamUrl) + '" target="_blank" rel="noopener noreferrer">프로필</a>' : '') + '</td>' +
+        // 스팀 주소일 때만 링크로 만든다. 시트의 칸에 다른 것이 적혀 있어도 눌러서 실행되는 주소(javascript: 등)가 되지 않게 한다
+        '<td>' + (/^https:\/\/steamcommunity\.com\//.test(p.steamUrl || '') ? '<a href="' + esc(p.steamUrl) + '" target="_blank" rel="noopener noreferrer">프로필</a>' : '') + '</td>' +
         '<td class="time">' + esc(fmt(p.registeredAt)) + '</td>' +
         '<td class="time">' + (p.updatedAt && p.updatedAt !== p.registeredAt ? esc(fmt(p.updatedAt)) : '') + '</td>' +
       '</tr>').join('');

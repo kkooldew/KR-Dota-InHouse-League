@@ -62,6 +62,12 @@ function makeEnv(opt = {}){
     getOwnPropertyDescriptor: (_, n) => byName(n) ? { enumerable: true, configurable: true, value: byName(n) } : undefined
   });
   const props = {}, cache = {}, files = {};
+  // 가짜 드라이브 파일. trashed 는 휴지통에 들어간 파일의 id (지워지지는 않아서 그대로 읽고 쓸 수 있다)
+  const fileNames = {}, trashed = new Set();
+  const driveFile = id => ({
+    getId: () => id, getName: () => fileNames[id] || '', setContent: c => { files[id] = c; }, getBlob: () => ({ getDataAsString: () => files[id] }),
+    isTrashed: () => trashed.has(id), setTrashed(v){ if (v) trashed.add(id); else trashed.delete(id); return this; }
+  });
   // 가짜 스팀: vanity 는 사용자 지정 주소 → 고유 번호, missing 은 없는 번호, down 이면 답하지 않는다, flaky 는 그 횟수만큼만 거절한다
   const steam = { vanity: {}, missing: new Set(), down: false, flaky: 0, calls: 0 };
   const env = {
@@ -86,8 +92,8 @@ function makeEnv(opt = {}){
       formatDate: (d, tz, fmt) => new Date(d.getTime() + 9 * 3600e3).toISOString().slice(0, 16).replace('T', ' ')
     },
     DriveApp: {
-      createFile: (name, content) => { const id = 'f' + Object.keys(files).length; files[id] = content; return { getId: () => id, setContent: c => { files[id] = c; }, getBlob: () => ({ getDataAsString: () => files[id] }) }; },
-      getFileById: id => { if(!(id in files)) throw new Error('nf'); return { getId: () => id, setContent: c => { files[id] = c; }, getBlob: () => ({ getDataAsString: () => files[id] }) }; }
+      createFile: (name, content) => { const id = 'f' + Object.keys(files).length; files[id] = content; fileNames[id] = name; return driveFile(id); },
+      getFileById: id => { if(!(id in files)) throw new Error('nf'); return driveFile(id); }
     },
     Logger: { log: (...a) => env._logs.push(a.join(' ')) }, _logs: [],
     console
@@ -95,6 +101,6 @@ function makeEnv(opt = {}){
   vm.createContext(env);
   vm.runInContext(code, env);
   // tabs: 탭 목록(왼쪽부터). 탭을 지우는 시험은 이 배열에서 빼면 된다
-  return { env, grid, props, cache, files, steam, sheets, tabs };
+  return { env, grid, props, cache, files, trashed, steam, sheets, tabs };
 }
 module.exports = makeEnv;
