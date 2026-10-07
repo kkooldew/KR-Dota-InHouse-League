@@ -13,9 +13,8 @@
 <style>
 .status{font-size:13px;color:var(--bone-dim);display:flex;flex-wrap:wrap;gap:4px 16px;align-items:center;margin-bottom:6px}
 .status .warn{color:var(--dire)}
-.lead{margin:18px 0 4px;font-size:19px;line-height:1.5;max-width:60ch}
+.lead{margin:18px 0 24px;font-size:19px;line-height:1.5;max-width:60ch}
 .lead strong{font-weight:700}
-.prize{margin:0 0 24px;font-size:13.5px;color:var(--bone-dim)}
 .search{background:var(--ink-2);border:1px solid var(--line);border-radius:3px;padding:7px 10px;min-width:0;flex:1 1 160px;max-width:240px}
 .empty-box{border:1px dashed var(--line);border-radius:4px;padding:28px 24px;max-width:640px}
 .empty-box h2{margin:0 0 6px;font-size:18px}
@@ -45,6 +44,16 @@ table.board{width:100%;border-collapse:collapse;min-width:640px}
   border-bottom:1px solid var(--line);white-space:nowrap}
 .board td{padding:11px 10px;border-bottom:1px solid var(--line-soft);vertical-align:middle}
 .board th.n,.board td.n{text-align:right}
+/* 누르면 그 항목으로 정렬하는 머리글. 지금 정렬 기준은 금색과 ▲(오름차순)·▼(내림차순)로 보인다 */
+.board th.s{padding-bottom:2px}
+.sort{background:none;border:0;padding:6px 0;display:inline-flex;align-items:center;gap:4px;
+  color:var(--bone-dim);font-size:12px;font-weight:500;white-space:nowrap}
+.sort::after{content:'↕';font-size:11px;opacity:.5}
+th.n .sort{flex-direction:row-reverse}
+.sort:hover{color:var(--bone)}
+th[aria-sort="ascending"] .sort,th[aria-sort="descending"] .sort{color:var(--gold)}
+th[aria-sort="ascending"] .sort::after{content:'▲';font-size:9px;opacity:1}
+th[aria-sort="descending"] .sort::after{content:'▼';font-size:9px;opacity:1}
 .board tr.row:hover td{background:var(--ink-2)}
 .board tr.row.is-open td{background:var(--ink-2);border-bottom-color:transparent}
 
@@ -63,9 +72,10 @@ table.board{width:100%;border-collapse:collapse;min-width:640px}
 .up{color:var(--rad)}
 .down{color:var(--dire)}
 
-/* 지금 정렬 기준인 숫자를 가장 크게 */
-.board.by-wins .c-w{font-size:24px;color:var(--gold);line-height:1}
-.board.by-mmr .c-mmr .v{font-size:22px;color:var(--gold);line-height:1}
+/* 지금 정렬 기준인 숫자를 가장 크게 (순위는 승수로 매기므로 순위로 정렬할 때도 승을 크게) */
+.board.by-rank td.c-w,.board.by-wins td.c-w,.board.by-losses td.c-l{font-size:24px;color:var(--gold);line-height:1}
+.board.by-rate td.c-rate,.board.by-mmr .c-mmr .v{font-size:22px;color:var(--gold);line-height:1}
+.board.by-name .who .nm{color:var(--gold)}
 
 .form{display:inline-flex;gap:3px;vertical-align:middle}
 .chip{width:20px;height:20px;border-radius:2px;display:inline-grid;place-items:center;font-size:11px;font-weight:700}
@@ -120,7 +130,7 @@ table.hist{border-collapse:collapse;font-size:13.5px}
 
 @media (max-width:640px){
   .lead{font-size:17px}
-  .c-streak,.c-rate{display:none}
+  .c-streak,.c-rate,.wide-only{display:none}
   table.board{min-width:470px}
   .board td{padding:10px 7px}
   .board th{padding:0 7px 8px}
@@ -130,7 +140,7 @@ table.hist{border-collapse:collapse;font-size:13.5px}
   .rl small{display:none}
 }
 @media (prefers-reduced-motion:no-preference){
-  .who .nm,.tabs button,.seg button{transition:color .12s}
+  .who .nm,.tabs button,.seg button,.sort{transition:color .12s}
 }
 </style>
 </head>
@@ -143,7 +153,6 @@ table.hist{border-collapse:collapse;font-size:13.5px}
 
   <div id="main" hidden>
     <p class="lead" id="lead"></p>
-    <p class="prize" id="prize"></p>
 
     <div class="tabs" role="tablist" aria-label="보기 선택">
       <button role="tab" id="tab-rank" aria-controls="panel-rank" aria-selected="true">순위</button>
@@ -152,10 +161,6 @@ table.hist{border-collapse:collapse;font-size:13.5px}
 
     <section id="panel-rank" role="tabpanel" aria-labelledby="tab-rank">
       <div class="controls">
-        <div class="seg" role="group" aria-label="정렬 기준" id="sortSeg">
-          <button data-sort="wins" aria-pressed="true">승수</button>
-          <button data-sort="mmr" aria-pressed="false">인하우스 MMR</button>
-        </div>
         <div class="seg" role="group" aria-label="1지망 포지션" id="posSeg">
           <button data-pos="0" aria-pressed="true">전체</button>
           <button data-pos="1" aria-pressed="false">캐리</button>
@@ -165,17 +170,18 @@ table.hist{border-collapse:collapse;font-size:13.5px}
         </div>
         <input type="search" class="search" id="q" placeholder="선수 이름 찾기" aria-label="선수 이름으로 찾기">
       </div>
-      <p class="rule" id="rule"></p>
+      <p class="rule">순위는 승수가 많은 순서로 매깁니다. 승수가 같으면 패가 적은 선수가 위이고, 승패가 모두 같으면 공동 순위입니다.
+        표의 머리글(순위, 선수, 승, 패, <span class="wide-only">승률, </span>인하우스 MMR)을 누르면 그 항목으로 정렬하고, 한 번 더 누르면 순서가 뒤집힙니다.</p>
       <div class="scroll">
-        <table class="board by-wins" id="board">
+        <table class="board by-rank" id="board">
           <thead>
             <tr>
-              <th scope="col">순위</th>
-              <th scope="col">선수</th>
-              <th scope="col" class="n">승</th>
-              <th scope="col" class="n">패</th>
-              <th scope="col" class="n c-rate">승률</th>
-              <th scope="col">인하우스 MMR</th>
+              <th scope="col" class="s"><button type="button" class="sort" data-sort="rank">순위</button></th>
+              <th scope="col" class="s"><button type="button" class="sort" data-sort="name">선수</button></th>
+              <th scope="col" class="s n"><button type="button" class="sort" data-sort="wins">승</button></th>
+              <th scope="col" class="s n"><button type="button" class="sort" data-sort="losses">패</button></th>
+              <th scope="col" class="s n c-rate"><button type="button" class="sort" data-sort="rate">승률</button></th>
+              <th scope="col" class="s"><button type="button" class="sort" data-sort="mmr">인하우스 MMR</button></th>
               <th scope="col" title="오른쪽이 가장 최근 경기">최근 다섯 판</th>
               <th scope="col" class="c-streak">연속</th>
             </tr>
@@ -210,7 +216,8 @@ const ROLE_LABEL = ['', '캐리', '미드', '오프', '4번 서폿', '5번 서�
 const PREF_LABEL = ['', '캐리', '미드', '오프', '서폿'];   // 지망은 네 갈래. 4·5번은 서폿 하나로 묶는다
 const SIDE_LABEL = {r:'래디언트', d:'다이어'};
 
-const ui = {tab:'rank', sort:'wins', pos:0, q:'', open:new Set(), matchLimit:20};
+// sort 는 표의 머리글에서 고른 정렬 항목(rank·name·wins·losses·rate·mmr), dir 은 1이면 오름차순, -1이면 내림차순
+const ui = {tab:'rank', sort:'rank', dir:1, pos:0, q:'', open:new Set(), matchLimit:20};
 let model = null;          // 화면에 쓰는 정리된 기록
 let lastText = null;       // 마지막으로 읽은 내용(바뀌었을 때만 다시 그린다)
 let lastChecked = null;
@@ -262,26 +269,40 @@ function prepare(data){
   return {players, matches};
 }
 
-// 순위를 매긴다. 승수 기준: 승이 많은 순, 같으면 패가 적은 순, 승패가 같으면 공동 순위.
-// 경기를 치르지 않은 선수는 맨 아래에 순위 없이 둔다.
-function ranked(players, mode){
+// 순위를 매긴다. 순위는 언제나 승수로 매긴다: 승이 많은 순, 같으면 패가 적은 순, 승패가 같으면 공동 순위.
+// 경기를 치르지 않은 선수는 맨 아래에 순위 없이 둔다. order 는 이 순서에서의 자리다.
+function ranked(players){
   const played = p => p.wins + p.losses > 0;
-  const list = players.slice();
-  let keyOf;
-  if(mode === 'mmr'){
-    list.sort((a,b) => (b.mmr - a.mmr) || (b.wins - a.wins) || a.name.localeCompare(b.name, 'ko'));
-    keyOf = p => String(p.mmr);
-  }else{
-    list.sort((a,b) => (played(b) - played(a)) || (b.wins - a.wins) || (a.losses - b.losses) ||
-      (b.mmr - a.mmr) || a.name.localeCompare(b.name, 'ko'));
-    keyOf = p => played(p) ? p.wins + ':' + p.losses : null;
-  }
+  const list = players.slice().sort((a,b) => (played(b) - played(a)) || (b.wins - a.wins) || (a.losses - b.losses) ||
+    (b.mmr - a.mmr) || a.name.localeCompare(b.name, 'ko'));
   let rank = 0, prev;
-  return list.map((p, i) => {
-    const key = keyOf(p);
-    if(key === null) return {p, rank:null};
-    if(key !== prev){ rank = i + 1; prev = key; }
-    return {p, rank};
+  return list.map((p, order) => {
+    if(!played(p)) return {p, rank:null, order};
+    const key = p.wins + ':' + p.losses;
+    if(key !== prev){ rank = order + 1; prev = key; }
+    return {p, rank, order};
+  });
+}
+
+// 표의 머리글에서 고른 항목으로 줄을 세운다. 값이 같으면 순위 순서를 따른다.
+// 값이 없는 줄(경기를 치르지 않은 선수의 순위와 승률)은 오름차순이든 내림차순이든 맨 아래에 둔다.
+const SORT_VALUE = {
+  rank: x => x.rank,
+  name: x => x.p.name,
+  wins: x => x.p.wins,
+  losses: x => x.p.losses,
+  rate: x => x.p.wins + x.p.losses ? x.p.wins / (x.p.wins + x.p.losses) : null,
+  mmr: x => x.p.mmr
+};
+// 머리글을 처음 눌렀을 때의 순서: 순위와 이름은 오름차순(1위, 가나다부터), 숫자는 큰 값부터
+const FIRST_DIR = {rank:1, name:1, wins:-1, losses:-1, rate:-1, mmr:-1};
+function sorted(list, key, dir){
+  const value = SORT_VALUE[key] || SORT_VALUE.rank;
+  return list.slice().sort((a, b) => {
+    const x = value(a), y = value(b);
+    if(x === null || y === null) return ((x === null) - (y === null)) || (a.order - b.order);
+    const c = typeof x === 'string' ? x.localeCompare(y, 'ko') : x - y;
+    return (c * dir) || (a.order - b.order);
   });
 }
 
@@ -298,7 +319,7 @@ function renderAll(){
 }
 
 function renderLead(){
-  const top = ranked(model.players, 'wins').filter(x => x.rank === 1).map(x => x.p);
+  const top = ranked(model.players).filter(x => x.rank === 1).map(x => x.p);
   let html;
   if(!top.length){
     html = '아직 치른 경기가 없습니다. 첫 경기 결과가 올라오면 순위가 생깁니다.';
@@ -384,12 +405,15 @@ function detailHtml(p){
 function renderBoard(){
   const table = $('#board');
   table.className = 'board by-' + ui.sort;
-  $('#rule').textContent = ui.sort === 'wins'
-    ? '승수가 많은 순서입니다. 승수가 같으면 패가 적은 선수가 위이고, 승패가 모두 같으면 공동 순위입니다.'
-    : '인하우스 MMR이 높은 순서입니다. 경기를 치르기 전에는 등록한 MMR로 시작합니다.';
+  table.querySelectorAll('.sort').forEach(b => {
+    const on = b.dataset.sort === ui.sort;
+    b.parentNode.setAttribute('aria-sort', on ? (ui.dir > 0 ? 'ascending' : 'descending') : 'none');
+    b.title = on ? (ui.dir > 0 ? '오름차순으로 정렬돼 있습니다. 누르면 내림차순으로 바꿉니다.' : '내림차순으로 정렬돼 있습니다. 누르면 오름차순으로 바꿉니다.')
+      : '누르면 이 항목으로 정렬합니다.';
+  });
 
   const q = ui.q.trim().toLowerCase();
-  const list = ranked(model.players, ui.sort)
+  const list = sorted(ranked(model.players), ui.sort, ui.dir)
     .filter(x => (!ui.pos || x.p.prefs[0] === ui.pos) && (!q || x.p.name.toLowerCase().includes(q)));
 
   if(!list.length){
@@ -534,8 +558,16 @@ function bindSeg(sel, attr, apply){
     if(model) renderBoard();
   });
 }
-bindSeg('#sortSeg', 'sort', v => { ui.sort = v; });
 bindSeg('#posSeg', 'pos', v => { ui.pos = Number(v); });
+// 표의 머리글: 누르면 그 항목으로 정렬하고, 같은 머리글을 한 번 더 누르면 순서를 뒤집는다
+$('#board thead').addEventListener('click', e => {
+  const b = e.target.closest('.sort');
+  if(!b) return;
+  const key = b.dataset.sort;
+  if(ui.sort === key) ui.dir = -ui.dir;
+  else{ ui.sort = key; ui.dir = FIRST_DIR[key] || 1; }
+  if(model) renderBoard();
+});
 $('#q').addEventListener('input', e => { ui.q = e.target.value; if(model) renderBoard(); });
 
 $('#boardBody').addEventListener('click', e => {
@@ -556,8 +588,6 @@ $('#boardBody').addEventListener('click', e => {
 /* =========================================================
    시작
    ========================================================= */
-$('#prize').textContent = L.prizeNote || '';
-$('#prize').hidden = !L.prizeNote;
 if(api.ready) api.get('status').then(s => setSeason(s.season)).catch(() => {});
 load();
 </script>

@@ -9,9 +9,6 @@ window.LEAGUE = {
   // 등록을 마친 사람에게 보여 줄 디스코드 초대 링크
   discordInvite: 'https://discord.gg/CHmUMHweRq',
 
-  // 순위 페이지 위쪽 안내 문장 (비우면 숨김)
-  prizeNote: '시즌이 끝날 때 승수가 가장 많은 선수에게 선물을 드립니다.',
-
   // 순위 페이지가 새 기록을 확인하는 간격(초)
   refreshSeconds: 120
 };

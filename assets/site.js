@@ -1,7 +1,7 @@
 /* 리그 사이트 공용 스크립트: 설정 기본값, 머리·꼬리, 서버 요청 */
 (function(){
   const L = window.LEAGUE = Object.assign({
-    title: '도타 2 인하우스 리그', apiUrl: '', discordInvite: '', prizeNote: '', refreshSeconds: 120
+    title: '도타 2 인하우스 리그', apiUrl: '', discordInvite: '', refreshSeconds: 120
   }, window.LEAGUE || {});
   L.apiUrl = String(L.apiUrl || '').trim();
 

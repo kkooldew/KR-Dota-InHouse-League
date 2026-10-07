@@ -48,7 +48,7 @@
 
 1. GitHub에서 **Public** 저장소를 만듭니다.
 2. 이 폴더의 파일을 모두 올립니다 (**Add file → Upload files**에 폴더째 끌어다 놓기). `bot/config.json`은 올리지 마세요.
-3. 저장소에서 `config.js`를 열고 연필 버튼으로 `apiUrl: ''` 따옴표 안에 1-6에서 복사한 주소를 넣고 저장합니다. 디스코드 초대 링크와 선물 안내 문장도 여기서 바꿉니다.
+3. 저장소에서 `config.js`를 열고 연필 버튼으로 `apiUrl: ''` 따옴표 안에 1-6에서 복사한 주소를 넣고 저장합니다. 디스코드 초대 링크도 여기서 바꿉니다.
 4. **Settings → Pages**에서 Source를 **Deploy from a branch**, Branch를 **main / (root)**로 고르고 Save를 누릅니다.
 5. 1~2분 뒤 `https://아이디.github.io/저장소이름/`이 등록 페이지가 됩니다. 순위는 `ranking.html`, 운영진은 `admin.html`입니다.
 
