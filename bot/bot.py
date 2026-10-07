@@ -11,6 +11,9 @@
 - 관리자 채널에서 /마감 (지금 인원으로 바로 마감), /연장 (마감을 5분 뒤로, 마감한 뒤에도 가능), /취소 (내전 취소)
 - 경기가 끝나면 관리자 채널에서 /승리 (이긴 팀을 골라 결과 기록과 MMR 정산), /승리취소 (방금 기록한 결과 되돌리기)
   · 정산도 리그 매니저의 로직 그대로 한다. 리그 기록의 원본은 서버에 있고, 봇은 받아서 고친 뒤 다시 올린다
+- 경기를 시작할 때 관리자 채널에서 /시작 (로비 음성 채널에 있는 선수를 배정된 팀의 음성 채널로 옮김), 끝나면 /종료 (팀 음성 채널의 모두를 로비로)
+  · 음성 채널은 /시작 의 로비·래디언트·다이어 칸에서 한 번 고르면 기억한다. 봇에 멤버 이동 권한이 있어야 한다
+- 운영진 명령어로 봇이 올리는 글은 모두 그 명령어를 쓴 운영진의 멘션으로 시작한다 (본인에게만 보이는 안내는 빼고)
 - 관리자 채널에는 리그 매니저에 붙여넣을 명단(디스코드 ID·사용자명·별명)을 함께 올림
 - 서버 주소(sync_url)와 운영진 키(sync_key)를 적어 두면, 명단과 짠 팀을 리그 서버에도 올려
   매니저의 "봇이 올린 명단 불러오기", "봇이 짠 팀 불러오기"로 바로 받을 수 있음
@@ -66,6 +69,8 @@ PLAYERS_NEEDED = 10  # 5 vs 5
 KST = timezone(timedelta(hours=9))  # 마감 시각 입력과 모집 글 제목에 쓰는 한국 시간
 DAY_STARTS_AT = 6  # 하루는 한국 시간 오전 6시에 바뀐다 (매니저의 팀 편성과 같은 기준)
 ROLE_NAMES = ["캐리", "미드", "오프", "서폿", "서폿"]
+# /시작·/종료 가 쓰는 음성 채널 세 곳. 고른 적이 없으면 이름에 이 낱말이 든 음성 채널을 찾아본다
+VOICE_ROOMS = {"lobby": ("로비", "lobby"), "radiant": ("래디언트", "radiant"), "dire": ("다이어", "dire")}
 DEADLINE_FORMAT = re.compile(r"(\d{4})-(\d{2})-(\d{2})-(\d{2})-(\d{2})")
 DEADLINE_EXAMPLE = "`2026-10-07-21-30` (연-월-일-시-분, 한국 시간, 24시간제)"
 MESSAGE_LIMIT = 1900  # 디스코드 메시지는 2000자까지라 조금 남겨 두고 나눈다
@@ -133,6 +138,8 @@ class InhouseBot(discord.Client):
         self.role_note = ""  # 마지막으로 관리자 채널에 알린 문제. 같은 문제를 1분마다 다시 알리지 않으려고 적어 둔다
         self.role_lock: asyncio.Lock | None = None
         self.role_task: asyncio.Task | None = None
+        # /시작 에서 골라 둔 음성 채널 {"lobby": 채널 ID, "radiant": …, "dire": …}. 없는 것은 이름으로 찾는다
+        self.voice: dict[str, int] = {}
 
     async def setup_hook(self) -> None:
         # 생성·마감·연장·취소가 겹치지 않게 한 번에 하나씩 처리한다
@@ -149,6 +156,7 @@ class InhouseBot(discord.Client):
             async with self.lock:
                 await restore_state()
             print(f"참여 선수 역할 자동 부여: {await role_status()}")
+            print(f"음성 채널 이동(/시작·/종료): {await voice_status()}")
             self.role_task = asyncio.create_task(role_loop())
 
 
@@ -293,7 +301,7 @@ def announcement_text(rec: Recruitment) -> str:
             f"(<t:{rec.end_ts}:R> 마감{', 연장됨' if rec.extended else ''})\n"
             f"👉 여기에서 `/참여` 를 입력하세요. 취소는 `/참여취소`"
         )
-    return f"{ANNOUNCEMENT}\n\n{status}\n👥 참여자 ({count}명): {names}"
+    return f"<@{rec.host_id}>님이 내전 모집을 열었어요.\n{ANNOUNCEMENT}\n\n{status}\n👥 참여자 ({count}명): {names}"
 
 
 async def awake(thread, action):
@@ -322,23 +330,29 @@ async def refresh_announcement(rec: Recruitment) -> None:
 async def open_signup(rec: Recruitment, title_ts: float | None = None) -> None:
     """참여 신청 채널에 모집 글을 올린다. 포럼이면 새 글을 만들고, 일반 채널이면 메시지를 보낸다."""
     signup = await get_channel(SIGNUP_CHANNEL_ID)
+    options = {"allowed_mentions": discord.AllowedMentions.none()}  # 본문 맨 앞에 모집을 연 운영진을 적는다. 알림은 울리지 않는다
     if isinstance(signup, discord.ForumChannel):
-        options = {}
         if signup.flags.require_tag and signup.available_tags:
             options["applied_tags"] = signup.available_tags[:1]  # 태그가 필수인 포럼이면 첫 태그를 붙인다
         created = await signup.create_thread(name=post_title(title_ts), content=announcement_text(rec), **options)
         rec.thread, rec.message = created.thread, created.message
     else:
-        rec.message = await signup.send(announcement_text(rec))
+        rec.message = await signup.send(announcement_text(rec), **options)
 
 
-async def post(rec: Recruitment, text: str, quiet: bool = False) -> None:
+async def post(rec: Recruitment, text: str, quiet: bool = False, skip: int | None = None) -> None:
     """모집 글(포럼) 또는 참여 신청 채널에 메시지를 보낸다. quiet 면 멘션 알림을 보내지 않는다. 실패해도 모집 처리는 계속한다.
+    skip 은 글에 멘션돼 있어도 알림은 보내지 않을 사람이다 (글 맨 앞에 적는, 명령어를 쓴 운영진).
     글이 길면 여러 메시지로 나눠 보낸다."""
     try:
         place = rec.thread or await get_channel(SIGNUP_CHANNEL_ID)
-        options = {"allowed_mentions": discord.AllowedMentions.none()} if quiet else {}
         for chunk in split_message(text):
+            options = {}
+            if quiet:
+                options["allowed_mentions"] = discord.AllowedMentions.none()
+            elif skip is not None:  # 이 메시지에 멘션된 사람 가운데 skip 만 빼고 알린다 (한 메시지에 100명까지라 메시지마다 따로 센다)
+                ids = sorted({int(x) for x in re.findall(r"<@(\d+)>", chunk)} - {skip})
+                options["allowed_mentions"] = discord.AllowedMentions(everyone=False, roles=False, users=[discord.Object(id=i) for i in ids])
             await awake(rec.thread, lambda: place.send(chunk, **options))
     except discord.HTTPException as e:
         print(f"참여 신청 채널 전송 실패: {e}")
@@ -389,6 +403,7 @@ def save_state() -> None:
             "lineups": bot.lineups,
             "roles": {"role_id": bot.player_role_id, "season": bot.role_season, "season_no": bot.role_season_no,
                       "seen": bot.role_seen, "revoke": bot.role_revoke},
+            "voice": bot.voice,
         }
         tmp = STATE_PATH.with_suffix(".tmp")
         tmp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
@@ -411,6 +426,9 @@ async def restore_state() -> None:
         bot.role_season_no = roles.get("season_no") if isinstance(roles.get("season_no"), int) else None
         bot.role_seen = {k: v for k, v in (roles.get("seen") or {}).items() if isinstance(v, dict)}
         bot.role_revoke = roles.get("revoke") if isinstance(roles.get("revoke"), dict) else None
+    voice = data.get("voice")
+    if isinstance(voice, dict):  # /시작 에서 골라 둔 음성 채널
+        bot.voice = {k: v for k, v in voice.items() if k in VOICE_ROOMS and isinstance(v, int)}
     cur = data.get("current")
     if not cur or not cur.get("message_id"):
         return
@@ -435,7 +453,9 @@ async def restore_state() -> None:
 
 
 # ── 마감 · 연장 · 취소 (bot.lock 을 잡은 상태에서 부른다) ─────────
-async def close_recruitment(rec: Recruitment) -> None:
+# by 는 그 명령어를 쓴 운영진의 디스코드 ID다. 모집 글에 올리는 알림의 맨 앞에 멘션한다(알림은 울리지 않는다).
+async def close_recruitment(rec: Recruitment, by: int | None = None) -> None:
+    """by 가 없으면 마감 시각이 되어 저절로 마감하는 것이다."""
     if rec.closed:
         return
     rec.closed = True
@@ -460,7 +480,7 @@ async def close_recruitment(rec: Recruitment) -> None:
     roster_text += f"\n{summary}"
 
     # 모집 글(참여 신청 채널): 참여자들에게 알림(멘션)이 가도록 전송
-    await post(rec, roster_text)
+    await post(rec, (f"<@{by}>님이 모집을 마감했어요.\n\n" if by else "") + roster_text, skip=by)
 
     # 관리자 채널: 같은 명단을 알림 없이 전송하고, 리그 매니저에 붙여넣을 명단을 따로 올린다
     synced = await push_roster(rec) if roster else None
@@ -488,7 +508,7 @@ async def close_recruitment(rec: Recruitment) -> None:
     save_state()
 
 
-async def extend_recruitment(rec: Recruitment) -> None:
+async def extend_recruitment(rec: Recruitment, by: int) -> None:
     """마감을 뒤로 미룬다. 모집 중이면 지금 마감 시각에서, 마감한 뒤면 지금부터 센다."""
     reopened = rec.closed
     rec.end_ts = deadline_after(EXTEND_SECONDS, None if reopened else rec.end_ts)
@@ -504,18 +524,18 @@ async def extend_recruitment(rec: Recruitment) -> None:
             rec.synced = False
         await drop_lineup(rec)
     await refresh_announcement(rec)
-    await post(rec, f"⏩ 모집을 연장했어요! **{when(rec.end_ts)}까지** `/참여` 로 신청하세요. (<t:{rec.end_ts}:R> 마감)")
+    await post(rec, f"<@{by}>님이 모집을 연장했어요! **{when(rec.end_ts)}까지** `/참여` 로 신청하세요. (<t:{rec.end_ts}:R> 마감)", quiet=True)
     save_state()
 
 
-async def cancel_recruitment(rec: Recruitment) -> None:
+async def cancel_recruitment(rec: Recruitment, by: int) -> None:
     rec.closed = True
     rec.cancelled = True
     stop_timer(rec)
 
     await refresh_announcement(rec)
     mentions = " ".join(f"<@{uid}>" for uid in rec.participants)
-    await post(rec, "❌ **이번 내전은 취소됐어요.**" + (f"\n{mentions}" if mentions else ""))
+    await post(rec, f"<@{by}>님이 이번 내전을 취소했어요." + (f"\n{mentions}" if mentions else ""), skip=by)
     if rec.synced:  # 매니저가 취소된 내전의 명단을 불러오지 않게 서버의 명단을 비운다
         await push_roster(rec, clear=True)
         rec.synced = False
@@ -1026,6 +1046,96 @@ async def role_loop() -> None:
         await asyncio.sleep(ROLE_POLL_SECONDS)
 
 
+# ── 음성 채널 이동 (/시작, /종료) ──────────────────────────────
+# 경기를 시작할 때 로비 음성 채널에 있는 선수를 배정된 팀의 음성 채널로 옮기고, 끝나면 팀 채널의 모두를 로비로 되돌린다.
+# 누가 음성 채널에 있는지는 특권 인텐트 없이 안다(음성 상태는 기본 인텐트에 들어 있다). 옮기려면 봇에 멤버 이동 권한이 있어야 한다.
+ROOM_NAMES = {"lobby": "로비", "radiant": "래디언트", "dire": "다이어"}
+
+
+def voice_rooms(guild: discord.Guild) -> tuple[dict, str]:
+    """로비·래디언트·다이어 음성 채널을 찾는다. 돌려주는 값: ({"lobby": 채널, "radiant": 채널, "dire": 채널}, 찾지 못한 까닭)
+    /시작 에서 골라 둔 채널이 먼저다. 고른 적이 없는 것은, 이름에 그 낱말이 든 음성 채널이 서버에 하나뿐일 때 그 채널을 쓴다."""
+    rooms, unknown = {}, []
+    for key, words in VOICE_ROOMS.items():
+        channel = guild.get_channel(bot.voice[key]) if bot.voice.get(key) else None
+        if not isinstance(channel, discord.VoiceChannel):  # 고른 적이 없거나, 골라 둔 채널이 지워졌다
+            named = [c for c in guild.voice_channels if any(w in c.name.lower().replace(" ", "") for w in words)]
+            channel = named[0] if len(named) == 1 else None
+        if channel is None:
+            unknown.append(ROOM_NAMES[key])
+        else:
+            rooms[key] = channel
+    how = "`/시작` 을 입력할 때 **로비**·**래디언트**·**다이어** 칸에서 음성 채널을 골라 주세요. 한 번 고르면 기억합니다."
+    if unknown:
+        return rooms, f"{'·'.join(unknown)} 음성 채널을 찾지 못했어요. {how}"
+    if len({channel.id for channel in rooms.values()}) < len(rooms):
+        return rooms, f"로비·래디언트·다이어는 서로 다른 음성 채널이어야 해요. {how}"
+    return rooms, ""
+
+
+def voice_problem(guild: discord.Guild, targets: list) -> str:
+    """봇이 사람들을 targets(음성 채널)로 옮길 수 없는 까닭. 옮길 수 있으면 빈 글."""
+    me = guild.me
+    if me is None:
+        return ""
+    for channel in targets:
+        perms = channel.permissions_for(me)
+        if not perms.move_members:
+            return "봇에 **멤버 이동** 권한이 없어요. 서버 설정 → 역할에서 봇의 역할에 **멤버 이동**을 켜 주세요."
+        if not (perms.view_channel and perms.connect):
+            return f"봇이 {channel.mention} 에 들어갈 수 없어요. 그 채널의 권한에서 봇에게 **채널 보기**와 **연결**을 허용해 주세요."
+    return ""
+
+
+async def voice_setup(picked: dict[str, int] | None = None) -> tuple[discord.Guild, dict, str, str]:
+    """/시작·/종료 가 쓸 음성 채널을 정한다. picked 는 방금 명령어에서 고른 채널 {"lobby": 채널 ID, …}.
+    돌려주는 값: (서버, {"lobby": 채널, …}, 쓸 수 없는 까닭, 채널을 새로 기억했을 때 운영진에게 덧붙일 안내)
+    세 곳을 다 찾으면 state.json 에 적어 둔다. 나중에 비슷한 이름의 채널이 생겨도 쓰던 채널을 그대로 쓰게 하려는 것이다."""
+    before = dict(bot.voice)
+    if picked:
+        bot.voice.update(picked)
+    guild = await get_guild()
+    rooms, problem = voice_rooms(guild)
+    if not problem:
+        bot.voice = {key: rooms[key].id for key in VOICE_ROOMS}
+    note = ""
+    if bot.voice != before:
+        save_state()
+        if not problem:
+            note = ("\n음성 채널을 기억했어요: " + " · ".join(f"{ROOM_NAMES[key]} {rooms[key].mention}" for key in VOICE_ROOMS)
+                    + ". 바꾸려면 `/시작` 의 로비·래디언트·다이어 칸에서 고르세요.")
+    return guild, rooms, problem, note
+
+
+async def voice_status() -> str:
+    """지금 설정을 한 줄로 (켤 때 창에 찍는다)"""
+    try:
+        guild = await get_guild()
+    except discord.HTTPException as e:
+        return f"[확인 필요] 디스코드 서버를 확인하지 못했습니다 ({e})"
+    rooms, problem = voice_rooms(guild)
+    if problem:
+        return "음성 채널을 아직 모릅니다 (디스코드에서 `/시작` 을 입력할 때 로비·래디언트·다이어 채널을 고르면 됩니다)"
+    problem = voice_problem(guild, list(rooms.values()))
+    names = ", ".join(f"{ROOM_NAMES[key]} #{rooms[key].name}" for key in VOICE_ROOMS)
+    return f"{names} [확인 필요] {problem}" if problem else f"{names} - 권한 확인"
+
+
+async def move_people(guild: discord.Guild, moves: list[tuple[int, discord.VoiceChannel]], reason: str) -> tuple[set[int], list[int], bool]:
+    """음성 채널에 있는 사람들을 한꺼번에 옮긴다. moves 는 [(디스코드 ID, 옮길 채널)].
+    돌려주는 값: (옮긴 사람, 옮기지 못한 사람, 권한이 없어서 못 옮겼는지). 그사이 음성 채널에서 나간 사람은 옮기지 못한 사람에 든다."""
+    async def one(uid: int, channel: discord.VoiceChannel) -> None:
+        member = guild.get_member(uid) or await guild.fetch_member(uid)
+        await member.move_to(channel, reason=reason)
+
+    results = await asyncio.gather(*(one(uid, channel) for uid, channel in moves), return_exceptions=True)
+    failed = [uid for (uid, _), r in zip(moves, results) if isinstance(r, BaseException)]
+    for r in results:
+        if isinstance(r, BaseException) and not isinstance(r, discord.HTTPException):
+            print(f"음성 채널 이동 실패: {r!r}")
+    return {uid for uid, _ in moves} - set(failed), failed, any(isinstance(r, discord.Forbidden) for r in results)
+
+
 # ── 슬래시 명령어: 운영진 ─────────────────────────────────────
 async def admin_only(interaction: discord.Interaction) -> bool:
     """운영진 명령어 공통 확인: 관리자 채널에서, 운영진이 입력했는지"""
@@ -1036,6 +1146,19 @@ async def admin_only(interaction: discord.Interaction) -> bool:
         await interaction.response.send_message("운영진만 쓸 수 있는 명령어예요.", ephemeral=True)
         return False
     return True
+
+
+def by(interaction: discord.Interaction) -> str:
+    """명령어를 쓴 운영진의 멘션. 운영진 명령어로 봇이 올리는 글은 모두 이 멘션으로 시작한다 (운영자가 정한 규칙, 2026-10-07).
+    한 일을 알릴 때는 '@운영진님이 …했어요', 운영진을 대신해 전하는 안내는 '@운영진: …', 운영진에게 하는 말은 '@운영진님, …' 꼴로 쓴다.
+    본인에게만 보이는 안내(ephemeral)에는 붙이지 않는다."""
+    return f"<@{interaction.user.id}>"
+
+
+async def answer(interaction: discord.Interaction, text: str) -> None:
+    """운영진 명령어에 관리자 채널에서 답한다. 길면 나눠 보내고, 멘션 알림은 울리지 않는다."""
+    for chunk in split_message(text):
+        await interaction.followup.send(chunk, allowed_mentions=discord.AllowedMentions.none())
 
 
 @bot.tree.command(name="내전생성", description="내전 참여자 모집을 시작합니다 (운영진 전용)", guild=GUILD)
@@ -1062,26 +1185,28 @@ async def create_inhouse(interaction: discord.Interaction, deadline: Optional[st
         await interaction.response.send_message(busy.format(bot.current.end_ts), ephemeral=True)
         return
     await interaction.response.defer()
+    actor = by(interaction)
 
     async with bot.lock:
         # 글을 올리는 사이에 다른 운영진이 먼저 만들었을 수 있으니 다시 확인한다
         if bot.current is not None and not bot.current.closed:
-            await interaction.followup.send(busy.format(bot.current.end_ts))
+            await answer(interaction, f"{actor}님, " + busy.format(bot.current.end_ts))
             return
         rec = Recruitment(host_id=interaction.user.id, end_ts=end_ts or deadline_after(SIGNUP_SECONDS))
         try:
             await open_signup(rec, title_ts=end_ts)
         except discord.HTTPException as e:
-            await interaction.followup.send(f"모집 글을 올리지 못했어요. 봇 권한과 채널 ID를 확인해 주세요. ({e})")
+            await answer(interaction, f"{actor}님, 모집 글을 올리지 못했어요. 봇 권한과 채널 ID를 확인해 주세요. ({e})")
             return
         bot.current = rec  # 모집 글이 올라간 뒤에 등록해서, 다른 명령어가 준비되지 않은 모집을 보지 않게 한다
         rec.task = asyncio.create_task(close_when_due(rec))
         save_state()
 
     waiting = any(x.get("lanes") and not x.get("result") for x in bot.lineups)
-    await interaction.followup.send(
-        f"✅ 모집을 시작했어요! {rec.message.jump_url}\n마감: {when(rec.end_ts)} (<t:{rec.end_ts}:R>)"
-        + ("\n⚠️ 결과를 아직 기록하지 않은 판이 있어요. 끝났다면 `/승리` 로 기록해 주세요." if waiting else "")
+    await answer(
+        interaction,
+        f"{actor}님이 모집을 시작했어요! {rec.message.jump_url}\n마감: {when(rec.end_ts)} (<t:{rec.end_ts}:R>)"
+        + ("\n⚠️ 결과를 아직 기록하지 않은 판이 있어요. 끝났다면 `/승리` 로 기록해 주세요." if waiting else ""),
     )
 
 
@@ -1090,13 +1215,14 @@ async def close_now(interaction: discord.Interaction) -> None:
     if not await admin_only(interaction):
         return
     await interaction.response.defer()
+    actor = by(interaction)
     async with bot.lock:
         rec = bot.current
         if rec is None or rec.closed:
-            await interaction.followup.send("지금은 모집 중인 내전이 없어요.")
+            await answer(interaction, f"{actor}님, 지금은 모집 중인 내전이 없어요.")
             return
-        await close_recruitment(rec)
-    await interaction.followup.send(f"🔒 모집을 마감했어요. (최종 {len(rec.participants)}명)")
+        await close_recruitment(rec, by=interaction.user.id)
+    await answer(interaction, f"{actor}님이 모집을 마감했어요. (최종 {len(rec.participants)}명)")
 
 
 @bot.tree.command(
@@ -1108,19 +1234,21 @@ async def extend(interaction: discord.Interaction) -> None:
     if not await admin_only(interaction):
         return
     await interaction.response.defer()
+    actor = by(interaction)
     async with bot.lock:
         rec = bot.current
         if rec is None or rec.cancelled:
-            await interaction.followup.send("연장할 내전이 없어요. `/내전생성` 으로 새로 모집해 주세요.")
+            await answer(interaction, f"{actor}님, 연장할 내전이 없어요. `/내전생성` 으로 새로 모집해 주세요.")
             return
         if settled(rec):
-            await interaction.followup.send("이미 경기 결과를 기록한 내전이에요. 새로 모집하려면 `/내전생성` 을 쓰세요.")
+            await answer(interaction, f"{actor}님, 이미 경기 결과를 기록한 내전이에요. 새로 모집하려면 `/내전생성` 을 쓰세요.")
             return
         reopened = rec.closed
-        await extend_recruitment(rec)
-    await interaction.followup.send(
-        ("⏩ 마감한 모집을 다시 열었어요." if reopened else "⏩ 모집을 연장했어요.")
-        + f" 새 마감: {when(rec.end_ts)} (<t:{rec.end_ts}:R>)"
+        await extend_recruitment(rec, by=interaction.user.id)
+    await answer(
+        interaction,
+        f"{actor}님이 " + ("마감한 모집을 다시 열었어요." if reopened else "모집을 연장했어요.")
+        + f" 새 마감: {when(rec.end_ts)} (<t:{rec.end_ts}:R>)",
     )
 
 
@@ -1129,16 +1257,100 @@ async def cancel(interaction: discord.Interaction) -> None:
     if not await admin_only(interaction):
         return
     await interaction.response.defer()
+    actor = by(interaction)
     async with bot.lock:
         rec = bot.current
         if rec is None or rec.cancelled:
-            await interaction.followup.send("취소할 내전이 없어요.")
+            await answer(interaction, f"{actor}님, 취소할 내전이 없어요.")
             return
         if settled(rec):
-            await interaction.followup.send("이미 경기 결과를 기록한 내전이에요. 결과를 되돌리려면 `/승리취소` 를 쓰세요.")
+            await answer(interaction, f"{actor}님, 이미 경기 결과를 기록한 내전이에요. 결과를 되돌리려면 `/승리취소` 를 쓰세요.")
             return
-        await cancel_recruitment(rec)
-    await interaction.followup.send("❌ 내전을 취소했어요." + (f" {rec.message.jump_url}" if rec.message else ""))
+        await cancel_recruitment(rec, by=interaction.user.id)
+    await answer(interaction, f"{actor}님이 내전을 취소했어요." + (f" {rec.message.jump_url}" if rec.message else ""))
+
+
+@bot.tree.command(name="시작", description="로비 음성 채널에 있는 선수를 배정된 팀의 음성 채널로 옮깁니다 (운영진 전용)", guild=GUILD)
+@app_commands.rename(lobby="로비", radiant="래디언트", dire="다이어")
+@app_commands.describe(lobby="선수들이 모여 있는 음성 채널. 한 번 고르면 기억하니 다음부터는 비워 두세요",
+                       radiant="래디언트 팀이 쓸 음성 채널", dire="다이어 팀이 쓸 음성 채널")
+async def start_game(interaction: discord.Interaction, lobby: Optional[discord.VoiceChannel] = None,
+                     radiant: Optional[discord.VoiceChannel] = None, dire: Optional[discord.VoiceChannel] = None) -> None:
+    if not await admin_only(interaction):
+        return
+    await interaction.response.defer()
+    actor = by(interaction)
+    sides = (("radiant", "r"), ("dire", "d"))
+    async with bot.lock:
+        picked = {key: channel.id for key, channel in (("lobby", lobby), ("radiant", radiant), ("dire", dire)) if channel is not None}
+        guild, rooms, problem, note = await voice_setup(picked)
+        if problem:
+            await answer(interaction, f"{actor}님, {problem}")
+            return
+        # 결과를 아직 기록하지 않은 팀 가운데 가장 나중에 짠 것 (이제 시작할 판)
+        entry = next((x for x in reversed(bot.lineups) if x.get("lanes") and not x.get("result")), None)
+        if entry is None:
+            await answer(interaction, f"{actor}님, 배정된 팀이 없어서 옮길 사람이 없어요. 봇이 팀을 짜서 알린 뒤에 쓸 수 있어요.{note}")
+            return
+        problem = voice_problem(guild, [rooms["radiant"], rooms["dire"]])
+        if problem:
+            await answer(interaction, f"{actor}님, {problem}{note}")
+            return
+        who = entry.get("who") or {}
+        seats = {side: [who[lane[s]] for lane in entry["lanes"] if lane[s] in who] for side, s in sides}
+        waiting = set(rooms["lobby"].voice_states)  # 로비에 있는 사람
+        moves = [(uid, rooms[side]) for side, _ in sides for uid in seats[side] if uid in waiting]
+        placed = {uid for side, _ in sides for uid in seats[side] if uid in rooms[side].voice_states}  # 이미 자기 팀 채널에 와 있는 선수
+        absent = [uid for side, _ in sides for uid in seats[side] if uid not in waiting and uid not in placed]
+        if not moves:
+            where = "" if not absent else " 로비에 없는 선수: " + ", ".join(f"<@{uid}>" for uid in absent)
+            await answer(interaction, (f"{actor}님, 선수들이 이미 각자의 팀 음성 채널에 있어요." if placed and not absent
+                                       else f"{actor}님, {rooms['lobby'].mention} 에 배정된 선수가 없어서 아무도 옮기지 않았어요.{where}") + note)
+            return
+        entry["started"] = time.time()  # /종료 가 끝났다는 안내를 이 판의 모집 글에 올린다
+        entry.pop("ended", None)
+        save_state()
+        notice = f"{actor}: 게임이 시작되어 선수들을 각자의 음성 채널로 이동시킵니다."
+        await send_to(entry["place_id"], notice)
+        moved, failed, denied = await move_people(guild, moves, "내전 시작 (/시작)")
+    lines = [notice, " · ".join(f"{mark} {rooms[side].mention} {sum(uid in moved for uid in seats[side])}명" for mark, side in (("🟢", "radiant"), ("🔴", "dire")))
+             + "을 옮겼어요."]
+    if absent:
+        lines.append("로비에 없어서 옮기지 못한 선수: " + ", ".join(f"<@{uid}>" for uid in absent))
+    if failed:
+        lines.append(("⚠️ 봇에 **멤버 이동** 권한이 없어 옮기지 못한 선수: " if denied else "⚠️ 옮기지 못한 선수(그사이 음성 채널에서 나갔을 수 있어요): ")
+                     + ", ".join(f"<@{uid}>" for uid in failed))
+    await answer(interaction, "\n".join(lines) + note)
+
+
+@bot.tree.command(name="종료", description="래디언트·다이어 음성 채널에 있는 사람을 모두 로비 음성 채널로 옮깁니다 (운영진 전용)", guild=GUILD)
+async def end_game(interaction: discord.Interaction) -> None:
+    if not await admin_only(interaction):
+        return
+    await interaction.response.defer()
+    actor = by(interaction)
+    async with bot.lock:
+        guild, rooms, problem, note = await voice_setup()
+        problem = problem or voice_problem(guild, [rooms["lobby"]])
+        if problem:
+            await answer(interaction, f"{actor}님, {problem}{note}")
+            return
+        people = [uid for side in ("radiant", "dire") for uid in rooms[side].voice_states]
+        if not people:
+            await answer(interaction, f"{actor}님, {rooms['radiant'].mention} 와 {rooms['dire'].mention} 에 아무도 없어서 옮길 사람이 없어요.{note}")
+            return
+        notice = f"{actor}: 게임이 종료되어 모든 선수를 로비로 이동시킵니다."
+        entry = next((x for x in reversed(bot.lineups) if x.get("started") and not x.get("ended")), None)  # /시작 으로 시작한 판
+        if entry is not None:
+            entry["ended"] = time.time()
+            save_state()
+            await send_to(entry["place_id"], notice)
+        moved, failed, denied = await move_people(guild, [(uid, rooms["lobby"]) for uid in people], "내전 종료 (/종료)")
+    lines = [notice, f"{rooms['lobby'].mention} 로 {len(moved)}명을 옮겼어요."]
+    if failed:
+        lines.append(("⚠️ 봇에 **멤버 이동** 권한이 없어 옮기지 못한 사람: " if denied else "⚠️ 옮기지 못한 사람(그사이 음성 채널에서 나갔을 수 있어요): ")
+                     + ", ".join(f"<@{uid}>" for uid in failed))
+    await answer(interaction, "\n".join(lines) + note)
 
 
 @bot.tree.command(name="승리", description="봇이 짠 팀의 경기 결과를 기록하고 MMR을 정산합니다 (운영진 전용)", guild=GUILD)
@@ -1149,30 +1361,29 @@ async def record_win(interaction: discord.Interaction, team: str) -> None:
     if not await admin_only(interaction):
         return
     await interaction.response.defer()
+    actor = by(interaction)
     async with bot.lock:
         # 결과를 기다리는 팀 가운데 가장 먼저 짠 것 (보통은 방금 끝난 판 하나뿐이다)
         entry = next((x for x in bot.lineups if x.get("lanes") and not x.get("result")), None)
         if entry is None:
             recorded = any(x.get("result") for x in bot.lineups)
-            await interaction.followup.send(
-                "결과를 기다리는 팀이 없어요. 이미 기록한 결과를 고치려면 `/승리취소` 로 되돌린 뒤 다시 기록하세요." if recorded
-                else "결과를 기록할 팀이 없어요. 봇이 팀을 짜서 알린 뒤에 쓸 수 있어요."
+            await answer(
+                interaction,
+                f"{actor}님, 결과를 기다리는 팀이 없어요. 이미 기록한 결과를 고치려면 `/승리취소` 로 되돌린 뒤 다시 기록하세요." if recorded
+                else f"{actor}님, 결과를 기록할 팀이 없어요. 봇이 팀을 짜서 알린 뒤에 쓸 수 있어요.",
             )
             return
         try:
             result = await change_league({"mode": "result", "lanes": entry["lanes"], "winner": team})
         except Exception as e:
             print(f"결과 기록 실패: {e!r}")
-            await interaction.followup.send(f"결과를 기록하지 못했어요. 리그 매니저에서 기록해 주세요. ({e})")
+            await answer(interaction, f"{actor}님, 결과를 기록하지 못했어요. 리그 매니저에서 기록해 주세요. ({e})")
             return
         entry["result"] = {"winner": team, "match_id": result["match"]["id"]}
         save_state()
-        text = result_text(team, result["changes"], entry.get("who") or {})
+        text = f"{actor}님이 경기 결과를 기록했어요.\n" + result_text(team, result["changes"], entry.get("who") or {})
         await send_to(entry["place_id"], text)
-    await interaction.followup.send(
-        f"{text}\n\n순위 페이지와 구글 시트에 반영했어요. 잘못 기록했다면 `/승리취소` 로 되돌릴 수 있어요.",
-        allowed_mentions=discord.AllowedMentions.none(),
-    )
+    await answer(interaction, f"{text}\n\n순위 페이지와 구글 시트에 반영했어요. 잘못 기록했다면 `/승리취소` 로 되돌릴 수 있어요.")
 
 
 @bot.tree.command(name="승리취소", description="/승리 로 기록한 마지막 결과를 되돌립니다 (운영진 전용)", guild=GUILD)
@@ -1180,21 +1391,22 @@ async def undo_win(interaction: discord.Interaction) -> None:
     if not await admin_only(interaction):
         return
     await interaction.response.defer()
+    actor = by(interaction)
     async with bot.lock:
         entry = next((x for x in reversed(bot.lineups) if x.get("result")), None)  # 가장 최근에 결과를 기록한 팀
         if entry is None:
-            await interaction.followup.send("되돌릴 결과가 없어요. `/승리` 로 기록한 결과만 되돌릴 수 있어요.")
+            await answer(interaction, f"{actor}님, 되돌릴 결과가 없어요. `/승리` 로 기록한 결과만 되돌릴 수 있어요.")
             return
         try:
             await change_league({"mode": "undo", "matchId": entry["result"]["match_id"]})
         except Exception as e:
             print(f"결과 되돌리기 실패: {e!r}")
-            await interaction.followup.send(f"결과를 되돌리지 못했어요. 리그 매니저에서 고쳐 주세요. ({e})")
+            await answer(interaction, f"{actor}님, 결과를 되돌리지 못했어요. 리그 매니저에서 고쳐 주세요. ({e})")
             return
         entry["result"] = None
         save_state()
-        await send_to(entry["place_id"], "↩️ **경기 결과 기록을 취소했어요.** MMR과 전적을 기록하기 전으로 되돌렸어요.")
-    await interaction.followup.send("↩️ 결과 기록을 취소하고 MMR을 되돌렸어요. 다시 기록하려면 `/승리` 를 쓰세요.")
+        await send_to(entry["place_id"], f"{actor}님이 경기 결과 기록을 취소했어요. MMR과 전적을 기록하기 전으로 되돌렸어요.")
+    await answer(interaction, f"{actor}님이 결과 기록을 취소하고 MMR을 되돌렸어요. 다시 기록하려면 `/승리` 를 쓰세요.")
 
 
 @bot.tree.command(name="선수역할", description="승인한 선수에게 자동으로 줄 역할을 정합니다. 제외한 선수에게서는 뺍니다 (운영진 전용)", guild=GUILD)
@@ -1204,46 +1416,45 @@ async def player_role(interaction: discord.Interaction, role: Optional[discord.R
     if not await admin_only(interaction):
         return
     await interaction.response.defer()
-    quiet = discord.AllowedMentions.none()
+    actor = by(interaction)
     if off:
         # 꺼 둔 동안 시즌이 넘어가도, 다시 켰을 때 역할을 거두지 않도록 시즌 번호도 잊는다
         bot.player_role_id, bot.role_seen, bot.role_season_no, bot.role_revoke = 0, {}, None, None
         save_state()
-        await interaction.followup.send("🎫 참여 선수 역할 자동 부여를 껐어요. 이미 준 역할은 그대로 둡니다. 다시 켜려면 `/선수역할` 에서 역할을 골라 주세요.")
+        await answer(interaction, f"{actor}님이 참여 선수 역할 자동 부여를 껐어요. 이미 준 역할은 그대로 둡니다. 다시 켜려면 `/선수역할` 에서 역할을 골라 주세요.")
         return
     if role is not None:
         problem = role_problem(await get_guild(), role)
         if problem:
-            await interaction.followup.send(f"🎫 {role.mention} 역할로는 켤 수 없어요. {problem}", allowed_mentions=quiet)
+            await answer(interaction, f"{actor}님, {role.mention} 역할로는 켤 수 없어요. {problem}")
             return
         if role.id != bot.player_role_id:
             bot.player_role_id, bot.role_seen, bot.role_revoke = role.id, {}, None  # 역할이 바뀌면 처음부터 다시 맞춘다
             save_state()
     if not bot.player_role_id:
-        await interaction.followup.send("🎫 참여 선수 역할 자동 부여가 꺼져 있어요. `/선수역할` 에서 **역할**을 고르면, 운영진 페이지에서 승인한 선수에게 그 역할을 주고 제외한 선수에게서는 뺍니다.")
+        await answer(interaction, f"{actor}님, 참여 선수 역할 자동 부여가 꺼져 있어요. `/선수역할` 에서 **역할**을 고르면, 운영진 페이지에서 승인한 선수에게 그 역할을 주고 제외한 선수에게서는 뺍니다.")
         return
     if not (SYNC_URL and SYNC_KEY):
-        await interaction.followup.send("🎫 역할은 정했지만, 봇이 등록 명단을 읽을 수 없어요. `config.json` 에 `sync_url` 과 `sync_key` 를 넣고 봇을 다시 켜 주세요.")
+        await answer(interaction, f"{actor}님, 역할은 정했지만, 봇이 등록 명단을 읽을 수 없어요. `config.json` 에 `sync_url` 과 `sync_key` 를 넣고 봇을 다시 켜 주세요.")
         return
     try:
         out = await sync_roles(force=True)
     except Exception as e:
         print(f"참여 선수 역할 맞추기 실패: {e!r}")
-        await interaction.followup.send(f"🎫 등록 명단을 읽지 못했어요. 잠시 뒤에 다시 해 주세요. ({e})")
+        await answer(interaction, f"{actor}님, 등록 명단을 읽지 못했어요. 잠시 뒤에 다시 해 주세요. ({e})")
         return
     bot.role_note = out["problem"]
     done = roles_text(out).replace("🎫 **참여 선수 역할**\n", "")  # 문제가 생기기 전에 처리한 것이 있으면 그것도 알린다
     if out["problem"]:
-        text = "🎫 **참여 선수 역할**을 맞추지 못했어요. " + out["problem"] + (f"\n{done}" if done else "")
+        text = f"{actor}님, **참여 선수 역할**을 맞추지 못했어요. " + out["problem"] + (f"\n{done}" if done else "")
     elif bot.role_revoke is not None:  # 시즌이 넘어가 역할을 거두는 중이다. 한 번에 다 하지 못하면 다음 차례에 이어서 한다
-        text = (f"🎫 시즌이 바뀌어 지난 시즌 선수의 <@&{bot.player_role_id}> 역할을 거두는 중이에요. "
+        text = (f"{actor}님, 시즌이 바뀌어 지난 시즌 선수의 <@&{bot.player_role_id}> 역할을 거두는 중이에요. "
                 f"(남은 사람 {len(bot.role_revoke['left'])}명) 다 거둔 뒤에 새 시즌의 승인 선수에게 줍니다.")
     else:
-        head = f"🎫 승인한 선수에게 <@&{bot.player_role_id}> 역할을 자동으로 줍니다. 제외하면 뺍니다. (1분마다 확인)"
+        head = f"{actor}: 🎫 승인한 선수에게 <@&{bot.player_role_id}> 역할을 자동으로 줍니다. 제외하면 뺍니다. (1분마다 확인)"
         more = f"\n나머지 {out['left']}명은 이어서 처리합니다." if out["left"] else ""
         text = f"{head}\n{done or '지금은 새로 주거나 뺄 사람이 없어요.'}{more}"
-    for chunk in split_message(text):
-        await interaction.followup.send(chunk, allowed_mentions=quiet)
+    await answer(interaction, text)
 
 
 # ── 슬래시 명령어: 참가자 ─────────────────────────────────────
