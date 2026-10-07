@@ -15,11 +15,12 @@
  * 코드를 고친 뒤에는 배포 → 배포 관리 → 수정(연필) → 버전: 새 버전 → 배포 를 눌러야 반영됩니다.
  */
 
-const SERVER_VERSION = 10;                             // 서버를 고칠 때마다 올린다. 상태 응답에 실려서 새 버전이 배포됐는지 밖에서 확인할 수 있다
+const SERVER_VERSION = 11;                             // 서버를 고칠 때마다 올린다. 상태 응답에 실려서 새 버전이 배포됐는지 밖에서 확인할 수 있다
 const SHEET_NAME = '선수등록';                             // 등록 탭 이름의 앞부분. 시즌마다 '선수등록 (시즌 이름)' 탭을 따로 쓴다
 // 칸을 더할 때는 맨 뒤에 붙이고 LAYOUT 을 올린다. 이미 있는 탭에는 ready_ 가 새 머리글을 채워 넣는다
-const HEADERS = ['등록시각', '수정시각', '상태', '닉네임', '스팀프로필', '스팀키', '디스코드', 'MMR', '1지망', '2지망', '3지망', '4지망', '비고', '최고MMR'];
-const LAYOUT = '2';
+// 처리자·처리시각: 그 등록의 상태(승인·제외·대기)를 마지막으로 바꾼 운영진과 그 시각 (버전 11)
+const HEADERS = ['등록시각', '수정시각', '상태', '닉네임', '스팀프로필', '스팀키', '디스코드', 'MMR', '1지망', '2지망', '3지망', '4지망', '비고', '최고MMR', '처리자', '처리시각'];
+const LAYOUT = '3';
 const COL = HEADERS.reduce((o, h, i) => (o[h] = i, o), {});
 const PREF_LABELS = ['캐리', '미드', '오프', '서폿'];          // 지망 번호 1~4
 const STATUSES = ['대기', '승인', '제외'];
@@ -27,9 +28,15 @@ const MAX_MMR = 15000;
 const MAX_ROWS = 3000;
 const ROSTER_MAX = 60;
 const STEAM_TRIES = 4;                                     // 스팀 조회를 몇 번까지 시도할지
+const DRIVE_TRIES = 3;                                     // 드라이브 파일을 몇 번까지 다시 읽어 볼지
 const LEAGUE_MAX = 8000000;                                // 리그 기록의 최대 크기(글자 수)
 const SEASON_WORD = '시즌 변경';                            // 새 시즌을 시작할 때 운영진이 직접 입력해야 하는 확인 문구
 const LINKED = '1';                                        // 승인한 선수를 선수단에 넣기 시작했다는 표시 (버전 10). ready_ 가 처음 한 번 맞춘다
+const OWNER_NAME = '주인';                                 // 주인 키(ADMIN_KEY)로 한 일에 남기는 이름
+const STAFF_MAX = 30;                                      // 키를 따로 받는 운영진의 최대 인원
+const LOG_TAB = '운영 기록';                                // 누가 무엇을 했는지 남기는 탭
+const LOG_HEADERS = ['시각', '시즌', '운영진', '한 일', '대상', '내용'];
+let ACTOR = null;                                          // 이번 요청을 보낸 운영진 {owner, id, name}. requireAdmin_ 이 채운다
 
 /* =========================================================
    설치: 편집기에서 setup 을 한 번 실행하세요
@@ -89,7 +96,11 @@ function doPost(e) {
       case 'adminSetStatus': requireAdmin_(body); return setStatus_(body);
       case 'adminSyncPlayers': requireAdmin_(body); return syncNow_();
       case 'adminConfig': requireAdmin_(body); return setConfig_(body);
-      case 'adminNewSeason': requireAdmin_(body); return newSeason_(body);
+      // 되돌릴 수 없는 일(새 시즌 시작)과 운영진을 늘리고 줄이는 일은 주인 키로만 한다
+      case 'adminNewSeason': requireOwner_(body); return newSeason_(body);
+      case 'adminStaff': requireOwner_(body); return staffList_();
+      case 'adminStaffAdd': requireOwner_(body); return staffAdd_(body);
+      case 'adminStaffRemove': requireOwner_(body); return staffRemove_(body);
       case 'publishRecords': requireAdmin_(body); return publishRecords_(body);
       case 'pushRoster': requireAdmin_(body); return pushRoster_(body);
       case 'adminRoster': requireAdmin_(body); return { roster: getRoster_() };
@@ -109,6 +120,7 @@ function doPost(e) {
 
 function respond_(fn) {
   let out;
+  ACTOR = null;
   try {
     ready_();
     out = Object.assign({ ok: true }, fn());
@@ -129,9 +141,27 @@ function fail_(message, code) {
   throw err;
 }
 
+// 운영진 키를 확인하고, 누가 보낸 요청인지 돌려준다(ACTOR 에도 적어 둔다).
+// 키는 두 가지다: 주인 키(ADMIN_KEY, 운영자와 봇이 쓴다)와 운영진마다 따로 만들어 준 키(버전 11, 아래 "운영진" 절).
 function requireAdmin_(body) {
   const key = PropertiesService.getScriptProperties().getProperty('ADMIN_KEY');
-  if (!key || typeof body.key !== 'string' || body.key !== key) fail_('운영진 키가 맞지 않습니다', 'auth');
+  const given = typeof body.key === 'string' ? body.key : '';
+  if (key && given && given === key) return (ACTOR = { owner: true, id: '', name: OWNER_NAME });
+  if (given.length >= 32 && given.length <= 200) {         // 운영진 키는 64자다. 터무니없이 짧거나 긴 값은 지문을 내 보지도 않는다
+    const hash = keyHash_(given);
+    const me = staff_().filter(s => s.hash === hash)[0];
+    if (me) {
+      touchStaff_(me);
+      return (ACTOR = { owner: false, id: me.id, name: me.name });
+    }
+  }
+  fail_('운영진 키가 맞지 않습니다', 'auth');
+}
+
+function requireOwner_(body) {
+  const who = requireAdmin_(body);
+  if (!who.owner) fail_('이 일은 주인 키로만 할 수 있습니다. 리그 운영자에게 부탁해 주세요.', 'owner');
+  return who;
 }
 
 function withLock_(fn) {
@@ -155,18 +185,147 @@ function statusInfo_() {
   };
 }
 
-// 운영진에게는 등록 인원 수와 지난 시즌 이름도 함께 준다 (오래된 시즌이 앞)
+// 운영진에게는 등록 인원 수와 지난 시즌 이름도 함께 준다 (오래된 시즌이 앞).
+// role 과 name 은 지금 쓰는 키가 누구의 것인지다. 운영진 페이지가 주인 키로만 할 수 있는 칸을 가릴 때 본다
 function adminStatus_() {
   return Object.assign(statusInfo_(), {
     registered: Math.max(0, getSheet_().getLastRow() - 1),
-    pastSeasons: seasons_().slice(0, -1).map(s => s.name)
+    pastSeasons: seasons_().slice(0, -1).map(s => s.name),
+    role: ACTOR && !ACTOR.owner ? 'staff' : 'owner',
+    name: ACTOR ? ACTOR.name : OWNER_NAME
   });
 }
 
 function setConfig_(body) {
-  if (typeof body.open === 'boolean') PropertiesService.getScriptProperties().setProperty('REG_OPEN', String(body.open));
-  if (typeof body.season === 'string') renameSeason_(body.season);
+  const props = PropertiesService.getScriptProperties();
+  if (typeof body.open === 'boolean') {
+    const was = props.getProperty('REG_OPEN') !== 'false';
+    props.setProperty('REG_OPEN', String(body.open));
+    if (was !== body.open) logAlone_(body.open ? '등록 열기' : '등록 닫기', '', '');
+  }
+  if (typeof body.season === 'string') {
+    const old = seasons_().slice(-1)[0].name;
+    renameSeason_(body.season);
+    const now = seasons_().slice(-1)[0].name;
+    if (old !== now) logAlone_('시즌 이름 고침', now, old + ' → ' + now);
+  }
   return adminStatus_();
+}
+
+/* =========================================================
+   운영진 (버전 11)
+   ========================================================= */
+// 운영진마다 키를 따로 준다. 전에는 모두가 주인 키 하나를 같이 써서, 한 사람만 빼려면 키를 새로 만들어 모두에게 다시 돌려야 했고
+// 누가 무엇을 했는지도 알 수 없었다(운영자가 2026-10-08에 "다른 운영진을 편하게 추가·제거"할 방법을 골랐다).
+//  - 주인 키(ADMIN_KEY)는 그대로다. 운영자와 봇이 쓴다. 운영진을 늘리고 줄이는 일과 새 시즌 시작은 주인 키로만 한다.
+//  - 운영진의 키는 만들 때 한 번만 돌려주고, 서버에는 지문(SHA-256)만 둔다. 스크립트 속성을 들여다봐도 키를 알 수 없다.
+//    키는 244비트 난수라 지문에서 거꾸로 찾을 수 없다. 잃어버리면 그 운영진을 끊고 새로 추가한다.
+//  - 스크립트 속성 STAFF 에 [{id, name, hash, createdAt}] 로 적는다. 마지막으로 쓴 날은 STAFF_SEEN_<id> 에 따로 둔다
+//    (목록을 고치는 요청과 겹쳐 서로 덮어쓰지 않게).
+function staff_() {
+  try {
+    const list = JSON.parse(PropertiesService.getScriptProperties().getProperty('STAFF') || '[]');
+    return Array.isArray(list) ? list.filter(s => s && typeof s === 'object' && s.id && s.hash && s.name) : [];
+  } catch (err) {
+    console.warn('운영진 목록을 읽지 못했습니다: ' + err);
+    return [];
+  }
+}
+
+function keyHash_(key) {
+  return Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, key, Utilities.Charset.UTF_8)
+    .map(b => ('0' + (b & 0xff).toString(16)).slice(-2)).join('');
+}
+
+function today_() {
+  return Utilities.formatDate(new Date(), 'Asia/Seoul', 'yyyy-MM-dd HH:mm').slice(0, 10);
+}
+
+// 그 운영진이 마지막으로 키를 쓴 날(한국 날짜)을 적어 둔다. 하루에 한 번만 쓴다
+function touchStaff_(me) {
+  try {
+    const props = PropertiesService.getScriptProperties(), day = today_();
+    if (props.getProperty('STAFF_SEEN_' + me.id) !== day) props.setProperty('STAFF_SEEN_' + me.id, day);
+  } catch (err) { /* 못 적어도 요청은 그대로 처리한다 */ }
+}
+
+function staffName_(v) {
+  const s = String(v == null ? '' : v).replace(/[\u0000-\u001f\u007f<>]/g, '').replace(/\s+/g, ' ').trim();
+  if (!s) fail_('운영진의 이름을 넣어 주세요', 'name');
+  if (s.length > 20) fail_('이름은 20자 이내로 넣어 주세요', 'name');
+  return s;
+}
+
+function staffList_() {
+  const props = PropertiesService.getScriptProperties();
+  return { staff: staff_().map(s => ({ id: s.id, name: s.name, createdAt: s.createdAt || '', lastDay: props.getProperty('STAFF_SEEN_' + s.id) || '' })) };
+}
+
+// 운영진을 추가하고 그 사람의 키를 돌려준다. 키는 이 답에만 실리고 서버에는 남지 않는다
+function staffAdd_(body) {
+  const name = staffName_(body.name);
+  return withLock_(() => {
+    const list = staff_();
+    if (list.length >= STAFF_MAX) fail_('운영진은 ' + STAFF_MAX + '명까지 둘 수 있습니다. 쓰지 않는 운영진을 먼저 끊어 주세요.', 'name');
+    if (nameKey_(name) === nameKey_(OWNER_NAME) || list.some(s => nameKey_(s.name) === nameKey_(name)))
+      fail_('이미 있는 이름입니다. 다른 이름을 넣어 주세요.', 'name');
+    const key = (Utilities.getUuid() + Utilities.getUuid()).replace(/-/g, '');
+    let id = '';
+    for (let n = 0; !id || list.some(s => s.id === id); n++) id = 'a' + Date.now().toString(36) + n.toString(36);
+    list.push({ id: id, name: name, hash: keyHash_(key), createdAt: new Date().toISOString() });
+    PropertiesService.getScriptProperties().setProperty('STAFF', JSON.stringify(list));
+    log_('운영진 추가', name, '');
+    return Object.assign(staffList_(), { key: key, name: name });
+  });
+}
+
+// 운영진을 끊는다. 그 사람의 키는 바로 쓸 수 없게 된다
+function staffRemove_(body) {
+  const id = String(body.id || '');
+  return withLock_(() => {
+    const props = PropertiesService.getScriptProperties();
+    const list = staff_();
+    const me = list.filter(s => s.id === id)[0];
+    if (!me) fail_('그런 운영진이 없습니다. 목록을 새로 고쳐 주세요.', 'staff');
+    props.setProperty('STAFF', JSON.stringify(list.filter(s => s !== me)));
+    try { props.deleteProperty('STAFF_SEEN_' + id); } catch (err) { /* 남아 있어도 쓰이지 않는다 */ }
+    log_('운영진 끊기', me.name, '');
+    return staffList_();
+  });
+}
+
+/* ---- 운영 기록 ----
+   누가 무엇을 했는지를 시트의 '운영 기록' 탭에 한 줄씩 남긴다(등록 승인·제외·대기, 등록 열고 닫기, 시즌, 운영진 추가·끊기).
+   기록을 남기지 못해도 하던 일은 그대로 끝낸다. */
+function log_(what, target, detail) {
+  logRows_([[what, target, detail]]);
+}
+
+// 잠금을 잡지 않은 곳에서 남길 때 쓴다. 두 요청이 같은 줄에 겹쳐 쓰지 않게 잠근 뒤에 적고, 잠그지 못하면 기록만 건너뛴다
+function logAlone_(what, target, detail) {
+  try { withLock_(() => log_(what, target, detail)); }
+  catch (err) { console.warn('운영 기록을 남기지 못했습니다: ' + err); }
+}
+
+function logRows_(rows) {
+  if (!rows.length) return;
+  try {
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    let sheet = ss.getSheetByName(LOG_TAB);
+    if (!sheet) {
+      sheet = ss.insertSheet(LOG_TAB);
+      sheet.getRange(1, 1, 1, LOG_HEADERS.length).setValues([LOG_HEADERS]).setFontWeight('bold');
+      sheet.setFrozenRows(1);
+    }
+    const list = seasons_(), now = new Date(), who = ACTOR ? ACTOR.name : '';
+    const season = list[list.length - 1].name;
+    const table = rows.map(r => [now, text_(season), text_(who), text_(r[0]), text_(r[1]), text_(r[2])]);
+    const at = sheet.getLastRow() + 1, need = at + table.length - 1;
+    if (sheet.getMaxRows() < need) sheet.insertRowsAfter(sheet.getMaxRows(), need - sheet.getMaxRows());
+    sheet.getRange(at, 1, table.length, LOG_HEADERS.length).setValues(table);
+  } catch (err) {
+    console.warn('운영 기록을 남기지 못했습니다: ' + err);
+  }
 }
 
 /* =========================================================
@@ -299,8 +458,16 @@ function newSeason_(body) {
     const ss = SpreadsheetApp.getActiveSpreadsheet();
     const cur = list[list.length - 1];
 
-    // 보관이 먼저다. 여기서 실패하면 아무것도 바뀌지 않는다
-    const ended = getLeague_().league;
+    // 보관이 먼저다. 여기서 실패하면 아무것도 바뀌지 않는다.
+    // 있어야 할 기록을 읽지 못했을 때(드라이브가 잠깐 답하지 않을 때)는 "기록이 없다"로 치지 않고 멈춘다.
+    // 그대로 가면 보관도 초기화도 하지 않은 채 시즌만 넘어가서, 지난 시즌의 선수와 경기가 새 시즌의 기록에 남는다
+    let ended;
+    try { ended = readLeague_(); }
+    catch (err) {
+      console.error('새 시즌: 리그 기록을 읽지 못했습니다: ' + (err && err.stack || err));
+      fail_('지금 시즌의 리그 기록을 읽지 못해 새 시즌을 시작하지 않았습니다. 잠시 뒤에 다시 해 주세요. ' +
+        '계속 안 되면 리그 매니저를 열어 서버에 기록을 한 번 올린 뒤 다시 해 주세요.', 'league');
+    }
     if (ended) {
       const label = String(cur.name || '이름 없는 시즌').replace(/[\\\/:*?"<>|]/g, ' ').replace(/\s+/g, ' ').trim();
       cur.league = DriveApp.createFile('인하우스_리그기록_' + label + '.json', JSON.stringify(ended), 'application/json').getId();
@@ -315,6 +482,8 @@ function newSeason_(body) {
     props.setProperty('ROSTER', '');                             // 지난 시즌의 참가 명단과 짠 팀은 새 시즌의 선수와 맞지 않는다
     props.setProperty('LINEUP', '');
 
+    log_('새 시즌 시작', name, (cur.name || '이름 없는 시즌') + ' → ' + name);
+
     // 시즌은 이미 바뀌었다. 리그 기록을 비우다 실패해도 여기서 멈추지 않고, 다음 요청 때 ready_ 가 이어서 한다
     try { finishSeason_(list); }
     catch (err) { console.error('리그 기록을 새로 시작하지 못했습니다. 다음 요청에서 다시 합니다: ' + (err && err.stack || err)); }
@@ -326,8 +495,11 @@ function newSeason_(body) {
 function finishSeason_(list) {
   const cur = list[list.length - 1];
   if (!cur.leaguePending) return;
-  const live = getLeague_().league;                              // 아직 지난 시즌의 기록이다. 설정만 이어받는다
-  startLeague_(live && live.settings, list.length > 1 ? list[list.length - 2].name : '');
+  // 설정만 이어받는다. 끝난 시즌을 보관해 둔 파일(시즌을 넘길 때 만든 사본)에서 읽고, 읽지 못하면 아직 지난 시즌의 기록인 지금 파일에서 읽는다.
+  // 지금 파일만 보면, 그 파일을 잠깐 읽지 못한 순간에 설정이 기본값으로 돌아간다
+  const prev = list.length > 1 ? list[list.length - 2] : null;
+  const kept = (prev && archivedLeague_(prev)) || getLeague_().league;
+  startLeague_(kept && kept.settings, prev ? prev.name : '');
   delete cur.leaguePending;
   saveSeasons_(list);
   // 기록을 비우지 못하고 있던 사이에 새 시즌에서 승인한 선수가 있으면 이제 선수단에 넣는다 (새 시즌을 막 시작한 때에는 명단이 비어 있어 할 일이 없다)
@@ -350,7 +522,7 @@ function startLeague_(settings, endedSeason) {
 function archivedLeague_(season) {
   if (!season.league) return null;
   try {
-    const league = JSON.parse(alive_(DriveApp.getFileById(season.league)).getBlob().getDataAsString('UTF-8'));
+    const league = JSON.parse(readFile_(season.league));
     return league && Array.isArray(league.players) ? league : null;
   } catch (err) {
     console.warn('보관해 둔 리그 기록을 읽지 못했습니다 (' + season.name + '): ' + err);
@@ -419,6 +591,7 @@ function register_(body) {
       if (!back) line[COL['MMR']] = mmr;                   // 재참가 선수의 MMR은 처음 낼 때 이어받은 값 그대로 둔다
       prefCells.forEach((v, i) => { line[COL['1지망'] + i] = v; });
       line[COL['비고']] = mine.note ? text_(mine.note) : '';
+      line[COL['처리자']] = mine.by ? text_(mine.by) : '';    // 글자 칸은 다시 쓸 때마다 글자로 감싼다 (=로 시작하는 이름이 수식이 되지 않게)
       if (peak !== null) line[COL['최고MMR']] = peak;
       sheet.getRange(mine.rowNumber, 1, 1, HEADERS.length).setValues([line]);
       return { updated: true, returning: back, mmr: back ? mine.mmr : mmr };
@@ -674,7 +847,9 @@ function readRows_(sheet) {
       mmr: Number(String(d[COL['MMR']]).replace(/[^\d.]/g, '')) || 0,
       prefs: [0, 1, 2, 3].map(i2 => prefCode_(d[COL['1지망'] + i2])),
       note: d[COL['비고']].trim(),
-      peak: d[COL['최고MMR']].trim() === '' ? null : (Number(String(d[COL['최고MMR']]).replace(/[^\d.]/g, '')) || 0)
+      peak: d[COL['최고MMR']].trim() === '' ? null : (Number(String(d[COL['최고MMR']]).replace(/[^\d.]/g, '')) || 0),
+      by: d[COL['처리자']].trim(),
+      byAt: toIso_(raw[COL['처리시각']])
     };
   }).filter(r => r.nickname || r.steamKey);
 }
@@ -715,7 +890,9 @@ function listRegistrations_(sheet) {
     mmr: r.mmr,
     peak: r.peak,
     prefs: r.prefs,
-    note: r.note
+    note: r.note,
+    by: r.by,
+    byAt: r.byAt
   }));
 }
 
@@ -729,18 +906,25 @@ function setStatus_(body) {
     const sheet = getSheet_();
     const rows = readRows_(sheet);
     const fresh = [], gone = [];                           // 방금 승인한 줄, 방금 승인을 푼 줄
+    const who = ACTOR ? ACTOR.name : '', now = new Date(), logs = [];
     let changed = 0;
     rows.forEach(r => {
       if (!want.has(r.steamKey)) return;
       sheet.getRange(r.rowNumber, COL['상태'] + 1).setValue(status);
       changed++;
       if (r.status !== status) {
+        // 누가 바꿨는지 그 줄에 적고(처리자·처리시각), 운영 기록 탭에도 한 줄 남긴다
+        sheet.getRange(r.rowNumber, COL['처리자'] + 1, 1, 2).setValues([[text_(who), now]]);
+        logs.push([status, r.nickname, r.status + ' → ' + status]);
         if (status === '승인') fresh.push(r);
         else if (r.status === '승인') gone.push(r);
         r.status = status;
+        r.by = who;
+        r.byAt = now.toISOString();
       }
     });
-    const out = { changed };
+    logRows_(logs);
+    const out = { changed, by: who };
     // 승인이 바뀌었으면 선수단도 맞춘다. 맞추지 못해도 상태는 이미 바뀌었으니 실패로 돌려주지 않고, league.ok 로 알린다
     if (fresh.length || gone.length) out.league = linkPlayers_(rows, fresh, gone);
     return out;
@@ -988,7 +1172,9 @@ function getLeague_() {
   const id = props.getProperty('LEAGUE_FILE_ID');
   let text = '';
   if (rev && id) {
-    try { text = alive_(DriveApp.getFileById(id)).getBlob().getDataAsString('UTF-8') || ''; } catch (err) { /* 파일이 지워졌으면 없는 것으로 본다 */ }
+    // 몇 번을 해도 읽지 못하면 파일이 지워진 것으로 보고 없는 것으로 돌려준다(그러면 리그 매니저가 자기 기록을 다시 올려 되살릴 수 있다).
+    // 드라이브가 잠깐 답하지 않은 것을 "없다"로 돌려주면 매니저가 뒤처진 기록으로 서버를 덮어쓸 수 있어서, readFile_ 이 먼저 몇 번 다시 읽어 본다
+    try { text = readFile_(id); } catch (err) { console.warn('리그 기록 파일을 읽지 못해 없는 것으로 돌려줍니다: ' + err); }
   }
   return { league: text ? JSON.parse(text) : null, rev, leagueAt: text ? (props.getProperty('LEAGUE_AT') || '') : '' };
 }
@@ -999,10 +1185,22 @@ function getLeague_() {
 function readLeague_() {
   const id = PropertiesService.getScriptProperties().getProperty('LEAGUE_FILE_ID');
   if (!leagueRev_() || !id) return null;
-  const league = JSON.parse(alive_(DriveApp.getFileById(id)).getBlob().getDataAsString('UTF-8'));
+  const league = JSON.parse(readFile_(id));
   if (!league || typeof league !== 'object' || !Array.isArray(league.players) || !Array.isArray(league.matches))
     throw new Error('리그 기록의 모양이 다릅니다');
   return league;
+}
+
+// 드라이브 파일의 글을 읽는다. 드라이브는 가끔 잠깐 답하지 않으므로 몇 번 다시 읽어 본 뒤에야 못 읽은 것으로 친다(오류를 낸다).
+// 휴지통에 있으면 도로 꺼낸다(alive_)
+function readFile_(id) {
+  let last = null;
+  for (let n = 0; n < DRIVE_TRIES; n++) {
+    if (n) Utilities.sleep(400 * n);
+    try { return alive_(DriveApp.getFileById(id)).getBlob().getDataAsString('UTF-8') || ''; }
+    catch (err) { last = err; }
+  }
+  throw last;
 }
 
 // 리그 기록을 받아 원본으로 둔다. 받은 기록으로 공개 기록(순위 페이지)과 시트의 순위·경기 기록 탭도 다시 쓴다.
@@ -1012,8 +1210,11 @@ function saveLeague_(body) {
   const clean = sanitizeRecords_(league);
   const base = Number(body.baseRev) || 0;
   return withLock_(() => {
-    if (base !== leagueRev_() && body.force !== true)
+    const rev = leagueRev_();
+    if (base !== rev && body.force !== true)
       fail_('서버에 더 새로운 기록이 있습니다. 서버 기록을 먼저 불러와 주세요.', 'conflict');
+    // 서버의 더 새로운 기록을 일부러 덮어쓴 경우는 남겨 둔다 (매니저의 "이 기록으로 서버 덮어쓰기")
+    if (base !== rev) log_('리그 기록 덮어쓰기', '', '선수 ' + clean.players.length + '명, 경기 ' + clean.matches.length + '판으로 덮어씀');
     return storeLeague_(league, text, clean);
   });
 }
@@ -1150,11 +1351,26 @@ function getLineup_() {
   return raw ? JSON.parse(raw) : null;
 }
 
+// 순위 페이지가 읽는 공개 기록. 캐시 → 공개 기록 파일 → (파일을 읽지 못하면) 리그 기록의 원본에서 다시 걸러 낸 것.
+// 전에는 파일을 읽지 못하면 빈 파일을 새로 만들어 돌려줬다. 드라이브가 잠깐 답하지 않았을 뿐인데 순위 페이지가 텅 비고,
+// 그 빈 기록이 캐시에 남아 다음 경기가 기록될 때까지 그대로 보였다.
 function publicRecords_() {
   const cached = CacheService.getScriptCache().get('records');
   if (cached) return JSON.parse(cached);
-  const text = recordsFile_().getBlob().getDataAsString('UTF-8') || '';
-  const data = text ? JSON.parse(text) : { players: [], matches: [] };
+  const props = PropertiesService.getScriptProperties();
+  const id = props.getProperty('RECORDS_FILE_ID');
+  let data = null;
+  if (!id) data = { players: [], matches: [] };            // 아직 한 번도 쓴 적이 없다
+  else {
+    try { const text = readFile_(id); data = text ? JSON.parse(text) : { players: [], matches: [] }; }
+    catch (err) { console.warn('공개 기록 파일을 읽지 못했습니다. 리그 기록에서 다시 만듭니다: ' + err); }
+  }
+  if (!data) {
+    const league = readLeague_();                          // 이것도 읽지 못하면 오류로 답한다(순위 페이지는 보고 있던 기록을 그대로 둔다)
+    if (!league) throw new Error('공개 기록을 읽지 못했습니다');
+    data = sanitizeRecords_(league);
+    data.publishedAt = props.getProperty('LEAGUE_AT') || '';
+  }
   putCache_('records', JSON.stringify(data));
   return data;
 }

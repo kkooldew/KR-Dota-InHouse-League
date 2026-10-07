@@ -448,8 +448,14 @@ async def restore_state() -> None:
     rec.synced, rec.lineup = bool(cur.get("synced")), bool(cur.get("lineup"))
     try:
         place = await get_channel(int(cur.get("thread_id") or SIGNUP_CHANNEL_ID))
-    except discord.HTTPException as e:
-        print(f"꺼지기 전에 하던 모집을 이어받지 못했습니다. 모집 글이 지워졌을 수 있습니다. ({e})")
+    except discord.NotFound:
+        # 모집 글이 지워졌다. 이어받을 것이 없으니 상태 파일에서도 지운다 (그대로 두면 켤 때마다 같은 안내가 뜬다)
+        print("꺼지기 전에 하던 모집은 글이 지워져 있어 이어받지 않습니다." if not rec.closed
+              else "꺼지기 전에 마감한 모집은 글이 지워져 있어 이어받지 않습니다. (/연장·/취소 는 새 모집부터 쓸 수 있습니다)")
+        save_state()
+        return
+    except discord.HTTPException as e:  # 디스코드가 잠깐 답하지 않은 것일 수 있다. 상태 파일은 그대로 둔다
+        print(f"꺼지기 전에 하던 모집을 이어받지 못했습니다. 봇을 다시 켜면 다시 이어받아 봅니다. ({e})")
         return
     if cur.get("thread_id"):
         rec.thread = place

@@ -286,7 +286,7 @@ assert(props.ADMIN_KEY === key, 'running setup again keeps the admin key');
   S.env.setup();
   const key = S.props.ADMIN_KEY;
   const ping = () => post({ action: 'ping', key });
-  assert(tabNames() === '선수등록 (시즌 1)' && S.tabs[0].grid[0].join() === '등록시각,수정시각,상태,닉네임,스팀프로필,스팀키,디스코드,MMR,1지망,2지망,3지망,4지망,비고,최고MMR',
+  assert(tabNames() === '선수등록 (시즌 1)' && S.tabs[0].grid[0].join() === '등록시각,수정시각,상태,닉네임,스팀프로필,스팀키,디스코드,MMR,1지망,2지망,3지망,4지망,비고,최고MMR,처리자,처리시각',
     'fresh install: the first season gets its own tab');
   S.steam.vanity.returner = steamId(5);
   [1, 3, 4, 6, 7, 8, 9, 10].forEach(n => reg(n));
@@ -321,10 +321,10 @@ assert(props.ADMIN_KEY === key, 'running setup again keeps the admin key');
   // 되돌릴 수 없는 일이라 확인 문구("시즌 변경")를 함께 보낸 요청만 받는다
   const newSeason = (season, word = '시즌 변경') => post({ action: 'adminNewSeason', key, season, confirm: word });
   r = post({ action: 'adminNewSeason', key, season: '시즌 2' });
-  assert(!r.ok && r.code === 'confirm' && r.error.includes('시즌 변경') && S.tabs.length === 3 && status().season === '시즌 1', 'starting a season without the confirmation phrase is refused');
-  assert(['시즌변경', ' 시즌 변경', '시즌 변경!', 'yes', true].every(word => newSeason('시즌 2', word).code === 'confirm') && S.tabs.length === 3 && post({ action: 'adminLeague', key }).rev === 2,
+  assert(!r.ok && r.code === 'confirm' && r.error.includes('시즌 변경') && S.tabs.length === 4 && status().season === '시즌 1', 'starting a season without the confirmation phrase is refused');
+  assert(['시즌변경', ' 시즌 변경', '시즌 변경!', 'yes', true].every(word => newSeason('시즌 2', word).code === 'confirm') && S.tabs.length === 4 && post({ action: 'adminLeague', key }).rev === 2,
     'a wrong confirmation phrase changes nothing');
-  r = newSeason(' 시즌1 '); assert(!r.ok && r.code === 'season' && S.tabs.length === 3, 'a new season cannot reuse a name (spaces ignored)');
+  r = newSeason(' 시즌1 '); assert(!r.ok && r.code === 'season' && S.tabs.length === 4, 'a new season cannot reuse a name (spaces ignored)');
   r = post({ action: 'adminList', key });
   assert(r.seasonNo === 0 && r.current === 0 && r.season === '시즌 1' && r.players.length === 11, 'the admin list tells which season it is (by number)');
   r = newSeason('시즌 2');
@@ -692,6 +692,186 @@ assert(props.ADMIN_KEY === key, 'running setup again keeps the admin key');
   g = got();
   assert(!('leaguePending' in JSON.parse(S.props.SEASONS)[1]) && g.league.players.length === 1 && g.league.players[0].name === '선수21' && g.league.matches.length === 0 && g.rev === at + 2,
     'link: when the reset finishes, the players approved meanwhile are put into the new league');
+})();
+
+// ── 운영진마다 키를 따로 준다 (버전 11). 운영진 추가·끊기와 새 시즌 시작은 주인 키만, 누가 승인·제외했는지는 시트에 남긴다 ──
+(() => {
+  const crypto = require('crypto');
+  const S = makeEnv({ fresh: true });
+  const post = body => JSON.parse(S.env.doPost({ postData: { contents: JSON.stringify(body) } }).text);
+  const status = () => JSON.parse(S.env.doGet({ parameter: {} }).text);
+  const clearRL = () => Object.keys(S.cache).filter(k => k.startsWith('rl:')).forEach(k => delete S.cache[k]);
+  S.env.setup();
+  const owner = S.props.ADMIN_KEY;
+  const steamId = n => '7656119800000' + String(5000 + n);
+  const reg = (n, extra = {}) => { clearRL(); return post({ action: 'register', nickname: '선수' + n, steam: 'https://steamcommunity.com/profiles/' + steamId(n), discord: 'user' + n, mmr: 3000 + n * 100, prefs: [1, 2, 3, 4], ...extra }); };
+  const set = (key, ns, st) => post({ action: 'adminSetStatus', key, steamKeys: [].concat(ns).map(n => 's:' + steamId(n)), status: st });
+  const C = { status: 2, nick: 3, key: 5, by: 14, byAt: 15 };
+  const rowOf = n => S.tabs.find(t => t.getName().startsWith('선수등록')).grid.find(row => row[C.key] === 's:' + steamId(n));
+  const log = () => (S.sheets['운영 기록'] ? S.sheets['운영 기록'].grid : []);
+  const isDate = v => Object.prototype.toString.call(v) === '[object Date]';   // 서버 쪽에서 만든 Date 는 이 파일의 Date 와 틀이 달라 instanceof 로는 못 가린다
+  const lastLog = () => log()[log().length - 1].slice(1).join('|');           // 시각을 뺀 나머지: 시즌|운영진|한 일|대상|내용
+  for (let n = 1; n <= 6; n++) reg(n);
+
+  let r = post({ action: 'ping', key: owner });
+  assert(r.ok && r.role === 'owner' && r.name === '주인' && r.version >= 11, 'staff: the owner key is told it is the owner');
+  r = post({ action: 'adminStaff', key: owner });
+  assert(r.ok && r.staff.length === 0, 'staff: nobody but the owner at first');
+  assert(post({ action: 'adminStaff', key: 'nope' }).code === 'auth' && post({ action: 'adminStaffAdd', key: 'nope', name: 'x' }).code === 'auth', 'staff: managing staff needs a key');
+
+  // 운영진 추가: 키는 이때 한 번만 돌려주고, 서버에는 지문만 남는다
+  r = post({ action: 'adminStaffAdd', key: owner, name: '  짱고  ' });
+  const k1 = r.key, id1 = r.staff[0].id;
+  assert(r.ok && /^[0-9a-f]{64}$/.test(k1) && k1 !== owner && r.name === '짱고' && r.staff.length === 1 && r.staff[0].name === '짱고' && r.staff[0].createdAt && r.staff[0].lastDay === ''
+    && !('hash' in r.staff[0]) && !('key' in r.staff[0]), 'staff: adding returns that person\'s own key once');
+  assert(!S.props.STAFF.includes(k1) && JSON.parse(S.props.STAFF)[0].hash === crypto.createHash('sha256').update(k1).digest('hex') && !JSON.stringify(S.props).replace(S.props.ADMIN_KEY, '').includes(k1),
+    'staff: the server keeps only a fingerprint (SHA-256) of the key');
+  assert(lastLog() === '시즌 1|주인|운영진 추가|짱고|' && log()[0].join() === '시각,시즌,운영진,한 일,대상,내용' && isDate(log()[1][0]), 'staff: adding is written to the log tab');
+  assert(!JSON.stringify(post({ action: 'adminStaff', key: owner })).includes(k1), 'staff: the key cannot be read back later');
+
+  // 그 키로 할 수 있는 일: 등록 명단, 승인, 등록 열고 닫기, 리그 기록 (매니저도 이 키로 쓴다)
+  r = post({ action: 'ping', key: k1 });
+  assert(r.ok && r.role === 'staff' && r.name === '짱고' && r.registered === 6, 'staff: a staff key gets in, and is told who it is');
+  assert(post({ action: 'adminList', key: k1 }).players.length === 6 && post({ action: 'adminLeagueRev', key: k1 }).ok && post({ action: 'adminRoster', key: k1 }).ok
+    && post({ action: 'adminSyncPlayers', key: k1 }).ok, 'staff: reads and syncs work with a staff key');
+  r = set(k1, 1, '승인');
+  assert(r.ok && r.changed === 1 && r.by === '짱고' && r.league.ok && rowOf(1)[C.status] === '승인' && rowOf(1)[C.by] === '짱고' && isDate(rowOf(1)[C.byAt]),
+    'staff: approving writes who did it and when on that row');
+  assert(lastLog() === '시즌 1|짱고|승인|선수1|대기 → 승인', 'staff: and one line in the log tab');
+  r = post({ action: 'adminList', key: owner });
+  const one = r.players.find(p => p.nickname === '선수1'), two = r.players.find(p => p.nickname === '선수2');
+  assert(one.by === '짱고' && !isNaN(Date.parse(one.byAt)) && two.by === '' && two.byAt === '', 'staff: the admin list carries who handled each registration');
+  r = post({ action: 'saveLeague', key: k1, league: post({ action: 'adminLeague', key: k1 }).league, baseRev: post({ action: 'adminLeagueRev', key: k1 }).rev });
+  assert(r.ok, 'staff: the league can be saved with a staff key (the manager uses it)');
+
+  // 주인 키로만 하는 일
+  let before = JSON.stringify([S.props.SEASONS, S.props.STAFF, S.tabs.length]);
+  r = post({ action: 'adminNewSeason', key: k1, season: '시즌 2', confirm: '시즌 변경' });
+  assert(!r.ok && r.code === 'owner' && /주인 키/.test(r.error) && status().season === '시즌 1', 'staff: a staff key cannot start a new season');
+  assert(post({ action: 'adminStaff', key: k1 }).code === 'owner' && post({ action: 'adminStaffAdd', key: k1, name: '몰래' }).code === 'owner'
+    && post({ action: 'adminStaffRemove', key: k1, id: id1 }).code === 'owner' && JSON.stringify([S.props.SEASONS, S.props.STAFF, S.tabs.length]) === before,
+    'staff: a staff key cannot list, add or remove staff (nothing changes)');
+
+  // 이름
+  assert([' 짱 고 ', '짱고', '주인', '', '   ', 'x'.repeat(21)].every(name => post({ action: 'adminStaffAdd', key: owner, name }).code === 'name') && JSON.parse(S.props.STAFF).length === 1,
+    'staff: a name must be given, short, and not already taken (spaces ignored; the owner\'s name too)');
+  r = post({ action: 'adminStaffAdd', key: owner, name: '=1+1<b>' });
+  const k2 = r.key, id2 = r.staff[1].id;
+  assert(r.ok && r.name === '=1+1b' && r.staff.length === 2 && id2 !== id1 && k2 !== k1, 'staff: a second person gets a different key (angle brackets dropped from the name)');
+  set(k2, 2, '제외');
+  assert(rowOf(2)[C.by] === '=1+1b' && lastLog() === '시즌 1|=1+1b|제외|선수2|대기 → 제외', 'staff: a formula-like name is stored as text on the row and in the log');
+
+  // 누가 바꿨는지: 상태가 실제로 바뀔 때만 적는다
+  const at1 = rowOf(1)[C.byAt], lines = log().length;
+  r = set(owner, 1, '승인');
+  assert(r.changed === 1 && rowOf(1)[C.by] === '짱고' && rowOf(1)[C.byAt] === at1 && log().length === lines, 'staff: setting the same status again keeps the first handler and logs nothing');
+  r = set(owner, [1, 3, 4], '승인');
+  assert(r.changed === 3 && r.by === '주인' && rowOf(3)[C.by] === '주인' && rowOf(4)[C.by] === '주인' && rowOf(1)[C.by] === '짱고' && log().length === lines + 2
+    && log().slice(-2).map(x => x.slice(2).join('|')).join(' / ') === '주인|승인|선수3|대기 → 승인 / 주인|승인|선수4|대기 → 승인', 'staff: a bulk change logs one line per player actually changed');
+  set(k1, 3, '대기');
+  assert(rowOf(3)[C.by] === '짱고' && lastLog() === '시즌 1|짱고|대기|선수3|승인 → 대기', 'staff: undoing an approval is logged with who did it');
+  r = reg(3, { nickname: '셋째' });
+  assert(r.ok && r.updated === true && rowOf(3)[C.nick] === '셋째' && rowOf(3)[C.by] === '짱고' && isDate(rowOf(3)[C.byAt]), 'staff: the player editing afterwards keeps the handler on the row');
+
+  // 등록 열고 닫기, 시즌 이름, 서버 기록 덮어쓰기도 남긴다
+  post({ action: 'adminConfig', key: k1, open: false });
+  assert(lastLog() === '시즌 1|짱고|등록 닫기||', 'staff: closing registration is logged');
+  const n1 = log().length;
+  post({ action: 'adminConfig', key: k1, open: false });
+  post({ action: 'adminConfig', key: k1, season: '시즌 1' });
+  assert(log().length === n1, 'staff: settings that did not change are not logged');
+  post({ action: 'adminConfig', key: owner, open: true, season: '가을 시즌' });
+  assert(log().slice(-2).map(x => x.slice(1).join('|')).join(' / ') === '시즌 1|주인|등록 열기|| / 가을 시즌|주인|시즌 이름 고침|가을 시즌|시즌 1 → 가을 시즌', 'staff: opening and renaming are logged');
+  const lg = post({ action: 'adminLeague', key: owner });
+  post({ action: 'saveLeague', key: k1, league: lg.league, baseRev: lg.rev });
+  const n2 = log().length;
+  r = post({ action: 'saveLeague', key: k1, league: lg.league, baseRev: 0, force: true });
+  assert(r.ok && log().length === n2 + 1 && /^가을 시즌\|짱고\|리그 기록 덮어쓰기\|\|선수 \d+명, 경기 0판으로 덮어씀$/.test(lastLog()), 'staff: overwriting a newer league on purpose is logged (ordinary saves are not)');
+
+  // 마지막으로 쓴 날
+  r = post({ action: 'adminStaff', key: owner });
+  const today = new Date(Date.now() + 9 * 3600e3).toISOString().slice(0, 10);
+  assert(r.staff[0].lastDay === today && r.staff[1].lastDay === today, 'staff: the owner sees the day each key was last used');
+
+  // 기록을 남기지 못해도 하던 일은 끝낸다
+  const logTab = S.sheets['운영 기록'], getRange = logTab.getRange;
+  logTab.getRange = () => { throw new Error('시트 오류'); };
+  r = set(k1, 5, '승인');
+  assert(r.ok && r.changed === 1 && rowOf(5)[C.status] === '승인' && rowOf(5)[C.by] === '짱고', 'staff: a failing log tab does not fail the approval');
+  logTab.getRange = getRange;
+
+  // 새 시즌: 주인 키로 시작하고, 운영진의 키는 시즌이 바뀌어도 그대로다
+  r = post({ action: 'adminNewSeason', key: owner, season: '겨울 시즌', confirm: '시즌 변경' });
+  assert(r.ok && r.season === '겨울 시즌' && r.role === 'owner' && log().some(x => x.slice(1).join('|') === '겨울 시즌|주인|새 시즌 시작|겨울 시즌|가을 시즌 → 겨울 시즌'), 'staff: the owner starts a season, and it is logged');
+  assert(post({ action: 'ping', key: k1 }).name === '짱고' && S.tabs.filter(t => t.getName() === '운영 기록').length === 1, 'staff: staff keys and the log tab carry over to the new season');
+
+  // 끊기: 그 키는 바로 쓸 수 없다
+  assert(post({ action: 'adminStaffRemove', key: owner, id: 'nope' }).code === 'staff', 'staff: removing someone unknown is refused');
+  r = post({ action: 'adminStaffRemove', key: owner, id: id1 });
+  assert(r.ok && r.staff.length === 1 && r.staff[0].id === id2 && !('STAFF_SEEN_' + id1 in S.props) && lastLog() === '겨울 시즌|주인|운영진 끊기|짱고|', 'staff: removing is logged and forgets that key');
+  assert(post({ action: 'ping', key: k1 }).code === 'auth' && post({ action: 'adminList', key: k1 }).code === 'auth' && post({ action: 'saveLeague', key: k1, league: lg.league, baseRev: 0, force: true }).code === 'auth'
+    && post({ action: 'ping', key: k2 }).ok, 'staff: a removed key stops working at once; the others keep working');
+  r = post({ action: 'adminStaffAdd', key: owner, name: '짱고' });
+  assert(r.ok && r.key !== k1 && post({ action: 'ping', key: k1 }).code === 'auth' && post({ action: 'ping', key: r.key }).name === '짱고', 'staff: adding the same person again gives a new key; the old one stays dead');
+
+  // 틀린 키, 깨진 목록
+  assert(['', 'short', k2.slice(0, 63), k2 + '0', k2.toUpperCase(), 'x'.repeat(5000), null, 12345, {}].every(key => post({ action: 'ping', key }).code === 'auth'), 'staff: near-miss, empty, huge or non-text keys are refused');
+  const keep = S.props.STAFF;
+  S.props.STAFF = '{broken';
+  assert(post({ action: 'ping', key: k2 }).code === 'auth' && post({ action: 'ping', key: owner }).ok && post({ action: 'adminStaff', key: owner }).staff.length === 0, 'staff: a broken staff list locks staff out but never the owner');
+  S.props.STAFF = keep;
+  const pub = status();
+  assert(!('role' in pub) && !('name' in pub) && !JSON.stringify(pub).includes('짱고'), 'staff: the public status says nothing about staff');
+  for (let n = 0; JSON.parse(S.props.STAFF).length < 30; n++) post({ action: 'adminStaffAdd', key: owner, name: '운영진' + n });
+  r = post({ action: 'adminStaffAdd', key: owner, name: '서른한번째' });
+  assert(!r.ok && r.code === 'name' && JSON.parse(S.props.STAFF).length === 30 && S.props.STAFF.length < 9000, 'staff: at most thirty, and the list fits in one script property');
+})();
+
+// 새 시즌을 시작하려는 순간 드라이브가 답하지 않으면: 기록이 없는 것으로 치고 넘어가지 않고, 아무것도 바꾸지 않은 채 멈춘다
+(() => {
+  const S = makeEnv({ fresh: true });
+  const post = body => JSON.parse(S.env.doPost({ postData: { contents: JSON.stringify(body) } }).text);
+  S.env.setup();
+  const key = S.props.ADMIN_KEY;
+  const league = { players: [{ id: 'p1', name: '가', baseMMR: 3000, mmr: 3100, prefs: [1, 2, 3, 4], wins: 1, losses: 0, streak: 1, roleCount: [1, 0, 0, 0, 0], discord: 'ga', steam: '' }],
+    matches: [], settings: { k: 150, balanceTol: 300 } };
+  post({ action: 'saveLeague', key, league, baseRev: 0 });
+  const getFile = S.env.DriveApp.getFileById, before = JSON.stringify([S.props.SEASONS, S.tabs.map(t => t.getName()), S.props.LEAGUE_REV, S.files[S.props.LEAGUE_FILE_ID]]);
+  // 드라이브가 한두 번 답하지 않아도 다시 읽어서 기록을 돌려준다 ("기록이 없다"로 답하면 매니저가 뒤처진 기록으로 서버를 덮어쓸 수 있다)
+  let flaky = 2;
+  S.env.DriveApp.getFileById = id => { if (flaky-- > 0) throw new Error('Service error: Drive'); return getFile(id); };
+  const g = post({ action: 'adminLeague', key });
+  assert(g.ok && g.league && g.league.players.length === 1 && g.rev === 1 && flaky < 0, 'drive failing twice: the league is read on the third try instead of being reported as missing');
+  // 공개 기록 파일을 읽지 못하면 빈 파일을 새로 만들지 않고, 리그 기록에서 다시 걸러 낸다 (순위 페이지가 텅 비지 않게)
+  const recId = S.props.RECORDS_FILE_ID, fileCount = Object.keys(S.files).length;
+  const records = () => { delete S.cache.records; return JSON.parse(S.env.doGet({ parameter: { action: 'records' } }).text); };
+  S.env.DriveApp.getFileById = id => { if (id === recId) throw new Error('Service error: Drive'); return getFile(id); };
+  let pub = records();
+  assert(pub.ok && pub.records.players.length === 1 && pub.records.players[0].mmr === 3100 && !('discord' in pub.records.players[0]) && pub.records.publishedAt
+    && S.props.RECORDS_FILE_ID === recId && Object.keys(S.files).length === fileCount, 'public records file unreadable: served from the league (sanitized) instead of an empty new file');
+  S.env.DriveApp.getFileById = () => { throw new Error('Service error: Drive'); };
+  pub = records();
+  assert(!pub.ok && !('records' in pub) && S.props.RECORDS_FILE_ID === recId && Object.keys(S.files).length === fileCount && !('records' in S.cache),
+    'nothing readable at all: an error (the ranking page keeps what it had), still no empty file and nothing cached');
+  let r = post({ action: 'adminNewSeason', key, season: '시즌 2', confirm: '시즌 변경' });
+  assert(!r.ok && r.code === 'league' && /읽지 못해/.test(r.error) && JSON.stringify([S.props.SEASONS, S.tabs.map(t => t.getName()), S.props.LEAGUE_REV, S.files[S.props.LEAGUE_FILE_ID]]) === before,
+    'new season while drive cannot be read: refused, and nothing has changed (the old season is not carried into the new one unarchived)');
+  S.env.DriveApp.getFileById = getFile;
+  r = post({ action: 'adminNewSeason', key, season: '시즌 2', confirm: '시즌 변경' });
+  let list = JSON.parse(S.props.SEASONS), got = post({ action: 'adminLeague', key });
+  assert(r.ok && r.season === '시즌 2' && JSON.parse(S.files[list[0].league]).players[0].mmr === 3100 && got.league.players.length === 0 && got.league.settings.k === 150,
+    'new season once drive answers again: archived and reset as usual');
+  // 비우는 일이 미뤄진 동안 지금 파일을 읽지 못해도, 설정은 보관해 둔 사본에서 이어받는다 (기본값으로 돌아가지 않는다)
+  post({ action: 'saveLeague', key, league, baseRev: got.rev });
+  S.env.DriveApp.getFileById = id => Object.assign(getFile(id), { setContent() { throw new Error('드라이브 오류'); } });
+  r = post({ action: 'adminNewSeason', key, season: '시즌 3', confirm: '시즌 변경' });
+  list = JSON.parse(S.props.SEASONS);
+  const liveId = S.props.LEAGUE_FILE_ID;
+  S.env.DriveApp.getFileById = id => { if (id === liveId) throw new Error('Service error: Drive'); return getFile(id); };
+  post({ action: 'ping', key });
+  got = JSON.parse(S.files[S.props.LEAGUE_FILE_ID]);
+  assert(r.ok && list[2].leaguePending === true && !('leaguePending' in JSON.parse(S.props.SEASONS)[2]) && got.players.length === 0 && got.settings.k === 150 && got.settings.balanceTol === 300,
+    'reset finished later while the live file cannot be read: the settings still come from the archived copy');
 })();
 
 // 버전 10으로 올린 뒤 첫 요청: 그때까지 승인돼 있던 선수를 선수단에 넣는다 (한 번만)

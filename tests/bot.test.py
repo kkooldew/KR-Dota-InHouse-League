@@ -495,6 +495,24 @@ async def main():
     await mod.restore_state()
     await asyncio.sleep(0.4)
     check(mod.bot.current.closed and any("내전 참여 명단" in x for x in w.texts(w.thread.send)), "꺼진 사이 마감 시각이 지났으면 켜자마자 마감")
+    # 모집 글이 지워진 뒤에 켜면: 이어받지 않고, 상태 파일에서도 지운다 (켤 때마다 같은 안내가 되풀이되지 않게)
+    kept = json.loads(mod.STATE_PATH.read_text(encoding="utf-8"))
+    good_channel = mod.get_channel
+
+    async def gone_channel(cid):
+        raise discord.NotFound(Mock(status=404, reason="Not Found"), "Unknown Channel")
+
+    async def busy_channel(cid):
+        raise discord.DiscordServerError(Mock(status=503, reason="Service Unavailable"), "upstream")
+
+    mod.get_channel, mod.bot.current = busy_channel, None
+    await mod.restore_state()
+    check(mod.bot.current is None and json.loads(mod.STATE_PATH.read_text(encoding="utf-8"))["current"] == kept["current"] and kept["current"] is not None,
+          "디스코드가 잠깐 답하지 않아 이어받지 못했으면 상태 파일은 그대로 둔다 (다음에 켤 때 다시 이어받는다)")
+    mod.get_channel = gone_channel
+    await mod.restore_state()
+    check(mod.bot.current is None and json.loads(mod.STATE_PATH.read_text(encoding="utf-8"))["current"] is None, "모집 글이 지워져 있으면 이어받지 않고 상태 파일에서도 지운다")
+    mod.get_channel = good_channel
     mod.STATE_PATH.write_text("깨진 파일", encoding="utf-8")
     mod.bot.current = None
     await mod.restore_state()

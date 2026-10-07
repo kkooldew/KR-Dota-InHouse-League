@@ -55,6 +55,13 @@ table.reg{width:100%;border-collapse:collapse;min-width:900px;font-size:14px}
 .export-row{display:flex;flex-wrap:wrap;gap:12px;align-items:center}
 ol.steps{margin:12px 0 0;padding-left:20px;color:var(--bone-dim);font-size:13.5px}
 ol.steps li + li{margin-top:3px}
+.whoami{font-size:12.5px;color:var(--bone-dim);white-space:nowrap}
+.whoami b{color:var(--bone);font-weight:500}
+.reg .by{white-space:nowrap;font-size:12.5px;color:var(--bone-dim)}
+table.reg.staff{min-width:420px;margin-top:16px}
+#staffForm input{flex:1 1 180px;max-width:260px;padding:8px 10px}
+.newkey{margin-top:14px}
+.newkey input{flex:1 1 300px;font-family:ui-monospace,Consolas,monospace;font-size:13px;padding:8px 10px}
 details.by-file{margin-top:18px;padding-top:12px;border-top:1px solid var(--line-soft)}
 details.by-file summary{cursor:pointer;font-size:13.5px;color:var(--bone-dim)}
 details.by-file summary:hover,details.by-file[open] summary{color:var(--bone)}
@@ -113,6 +120,7 @@ details.by-file[open] summary{margin-bottom:10px}
       <div class="bar">
         <span class="pill" id="openPill"></span>
         <span class="dim grow" id="openHint"></span>
+        <span class="whoami" id="whoami" hidden></span>
         <button class="btn sm" type="button" id="btnToggleOpen"></button>
         <button class="btn sm ghost" type="button" id="btnLogout">잠그기</button>
       </div>
@@ -126,6 +134,7 @@ details.by-file[open] summary{margin-bottom:10px}
         <label for="newSeason" class="dim" style="font-size:13.5px">새 시즌</label>
         <input type="text" id="newSeason" maxlength="30" placeholder="예) 시즌 2">
         <button class="btn sm" type="button" id="btnNewSeason">새 시즌 시작</button>
+        <span class="dim" id="ownerOnlySeason" style="font-size:12.5px" hidden>새 시즌 시작은 주인 키로만 할 수 있습니다.</span>
       </div>
       <p class="season-note">새 시즌을 시작하면 구글 시트에 그 시즌의 등록 탭이 새로 생기고, 등록을 빈 명단에서 다시 받습니다. 순위와 경기 기록도 새로 시작합니다.
         끝난 시즌의 명단·순위·경기 기록은 시트에 그 시즌 이름이 붙은 탭으로 남습니다.
@@ -159,7 +168,7 @@ details.by-file[open] summary{margin-bottom:10px}
         <table class="reg">
           <thead><tr>
             <th scope="col">상태</th><th scope="col">닉네임</th><th scope="col" class="n">MMR</th><th scope="col" class="n">최고 MMR</th><th scope="col">포지션 순서</th>
-            <th scope="col">디스코드</th><th scope="col">스팀</th><th scope="col">등록</th><th scope="col">고침</th>
+            <th scope="col">디스코드</th><th scope="col">스팀</th><th scope="col">등록</th><th scope="col">고침</th><th scope="col">처리</th>
           </tr></thead>
           <tbody id="rows"></tbody>
         </table>
@@ -200,6 +209,32 @@ details.by-file[open] summary{margin-bottom:10px}
           <li><b>같은 선수면 갱신</b>으로 불러오면 새 선수는 더해지고, 이미 있는 선수는 닉네임·등록 MMR·지망만 고쳐집니다. 경기를 치른 선수의 인하우스 MMR과 전적은 그대로입니다.</li>
         </ol>
       </details>
+    </section>
+
+    <!-- 주인 키로 들어왔을 때만 보인다 (서버 버전 11부터) -->
+    <section class="panel" id="staffPanel" hidden>
+      <h2>운영진</h2>
+      <p class="hint">운영진마다 키를 따로 줍니다. 그 키로 이 페이지와 리그 매니저를 쓸 수 있고, 누가 승인·제외했는지가 명단과 구글 시트의 <b>운영 기록</b> 탭에 남습니다.
+        운영진을 추가하고 끊는 일과 새 시즌 시작은 지금 쓰고 계신 주인 키로만 할 수 있습니다. 주인 키는 다른 사람에게 주지 마세요.</p>
+      <form class="export-row" id="staffForm">
+        <input type="text" id="staffName" maxlength="20" placeholder="이름 (예: 짱고)" aria-label="추가할 운영진의 이름" autocomplete="off">
+        <button class="btn gold" type="submit" id="btnStaffAdd">운영진 추가</button>
+      </form>
+      <div class="notice newkey" id="newKey" hidden>
+        <p><b id="newKeyName"></b> 님의 운영진 키입니다. <b>지금 한 번만 보입니다.</b> 복사해서 본인에게만 따로(개인 메시지로) 전해 주세요.</p>
+        <div class="export-row" style="margin-top:10px">
+          <input type="text" id="newKeyValue" readonly aria-label="새 운영진 키" spellcheck="false">
+          <button class="btn sm" type="button" id="btnKeyCopy">복사</button>
+          <button class="btn sm ghost" type="button" id="btnKeyHide">가리기</button>
+        </div>
+        <p class="dim" style="margin-top:8px;font-size:12.5px">잃어버리면 그 운영진을 끊고 다시 추가하면 새 키가 나옵니다.</p>
+      </div>
+      <div class="scroll">
+        <table class="reg staff">
+          <thead><tr><th scope="col">이름</th><th scope="col">추가한 날</th><th scope="col">마지막으로 쓴 날</th><th scope="col"></th></tr></thead>
+          <tbody id="staffRows"></tbody>
+        </table>
+      </div>
     </section>
 
     <section class="panel">
@@ -255,6 +290,7 @@ details.by-file[open] summary{margin-bottom:10px}
   function lock(msg){
     key = '';
     try{ localStorage.removeItem(KEY_NAME); sessionStorage.removeItem(KEY_NAME); }catch(e){}
+    hideNewKey(); staffSeen = false; $('#staffRows').innerHTML = '';      // 잠근 화면 뒤에 방금 만든 키나 운영진 목록이 남지 않게
     $('#app').hidden = true; $('#login').hidden = false;
     $('#loginErr').textContent = msg || ''; $('#loginErr').hidden = !msg;
     $('#key').value = ''; $('#key').focus();
@@ -293,10 +329,21 @@ details.by-file[open] summary{margin-bottom:10px}
 
   // 서버 버전 10부터는 승인한 선수를 서버가 선수단(리그 기록)에 넣는다. 그 전 버전이면 지금까지처럼 명단 파일을 매니저에 불러와야 한다
   const autoLink = () => !!status && (status.version || 0) >= 10;
+  // 서버 버전 11부터는 운영진마다 키가 따로다. 지금 쓰는 키가 주인 키인지(운영진 추가·끊기와 새 시즌 시작을 할 수 있는지)는 서버가 알려 준다.
+  // 그 전 버전의 서버에는 키가 하나뿐이라 모두 주인으로 본다
+  const hasStaff = () => !!status && (status.version || 0) >= 11;
+  const isOwner = () => !hasStaff() || status.role !== 'staff';
+  let staffSeen = false;                   // 운영진 목록을 이미 읽었는지 (주인 키로 들어온 뒤 한 번)
 
   /* ---------- 등록 기간 ---------- */
   function renderStatus(){
     setSeason(status.season);
+    const owner = isOwner();
+    $('#whoami').innerHTML = hasStaff() ? (owner ? '<b>주인 키</b>로 들어왔습니다' : '<b>' + esc(status.name || '운영진') + '</b> 님 (운영진 키)') : '';
+    $('#whoami').hidden = !hasStaff();
+    $('#newSeason').disabled = !owner; $('#btnNewSeason').disabled = !owner; $('#ownerOnlySeason').hidden = owner;
+    $('#staffPanel').hidden = !(hasStaff() && owner);
+    if(hasStaff() && owner && !staffSeen){ staffSeen = true; loadStaff(); }
     const auto = autoLink(), box = $('#byFile');
     $('#autoLink').hidden = !auto; $('#linkHint').hidden = !auto; $('#fileWhen').hidden = !auto;
     if(box.dataset.auto !== String(auto)){ box.open = !auto; box.dataset.auto = String(auto); }   // 서버가 넣어 주면 파일 방식은 접어 둔다 (운영진이 펼친 것은 다시 접지 않는다)
@@ -440,7 +487,7 @@ details.by-file[open] summary{margin-bottom:10px}
 
     const list = visible();
     if(!list.length){
-      $('#rows').innerHTML = '<tr><td colspan="9" class="none">' + (players.length ? '조건에 맞는 선수가 없습니다.' : '아직 등록한 선수가 없습니다.') + '</td></tr>';
+      $('#rows').innerHTML = '<tr><td colspan="10" class="none">' + (players.length ? '조건에 맞는 선수가 없습니다.' : '아직 등록한 선수가 없습니다.') + '</td></tr>';
       return;
     }
     $('#rows').innerHTML = list.map(p =>
@@ -457,6 +504,8 @@ details.by-file[open] summary{margin-bottom:10px}
         '<td>' + (/^https:\/\/steamcommunity\.com\//.test(p.steamUrl || '') ? '<a href="' + esc(p.steamUrl) + '" target="_blank" rel="noopener noreferrer">프로필</a>' : '') + '</td>' +
         '<td class="time">' + esc(fmt(p.registeredAt)) + '</td>' +
         '<td class="time">' + (p.updatedAt && p.updatedAt !== p.registeredAt ? esc(fmt(p.updatedAt)) : '') + '</td>' +
+        // 이 등록의 상태를 마지막으로 바꾼 운영진 (서버 버전 11부터 남는다). 시각은 마우스를 올리면 보인다
+        '<td class="by"' + (p.byAt ? ' title="' + esc(fmt(p.byAt)) + '"' : '') + '>' + esc(p.by || '') + '</td>' +
       '</tr>').join('');
   }
 
@@ -493,6 +542,7 @@ details.by-file[open] summary{margin-bottom:10px}
       // 그사이 시트에서 그 줄이 지워졌거나 새 시즌이 시작됐으면 바뀐 줄이 없다. 바뀐 척하지 않고 명단을 다시 읽는다
       if(!r.changed){ toast('명단에서 ' + p.nickname + ' 선수를 찾지 못했습니다. 명단을 새로 읽습니다.'); await reload(); return; }
       p.status = sel.value;
+      if(typeof r.by === 'string'){ p.by = r.by; p.byAt = new Date().toISOString(); }      // 서버가 그 줄에 적은 처리자 (버전 11부터)
       const note = linkNote(r.league, p, prev);
       toast(p.nickname + ' 선수를 ' + ({승인: '승인했습니다.', 대기: '대기로 돌렸습니다.', 제외: '제외했습니다.'})[p.status] + note, note.length > 20 ? 9000 : 3200);
     }catch(err){
@@ -509,7 +559,11 @@ details.by-file[open] summary{margin-bottom:10px}
     try{
       const r = await adminPost({action: 'adminSetStatus', steamKeys: keys, status: '승인'}, WAIT_LINK);
       if(r.changed !== keys.length){ toast(r.changed + '명을 승인했습니다. 명단이 그사이 바뀌어 새로 읽습니다.'); await reload(); return; }
-      players.forEach(p => { if(p.status === '대기') p.status = '승인'; });
+      players.forEach(p => {
+        if(p.status !== '대기') return;
+        p.status = '승인';
+        if(typeof r.by === 'string'){ p.by = r.by; p.byAt = new Date().toISOString(); }
+      });
       render();
       const lg = r.league;
       let note = '';
@@ -544,6 +598,61 @@ details.by-file[open] summary{margin-bottom:10px}
   });
   $('#q').addEventListener('input', e => { ui.q = e.target.value; render(); });
   $('#sort').addEventListener('change', e => { ui.sort = e.target.value; render(); });
+
+  /* ---------- 운영진 (주인 키로만) ---------- */
+  // 운영진마다 키를 따로 준다. 새 키는 서버가 만들어 한 번만 돌려주고(서버에는 지문만 남는다), 이 화면에도 가리기를 누르거나 잠글 때까지만 둔다.
+  // 브라우저 저장소에는 넣지 않는다.
+  const day = iso => { const d = new Date(iso); return isNaN(d) ? '' : d.toLocaleDateString('ko-KR', {timeZone: 'Asia/Seoul', year: 'numeric', month: 'numeric', day: 'numeric'}); };
+  function renderStaff(list){
+    $('#staffRows').innerHTML = list.length ? list.map(s =>
+      '<tr><td class="nick">' + esc(s.name) + '</td><td class="time">' + esc(day(s.createdAt)) + '</td>' +
+      '<td class="time">' + (s.lastDay ? esc(day(s.lastDay + 'T00:00:00+09:00')) : '아직 쓰지 않음') + '</td>' +
+      '<td><button class="btn sm ghost" type="button" data-staff="' + esc(s.id) + '" data-name="' + esc(s.name) + '">끊기</button></td></tr>').join('')
+      : '<tr><td colspan="4" class="none">아직 추가한 운영진이 없습니다. 지금은 주인 키 하나로만 들어올 수 있습니다.</td></tr>';
+  }
+  async function loadStaff(){
+    try{ renderStaff((await adminPost({action: 'adminStaff'})).staff || []); }
+    catch(err){ staffSeen = false; $('#staffRows').innerHTML = '<tr><td colspan="4" class="none">' + esc(err.message) + '</td></tr>'; }
+  }
+  function hideNewKey(){
+    $('#newKeyValue').value = ''; $('#newKeyName').textContent = ''; $('#newKey').hidden = true;
+  }
+  $('#staffForm').addEventListener('submit', async e => {
+    e.preventDefault();
+    const name = $('#staffName').value.replace(/\s+/g, ' ').trim();
+    if(!name){ toast('추가할 운영진의 이름을 넣어 주세요'); $('#staffName').focus(); return; }
+    $('#btnStaffAdd').disabled = true;
+    try{
+      const r = await adminPost({action: 'adminStaffAdd', name});
+      renderStaff(r.staff || []);
+      $('#staffName').value = '';
+      $('#newKeyName').textContent = r.name; $('#newKeyValue').value = r.key; $('#newKey').hidden = false;
+      $('#newKeyValue').focus(); $('#newKeyValue').select();
+      toast(r.name + ' 님을 운영진으로 추가했습니다. 키를 복사해 전해 주세요.', 6000);
+    }catch(err){ toast(err.message); }
+    finally{ $('#btnStaffAdd').disabled = false; }
+  });
+  $('#btnKeyCopy').addEventListener('click', async () => {
+    const box = $('#newKeyValue');
+    try{ await navigator.clipboard.writeText(box.value); toast('키를 복사했습니다'); }
+    catch(err){ box.focus(); box.select(); toast('복사하지 못했습니다. 칸의 글자를 직접 복사해 주세요.'); }
+  });
+  $('#btnKeyHide').addEventListener('click', hideNewKey);
+  $('#staffRows').addEventListener('click', async e => {
+    const b = e.target.closest('button[data-staff]');
+    if(!b || !confirm(b.dataset.name + ' 님을 운영진에서 끊을까요?\n그 키로는 바로 운영진 페이지와 리그 매니저에 들어올 수 없게 됩니다. 지금까지 남긴 기록은 그대로입니다.')) return;
+    b.disabled = true;
+    try{
+      const r = await adminPost({action: 'adminStaffRemove', id: b.dataset.staff});
+      renderStaff(r.staff || []);
+      if($('#newKeyName').textContent === b.dataset.name) hideNewKey();
+      toast(b.dataset.name + ' 님을 운영진에서 끊었습니다');
+    }catch(err){
+      toast(err.message);
+      if(err.code === 'staff') loadStaff();   // 다른 창에서 이미 끊은 경우. 목록을 다시 읽는다
+      b.disabled = false;
+    }
+  });
 
   /* ---------- 매니저용 명단 ---------- */
   $('#exportSeg').addEventListener('click', e => {

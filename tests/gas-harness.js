@@ -82,12 +82,16 @@ function makeEnv(opt = {}){
       return { getResponseCode: () => 200, getContentText: () => body };
     } },
     SpreadsheetApp: { getActiveSpreadsheet: () => ({ getSheetByName: byName, getSheets: () => tabs.slice(), insertSheet }) },
-    PropertiesService: { getScriptProperties: () => ({ getProperty: k => (k in props ? props[k] : null), setProperty: (k, v) => { props[k] = String(v); } }) },
+    PropertiesService: { getScriptProperties: () => ({ getProperty: k => (k in props ? props[k] : null), setProperty: (k, v) => { props[k] = String(v); },
+      deleteProperty: k => { delete props[k]; } }) },
     CacheService: { getScriptCache: () => ({ get: k => cache[k] ?? null, put: (k, v) => { cache[k] = v; } }) },
     LockService: { getScriptLock: () => ({ tryLock: () => true, releaseLock(){} }) },
     ContentService: { MimeType: { JSON: 'json' }, createTextOutput: t => ({ text: t, setMimeType(){ return this; } }) },
     Utilities: {
       getUuid: () => require('crypto').randomUUID(), sleep(){},
+      // 실제 Apps Script 처럼 부호 있는 바이트(-128~127) 배열을 돌려준다
+      DigestAlgorithm: { SHA_256: 'sha256' }, Charset: { UTF_8: 'utf8' },
+      computeDigest: (alg, value, charset) => Array.from(require('crypto').createHash(alg).update(String(value), charset || 'latin1').digest()).map(b => (b > 127 ? b - 256 : b)),
       // 'yyyy-MM-dd HH:mm' 만 흉내 낸다 (한국 시간)
       formatDate: (d, tz, fmt) => new Date(d.getTime() + 9 * 3600e3).toISOString().slice(0, 16).replace('T', ' ')
     },
