@@ -620,7 +620,17 @@ async def ask_server(payload: dict) -> dict:
         raise ServerGlitch("서버가 알아볼 수 없는 답을 보냈습니다")
     if not result.get("ok"):
         raise ServerError(result.get("error") or "서버가 요청을 처리하지 못했습니다", result.get("code") or "")
+    if stray_status(result):
+        raise ServerGlitch("서버의 답 대신 다른 답이 돌아왔습니다")
     return result
+
+
+def stray_status(result: dict) -> bool:
+    """요청의 답이 아니라 서버의 공개 상태가 대신 돌아온 것인지.
+    구글 서버가 요청을 처리하고도 그 답을 전해 주지 못하면, 웹 앱 주소로 되돌려 보내서 요청과 상관없는 공개 상태(ok: true)가 온다
+    (2026-10-08에 실제 서버에서 마흔 번에 한 번꼴로 봤다). 공개 상태에는 version 이 있고 운영진에게만 주는 registered 가 없다.
+    이것을 진짜 답으로 믿으면 저장되지 않은 경기를 저장됐다고 알리게 되므로, 답을 받지 못한 것(ServerGlitch)으로 친다."""
+    return "version" in result and "registered" not in result
 
 
 async def call_server(payload: dict) -> dict:
@@ -870,7 +880,9 @@ async def change_league(payload: dict, tried: list | None = None) -> dict:
             tried.append(result["match"]["id"])
             save_state()
         try:
-            await call_server({"action": "saveLeague", "league": result["league"], "baseRev": got.get("rev", 0)})
+            saved = await call_server({"action": "saveLeague", "league": result["league"], "baseRev": got.get("rev", 0)})
+            if not isinstance(saved.get("rev"), int):  # 올렸다는 답에는 새 번호가 있어야 한다. 없으면 들어갔는지 모르는 것이다
+                raise ServerGlitch("서버가 기록을 받았다는 답을 보내지 않았습니다")
             return result
         except ServerError as e:
             if e.code != "conflict" or last:

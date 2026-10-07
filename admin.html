@@ -629,7 +629,12 @@ details.by-file[open] summary{margin-bottom:10px}
       $('#newKeyName').textContent = r.name; $('#newKeyValue').value = r.key; $('#newKey').hidden = false;
       $('#newKeyValue').focus(); $('#newKeyValue').select();
       toast(r.name + ' 님을 운영진으로 추가했습니다. 키를 복사해 전해 주세요.', 6000);
-    }catch(err){ toast(err.message); }
+    }catch(err){
+      // 답을 받지 못했으면(code 가 없는 오류) 서버에는 추가됐는데 키만 받지 못한 것일 수 있다. 목록을 다시 읽어 보여 준다
+      if(err.code){ toast(err.message); return; }
+      await loadStaff();
+      toast(err.message + ' 목록에 ' + name + ' 님이 생겼다면 키를 받지 못한 것이니, 끊고 다시 추가해 주세요.', 10000);
+    }
     finally{ $('#btnStaffAdd').disabled = false; }
   });
   $('#btnKeyCopy').addEventListener('click', async () => {
@@ -649,7 +654,7 @@ details.by-file[open] summary{margin-bottom:10px}
       toast(b.dataset.name + ' 님을 운영진에서 끊었습니다');
     }catch(err){
       toast(err.message);
-      if(err.code === 'staff') loadStaff();   // 다른 창에서 이미 끊은 경우. 목록을 다시 읽는다
+      if(err.code === 'staff' || !err.code) loadStaff();   // 다른 창에서 이미 끊었거나, 답을 받지 못해 끊겼는지 모르는 경우. 목록을 다시 읽는다
       b.disabled = false;
     }
   });

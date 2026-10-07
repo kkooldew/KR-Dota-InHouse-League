@@ -2942,14 +2942,20 @@ async function syncPost(body){
     throw new Error(err.name === 'AbortError' ? '서버가 응답하지 않습니다' : '서버에 연결하지 못했습니다');
   }finally{ clearTimeout(timer); }
   let j;
-  try{ j = await res.json(); }catch(err){ throw new Error('서버 응답을 읽지 못했습니다. 웹 앱을 "모든 사용자"가 쓸 수 있게 배포했는지 확인하세요'); }
+  // 구글 로그인 화면으로 넘어갔으면 배포 설정 문제고, 그 밖의 읽지 못한 답은 구글 쪽의 일시적인 문제다
+  try{ j = await res.json(); }
+  catch(err){ throw new Error(/accounts\.google\.com/.test(res.url || '') ? '서버 응답을 읽지 못했습니다. 웹 앱을 "모든 사용자"가 쓸 수 있게 배포했는지 확인하세요' : LOST_ANSWER); }
   if(!j || !j.ok){
     const e = new Error((j && j.error) || '서버가 요청을 처리하지 못했습니다');
     e.code = (j && j.code) || '';
     throw e;
   }
+  // 구글 서버가 요청을 처리하고도 답을 전해 주지 못하면, 브라우저가 되돌려진 주소를 따라가 요청과 상관없는 공개 상태(ok: true)를 받는 일이 있다.
+  // 공개 상태에는 version 이 있고 운영진에게만 주는 registered 가 없다. 그런 답은 받지 못한 것으로 친다(요청이 처리됐는지는 알 수 없다)
+  if('version' in j && !('registered' in j)) throw new Error(LOST_ANSWER);
   return j;
 }
+const LOST_ANSWER = '서버의 답을 받지 못했습니다';
 
 /* ---- 기록의 원본은 서버에 둔다 (v0.20) ----
    봇이 /승리 로 경기 결과를 기록하게 되면서, 기록의 원본을 이 브라우저에서 서버로 옮겼다.
@@ -2959,12 +2965,13 @@ async function syncPost(body){
    매니저는 덮어쓰는 대신 서버 기록을 먼저 불러온다. */
 const leagueOf = () => ({players: state.players, matches: state.matches, settings: state.settings});
 // 기록의 지문. 서버와 맞춘 뒤로 기록이 바뀌었는지 가리는 데 쓴다
-function fingerprint(){
-  const s = JSON.stringify(leagueOf());
+function printOf(league){
+  const s = JSON.stringify({players: league.players, matches: league.matches, settings: league.settings});
   let h = 2166136261;
   for(let i=0;i<s.length;i++){ h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); }
   return (h >>> 0).toString(36) + '.' + s.length;
 }
+const fingerprint = () => printOf(leagueOf());
 const unsent = () => fingerprint() !== sync.hash;               // 서버에 아직 올리지 않은 변경이 있는지
 const hasRecords = () => state.players.length > 0 || state.matches.length > 0;
 const clock = d => d.toLocaleTimeString('ko-KR', {hour:'2-digit', minute:'2-digit'});
@@ -2999,6 +3006,7 @@ async function pushLeague(manual, force){
   let conflict = false;
   try{
     const r = await syncPost({action:'saveLeague', league: leagueOf(), baseRev: sync.rev || 0, force: !!force});
+    if(typeof r.rev !== 'number') throw new Error(LOST_ANSWER);   // 올렸다는 답에는 새 번호가 있어야 한다
     sync.rev = r.rev; sync.hash = mark; keepSync();
     syncStuck = false; renderSyncForm();
     setSyncBadge('서버에 저장 ' + clock(new Date()));
@@ -3038,6 +3046,7 @@ async function pullLeague(manual){
 // 서버의 기록을 보고 필요하면 이 브라우저의 기록을 바꾼다. 돌려주는 값: 이어서 이 브라우저의 기록을 올려야 하는지
 async function pullStep(manual){
   const r = await syncPost({action:'adminLeague'});
+  if(typeof r.rev !== 'number') throw new Error(LOST_ANSWER);   // 리그 기록의 답에는 언제나 번호가 있다
   const rev = r.rev || 0;
   if(!r.league && rev && hasRecords() && (sync.rev || 0) !== rev){
     // 서버에 기록 번호는 있는데 기록을 돌려주지 않았다. 구글 드라이브가 잠깐 답하지 않았거나 서버의 기록 파일이 지워진 경우다.
@@ -3061,6 +3070,23 @@ async function pullStep(manual){
     if(!unsent() && manual) toast('이미 서버와 같은 기록입니다');
     return unsent();
   }
+  const bad = backupProblem(r.league);
+  if(bad){
+    setSyncBadge('서버 기록을 불러오지 못함', true);
+    syncNote('서버 기록을 불러오지 못했습니다: ' + bad, true);
+    return false;
+  }
+  const next = stateFrom(r.league);
+  if(hasRecords() && printOf(next) === fingerprint()){
+    // 서버의 기록이 이 브라우저의 기록과 똑같다. 올린 것은 서버에 들어갔는데 그 답만 받지 못한 경우다(구글 서버가 가끔 그런다).
+    // 어느 쪽을 남길지 물을 것이 없으니 번호만 맞춘다
+    sync.rev = rev; sync.hash = fingerprint(); keepSync();
+    syncStuck = false; renderSyncForm();
+    setSyncBadge('서버에 저장 ' + clock(new Date()));
+    syncNote('서버의 기록이 이 브라우저의 기록과 같습니다 (선수 ' + state.players.length + '명, 경기 ' + state.matches.length + '건).');
+    if(manual) toast('이미 서버와 같은 기록입니다');
+    return false;
+  }
   if(hasRecords() && unsent() && !confirm('서버에 이 브라우저보다 새로운 기록이 있습니다.\n봇으로 경기 결과를 기록했거나 다른 컴퓨터에서 기록을 고친 경우입니다.\n\n' +
       '[확인] 서버 기록을 불러옵니다. 이 브라우저에서 아직 올리지 않은 변경은 사라집니다.\n[취소] 이 브라우저의 기록을 그대로 둡니다.')){
     syncStuck = true; renderSyncForm();
@@ -3068,13 +3094,7 @@ async function pullStep(manual){
     syncNote('서버에 더 새로운 기록이 있어 자동으로 맞추지 않고 있습니다. 서버 기록을 쓰려면 "서버에서 불러오기"를, 이 브라우저의 기록으로 서버를 덮어쓰려면 "이 기록으로 서버 덮어쓰기"를 누르세요.', true);
     return false;
   }
-  const bad = backupProblem(r.league);
-  if(bad){
-    setSyncBadge('서버 기록을 불러오지 못함', true);
-    syncNote('서버 기록을 불러오지 못했습니다: ' + bad, true);
-    return false;
-  }
-  state = stateFrom(r.league);
+  state = next;
   sync.rev = rev; sync.hash = fingerprint(); keepSync();
   syncStuck = false;
   picked = new Set([...picked].filter(id => byId(id)));        // 짜 둔 보드는 선수가 그대로 있으면 남긴다(renderBoard가 가린다)

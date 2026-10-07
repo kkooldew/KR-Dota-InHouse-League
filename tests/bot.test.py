@@ -110,6 +110,12 @@ class World:
             out = handle(payload)
             if mode == "lost":
                 raise mod.ServerGlitch("서버가 알아볼 수 없는 답을 보냈습니다 (HTTP 500, text/html)")
+            if mode == "stray":   # 서버는 처리했는데, 그 답 대신 공개 상태가 돌아왔다 (구글이 답을 전해 주지 못하고 웹 앱 주소로 되돌려 보낸 경우)
+                out = {"ok": True, "open": True, "season": self.season, "recordsAt": "", "version": 11}
+            if mode == "bare":    # 서버는 처리했는데, 답에 새 번호가 없다
+                out = {"ok": True}
+            if mod.stray_status(out):   # 진짜 ask_server 가 하는 확인
+                raise mod.ServerGlitch("서버의 답 대신 다른 답이 돌아왔습니다")
             return out
 
         def handle(payload):
@@ -131,6 +137,7 @@ class World:
                     raise mod.ServerError("서버에 더 새로운 기록이 있습니다", "conflict")
                 self.rev += 1
                 self.league = payload["league"]
+                return {"ok": True, "rev": self.rev}
             return {"ok": True}
 
         mod.get_channel = get_channel
@@ -829,6 +836,30 @@ async def main():
     check("🏆 **래디언트 승리!**" in t and "`1 캐리` · <@100> · 3000 → **3020** (+20)" in t and len(saves()) == n and len(w.league["matches"]) == 1
           and entry["result"] == {"winner": "r", "match_id": "m1"}, "다시 입력하면 서버에 들어가 있던 기록을 그대로 쓴다 (같은 경기를 두 번 기록하지 않는다)")
     check("이미 기록돼 있었어요" in t and "/승리취소" in t, "지금 고른 팀과 다르면 그렇다고 알린다")
+
+    # 구글 서버가 요청을 처리하고도 그 답 대신 공개 상태(ok: true)를 돌려주는 경우 (2026-10-08에 실제 서버에서 봤다).
+    # 그것을 "저장됐다"는 답으로 믿지 않고, 서버에 들어갔는지 확인한 뒤에 한 번만 기록한다
+    check(mod.stray_status({"ok": True, "open": True, "season": "시즌 1", "recordsAt": "", "version": 11})
+          and not mod.stray_status({"ok": True, "open": True, "season": "시즌 1", "recordsAt": "", "version": 11, "registered": 3, "pastSeasons": [], "role": "owner", "name": "주인"})
+          and not mod.stray_status({"ok": True, "rev": 3, "players": 10, "matches": 1, "publishedAt": "x"}) and not mod.stray_status({"ok": True, "league": None, "rev": 0}),
+          "요청의 답 대신 돌아온 공개 상태를 알아본다 (운영진에게 주는 상태나 다른 답과는 헷갈리지 않는다)")
+    w = World(mod, forum=True, league=league_of(12))
+    await gather(w, 10)
+    await run(mod.close_now, 100, ADMIN)
+    entry = mod.bot.lineups[0]
+    w.glitch["saveLeague"] = ["stray"]
+    t, _ = await run(mod.record_win, 100, ADMIN, "r")
+    check("🏆" in t and len(saves()) == 1 and len(w.league["matches"]) == 1 and entry["result"]["winner"] == "r"
+          and entry["result"]["match_id"] == w.league["matches"][0]["id"],
+          "/승리: 저장의 답 대신 공개 상태가 돌아와도, 서버에 들어간 것을 확인하고 한 번만 기록한다")
+    w.glitch["saveLeague"] = ["bare"]
+    t, _ = await run(mod.undo_win, 100, ADMIN)
+    check("결과 기록을 취소" in t and len(saves()) == 2 and w.league["matches"] == [] and entry["result"] is None,
+          "/승리취소: 새 번호가 없는 답은 저장됐다는 답으로 치지 않고, 서버를 확인해 마무리한다")
+    w.glitch["adminLeague"] = ["stray"]
+    t, _ = await run(mod.record_win, 100, ADMIN, "d")
+    check("🏆" in t and len(w.league["matches"]) == 1 and entry["result"]["winner"] == "d" and "리그 기록이 없습니다" not in t,
+          "/승리: 리그 기록 대신 공개 상태가 돌아오면 기록이 없는 것으로 알지 않고 다시 묻는다")
 
     # 다시 보내도 되는 요청은 답을 받지 못하면 몇 번 더 보내고, 리그 기록 올리기는 한 번만 보낸다
     sent = []

@@ -524,7 +524,9 @@ body.at-intro .site-foot{margin-top:0}
         const el = err.code === 'prefs' ? $('#ranks .grip') : document.getElementById(err.code);
         el.focus();
       }else{
-        $('#formErr').innerHTML = '<p>' + Site.esc(err.message) + '</p>';
+        // code 가 없는 오류는 답을 받지 못한 것이다. 등록은 서버에 들어갔을 수도 있으니, 다시 내면 어떻게 되는지 알려 준다
+        $('#formErr').innerHTML = '<p>' + Site.esc(err.message) + '</p>' + (err.code ? '' :
+          '<p>등록이 접수됐는지는 확인하지 못했습니다. 30초쯤 뒤에 같은 내용으로 한 번 더 제출해 주세요. 이미 접수됐다면 같은 등록을 고친 것으로 처리됩니다.</p>');
         $('#formErr').hidden = false;
       }
     }finally{
