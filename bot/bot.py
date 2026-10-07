@@ -211,15 +211,24 @@ def match_problem() -> str:
     return ""
 
 
-def is_admin(user: discord.abc.User) -> bool:
+async def is_admin(user: discord.abc.User, inside: bool) -> bool:
+    """운영진인가. inside 는 관리자 채널에서 명령어를 입력했는지.
+    운영진 역할(admin_role_id)을 정해 두지 않았으면 관리자 채널에서 명령어를 쓸 수 있는 사람이 곧 운영진이다.
+    그래서 다른 채널에서 입력한 사람은 관리자 채널의 권한(채널 보기, 명령어 사용)을 보고 가린다."""
     if not isinstance(user, discord.Member):
         return False
     if user.guild_permissions.administrator:
         return True
-    if ADMIN_ROLE_ID == 0:
-        # 운영진 역할을 지정하지 않았으면 관리자 채널 접근 권한만으로 판단
+    if ADMIN_ROLE_ID:
+        return any(role.id == ADMIN_ROLE_ID for role in user.roles)
+    if inside:
         return True
-    return any(role.id == ADMIN_ROLE_ID for role in user.roles)
+    try:
+        perms = (await get_channel(ADMIN_CHANNEL_ID)).permissions_for(user)
+    except Exception as e:  # 관리자 채널을 확인하지 못하면 운영진으로 치지 않는다 (관리자 채널에서 입력하면 그대로 된다)
+        print(f"관리자 채널의 권한을 확인하지 못했습니다: {e!r}")
+        return False
+    return bool(perms.view_channel and perms.use_application_commands)
 
 
 def safe_name(name: str) -> str:
@@ -1246,12 +1255,15 @@ async def move_people(guild: discord.Guild, moves: list[tuple[int, discord.Voice
 
 # ── 슬래시 명령어: 운영진 ─────────────────────────────────────
 async def admin_only(interaction: discord.Interaction) -> bool:
-    """운영진 명령어 공통 확인: 관리자 채널에서, 운영진이 입력했는지"""
-    if interaction.channel_id != ADMIN_CHANNEL_ID:
-        await interaction.response.send_message("이 명령어는 관리자 채널에서만 쓸 수 있어요.", ephemeral=True)
+    """운영진 명령어 공통 확인: 운영진이, 관리자 채널에서 입력했는지.
+    운영진이 아닌 사람에게는 어디에서 입력했든 사용 권한이 없다고만 알린다 (운영자가 정함, 2026-10-08).
+    관리자 채널에서 쓰라는 안내는 다른 채널에서 입력한 운영진에게만 한다."""
+    inside = interaction.channel_id == ADMIN_CHANNEL_ID
+    if not await is_admin(interaction.user, inside):
+        await interaction.response.send_message("이 명령어를 사용할 권한이 없어요. 운영진만 쓸 수 있는 명령어예요.", ephemeral=True)
         return False
-    if not is_admin(interaction.user):
-        await interaction.response.send_message("운영진만 쓸 수 있는 명령어예요.", ephemeral=True)
+    if not inside:
+        await interaction.response.send_message("이 명령어는 관리자 채널에서만 쓸 수 있어요.", ephemeral=True)
         return False
     return True
 

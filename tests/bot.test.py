@@ -437,6 +437,41 @@ async def main():
     out = await startup(w)
     check(len(out) == 3 and out[0].startswith("[확인 필요] 관리자 채널(100)을 찾지 못했습니다."), "켤 때 확인: 채널을 못 찾을 때")
 
+    # ── 운영진이 아닌 사람이 운영진 명령어를 쓰면, 어디에서 입력했든 사용 권한이 없다고만 알린다 ──
+    w = World(mod, forum=True)
+    STAFF, GUEST = user(21, "운영진"), user(22, "손님")   # 둘 다 서버 관리자 권한은 없다. 운영진만 관리자 채널을 볼 수 있다
+    w.admin.permissions_for = Mock(side_effect=lambda who: Mock(view_channel=who is STAFF, use_application_commands=True))
+    commands = ((mod.create_inhouse, ()), (mod.close_now, ()), (mod.extend, ()), (mod.cancel, ()), (mod.start_game, ()), (mod.end_game, ()),
+                (mod.record_win, ("r",)), (mod.undo_win, ()), (mod.player_role, (None, None)))
+    told = [(await run(cmd, 300, GUEST, *args))[0] for cmd, args in commands]
+    check(all("사용할 권한이 없어요" in t and "관리자 채널" not in t for t in told) and mod.bot.current is None and not w.server,
+          "운영진이 아닌 사람의 운영진 명령어 9개: 사용 권한이 없다고 알린다 (관리자 채널로 가라고 하지 않는다)")
+    t, i = await run(mod.create_inhouse, 999, GUEST)
+    check("사용할 권한이 없어요" in t and i.response.send_message.call_args.kwargs.get("ephemeral") is True and not w.signup.create_thread.await_count,
+          "그 안내는 본인에게만 보이고, 모집은 만들어지지 않는다")
+    told = [(await run(cmd, 300, STAFF, *args))[0] for cmd, args in commands]
+    check(all("관리자 채널에서만" in t and "권한이 없어요" not in t for t in told) and mod.bot.current is None, "운영진이 다른 채널에서 쓰면 관리자 채널에서 쓰라고 알린다")
+    w.admin.permissions_for = Mock(side_effect=lambda who: Mock(view_channel=True, use_application_commands=who is STAFF))
+    t, _ = await run(mod.close_now, 300, GUEST)
+    check("사용할 권한이 없어요" in t, "관리자 채널이 보여도 거기서 명령어를 쓸 수 없는 사람은 운영진이 아니다")
+    w.admin.permissions_for = Mock(return_value=Mock(view_channel=False, use_application_commands=False))
+    t, _ = await run(mod.close_now, 300, ADMIN)
+    check("관리자 채널에서만" in t, "서버 관리자 권한이 있으면 언제나 운영진이다")
+    w.admin.permissions_for = Mock(side_effect=RuntimeError("채널 확인 실패"))
+    with contextlib.redirect_stdout(io.StringIO()):
+        t, _ = await run(mod.close_now, 300, STAFF)
+    check("사용할 권한이 없어요" in t, "관리자 채널의 권한을 확인하지 못하면 다른 채널에서는 받지 않는다")
+    t, _ = await run(mod.close_now, 100, STAFF)
+    check("모집 중인 내전이 없어요" in t, "그때도 관리자 채널에서 입력하면 그대로 받는다")
+    # 운영진 역할을 정해 두었으면(admin_role_id) 그 역할로 가린다. 관리자 채널을 볼 수 있어도 역할이 없으면 운영진이 아니다
+    mod.ADMIN_ROLE_ID = 77
+    w.admin.permissions_for = Mock(return_value=Mock(view_channel=True, use_application_commands=True))
+    STAFF.roles = [Mock(id=77)]
+    told = [(await run(mod.close_now, cid, who))[0] for cid, who in ((100, GUEST), (300, GUEST), (300, STAFF), (100, STAFF))]
+    check("사용할 권한이 없어요" in told[0] and "사용할 권한이 없어요" in told[1] and "관리자 채널에서만" in told[2] and "모집 중인 내전이 없어요" in told[3]
+          and not w.admin.permissions_for.call_count, "운영진 역할을 정해 두었을 때: 역할이 없으면 어디서든 권한 없음, 있으면 관리자 채널 안내")
+    mod.ADMIN_ROLE_ID = 0
+
     # ── 마감 시각을 정해서 만들기 ──
     kst = lambda *a: int(datetime(*a, tzinfo=KST).timestamp())
     check(mod.parse_deadline("2026-10-07-21-30") == kst(2026, 10, 7, 21, 30) and mod.parse_deadline(" 2027-01-01-00-00 ") == kst(2027, 1, 1, 0, 0), "마감 시각 읽기 (한국 시간)")
