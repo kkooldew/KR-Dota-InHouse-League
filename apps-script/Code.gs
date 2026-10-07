@@ -15,7 +15,7 @@
  * 코드를 고친 뒤에는 배포 → 배포 관리 → 수정(연필) → 버전: 새 버전 → 배포 를 눌러야 반영됩니다.
  */
 
-const SERVER_VERSION = 11;                             // 서버를 고칠 때마다 올린다. 상태 응답에 실려서 새 버전이 배포됐는지 밖에서 확인할 수 있다
+const SERVER_VERSION = 12;                            // 서버를 고칠 때마다 올린다. 상태 응답에 실려서 새 버전이 배포됐는지 밖에서 확인할 수 있다
 const SHEET_NAME = '선수등록';                             // 등록 탭 이름의 앞부분. 시즌마다 '선수등록 (시즌 이름)' 탭을 따로 쓴다
 // 칸을 더할 때는 맨 뒤에 붙이고 LAYOUT 을 올린다. 이미 있는 탭에는 ready_ 가 새 머리글을 채워 넣는다
 // 처리자·처리시각: 그 등록의 상태(승인·제외·대기)를 마지막으로 바꾼 운영진과 그 시각 (버전 11)
@@ -37,6 +37,7 @@ const STAFF_MAX = 30;                                      // 키를 따로 받�
 const LOG_TAB = '운영 기록';                                // 누가 무엇을 했는지 남기는 탭
 const LOG_HEADERS = ['시각', '시즌', '운영진', '한 일', '대상', '내용'];
 let ACTOR = null;                                          // 이번 요청을 보낸 운영진 {owner, id, name}. requireAdmin_ 이 채운다
+let PAST_ROWS = null;                                      // 이번 요청에서 읽은 끝난 시즌들의 등록 명단 {시즌 번호: 줄들} (pastRows_)
 
 /* =========================================================
    설치: 편집기에서 setup 을 한 번 실행하세요
@@ -121,6 +122,7 @@ function doPost(e) {
 function respond_(fn) {
   let out;
   ACTOR = null;
+  PAST_ROWS = null;
   try {
     ready_();
     out = Object.assign({ ok: true }, fn());
@@ -574,6 +576,10 @@ function register_(body) {
       fail_('운영진이 확인을 마친 등록이라 직접 고칠 수 없습니다. 바꿀 내용이 있으면 운영진에게 알려 주세요.', 'locked');
     if (nickOwner && nickOwner !== mine)
       fail_('다른 선수가 이미 쓰고 있는 닉네임입니다. 다른 닉네임을 넣어 주세요.', 'nickname');
+    // 지난 시즌에 다른 선수가 쓰던 닉네임도 그 선수만 다시 쓸 수 있다(버전 12, nickHeld_).
+    // 이미 내 등록에 쓰고 있는 닉네임을 그대로 둔 채 다른 칸만 고치는 경우에는 다시 묻지 않는다
+    if (!(mine && nameKey_(mine.nickname) === nameKey_(nickname)) && nickHeld_(nickname, steam, discord))
+      fail_('지난 시즌에 다른 선수가 쓰던 닉네임입니다. 다른 닉네임을 넣어 주세요. 본인이 쓰던 닉네임이라면 그때와 같은 스팀 프로필과 디스코드로 등록해 주세요.', 'nickname');
 
     // 지난 시즌에 승인됐던 선수인지 본다. 이번 시즌에 처음 내는 것이면, 스팀과 디스코드 가운데 한쪽만 지난 기록과 같은 경우를 여기서 거절한다
     const past = findPast_(steam, discord, !mine);
@@ -648,12 +654,9 @@ function sameSteam_(row, steam) {
 // 돌려주는 값: { row, season, index, approved } 또는 null. approved 가 false 면 등록만 하고 승인되지 않았던 기록이다.
 function findPast_(steam, discord, strict) {
   const list = seasons_();
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
   let waiting = null;
   for (let i = list.length - 2; i >= 0; i--) {
-    const sheet = sheetById_(ss, list[i].id);
-    if (!sheet) continue;                                  // 탭이 지워진 시즌은 건너뛴다
-    const rows = readRows_(sheet).filter(r => sameSteam_(r, steam) || r.discord === discord);
+    const rows = pastRows_(list, i).filter(r => sameSteam_(r, steam) || r.discord === discord);   // 탭이 지워진 시즌은 빈 명단이다
     const approved = rows.filter(r => r.status === '승인');
     const both = approved.filter(r => sameSteam_(r, steam) && r.discord === discord)[0];
     if (both) return { row: both, season: list[i].name, index: i, approved: true };
@@ -669,6 +672,34 @@ function findPast_(steam, discord, strict) {
     }
   }
   return waiting;
+}
+
+// 끝난 시즌(list 의 i 번째)의 등록 명단. 한 요청 안에서는 탭을 한 번만 읽는다(재참가 확인과 닉네임 확인이 함께 쓴다).
+// 탭이 지워졌으면 빈 명단이다
+function pastRows_(list, i) {
+  if (!PAST_ROWS) PAST_ROWS = {};
+  if (!PAST_ROWS[i]) {
+    const sheet = sheetById_(SpreadsheetApp.getActiveSpreadsheet(), list[i].id);
+    PAST_ROWS[i] = sheet ? readRows_(sheet) : [];
+  }
+  return PAST_ROWS[i];
+}
+
+// 지난 시즌에 다른 선수가 쓰던 닉네임인지 (버전 12. 운영자가 2026-10-08에 "지난 시즌 닉네임도 원래 주인만 쓸 수 있게" 해 달라고 함).
+// 이번 시즌 안에서 겹치는 닉네임은 register_ 가 따로 막는다. 여기서는 끝난 시즌들을 본다.
+//  - 승인됐던 등록의 닉네임만 묶는다. 등록만 하고 승인되지 않은 닉네임까지 묶으면, 아무나 등록만 해서 남의 닉네임을 잡아 둘 수 있다.
+//  - 그 닉네임으로 승인됐던 사람(스팀이나 디스코드가 같은 사람)은 다시 쓸 수 있다. 시즌마다 다른 사람이 썼던 닉네임이면 그들 모두 쓸 수 있다.
+//  - 견주는 기준은 이번 시즌과 같다: 공백과 대소문자는 무시한다.
+// 떠난 선수의 닉네임을 풀어 주려면, 운영자가 그 시즌 탭에서 그 줄의 닉네임 칸을 고친다.
+function nickHeld_(nickname, steam, discord) {
+  const list = seasons_(), key = nameKey_(nickname);
+  let held = false;
+  for (let i = list.length - 2; i >= 0; i--) {
+    const users = pastRows_(list, i).filter(r => r.status === '승인' && nameKey_(r.nickname) === key);
+    if (users.some(r => sameSteam_(r, steam) || r.discord === discord)) return false;      // 내가 쓰던 닉네임이다
+    if (users.length) held = true;
+  }
+  return held;
 }
 
 // 재참가 선수가 이어받을 MMR: 지난 시즌이 끝났을 때의 인하우스 MMR.

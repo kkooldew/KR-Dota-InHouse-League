@@ -827,6 +827,73 @@ assert(props.ADMIN_KEY === key, 'running setup again keeps the admin key');
   assert(!r.ok && r.code === 'name' && JSON.parse(S.props.STAFF).length === 30 && S.props.STAFF.length < 9000, 'staff: at most thirty, and the list fits in one script property');
 })();
 
+// ── 지난 시즌에 다른 선수가 쓰던 닉네임은 그 선수만 다시 쓸 수 있다 (버전 12) ──
+(() => {
+  const S = makeEnv({ fresh: true });
+  const post = body => JSON.parse(S.env.doPost({ postData: { contents: JSON.stringify(body) } }).text);
+  const clearRL = () => Object.keys(S.cache).filter(k => k.startsWith('rl:')).forEach(k => delete S.cache[k]);
+  S.env.setup();
+  const key = S.props.ADMIN_KEY;
+  const steamId = n => '7656119800000' + String(8000 + n);
+  const reg = (n, nickname, extra = {}) => { clearRL(); return post({ action: 'register', nickname, steam: 'https://steamcommunity.com/profiles/' + steamId(n), discord: 'nick' + n, mmr: 3000 + n, prefs: [1, 2, 3, 4], ...extra }); };
+  const set = (ns, status) => post({ action: 'adminSetStatus', key, steamKeys: [].concat(ns).map(n => 's:' + steamId(n)), status });
+  const season = name => post({ action: 'adminNewSeason', key, season: name, confirm: '시즌 변경' });
+  const tab = name => S.sheets['선수등록 (' + name + ')'].grid;
+  const C = { status: 2, nick: 3, key: 5 };
+  const rowIn = (name, n) => tab(name).find(row => row[C.key] === 's:' + steamId(n));
+
+  // 시즌 1: 꿀듀(1번)와 ZzangGo(2번)는 승인, 3번은 대기로 남고, 4번은 제외
+  reg(1, '꿀듀'); reg(2, 'ZzangGo'); reg(3, '대기맨'); reg(4, '제외맨');
+  set([1, 2], '승인'); set(4, '제외');
+  season('시즌 2');
+
+  let r = reg(5, '꿀듀');
+  assert(!r.ok && r.code === 'nickname' && /지난 시즌에 다른 선수가 쓰던 닉네임/.test(r.error) && tab('시즌 2').length === 1, 'nick: a name an approved player used last season is refused to someone else (nothing written)');
+  assert([' 꿀 듀 ', 'zzanggo', 'ZZANG GO', 'Zzang Go'].every(name => reg(5, name).code === 'nickname') && tab('시즌 2').length === 1, 'nick: spaces and capitals do not get around it');
+  r = reg(5, '대기맨');
+  assert(r.ok && rowIn('시즌 2', 5)[C.nick] === '대기맨', 'nick: a name that was only registered, never approved, is free (otherwise anyone could squat names)');
+  r = reg(6, '제외맨');
+  assert(r.ok, 'nick: an excluded registration does not hold its name either');
+
+  // 원래 주인은 그대로 쓴다. 다른 닉네임으로 돌아와도 예전 닉네임은 그 사람의 것으로 남는다
+  let reads = 0;
+  const past1 = S.sheets['선수등록 (시즌 1)'], getRange = past1.getRange;
+  past1.getRange = (...a) => { reads++; return getRange.apply(past1, a); };
+  r = reg(1, '꿀듀');
+  past1.getRange = getRange;
+  assert(r.ok && r.returning === true && rowIn('시즌 2', 1)[C.nick] === '꿀듀' && reads === 1, 'nick: the original owner takes the name back (and last season\'s tab is read once for both checks)');
+  r = reg(2, '짱고2');
+  assert(r.ok && r.returning === true && reg(7, 'ZzangGo').code === 'nickname', 'nick: an owner who came back under a new name still holds the old one');
+  r = reg(1, '꿀듀', { mmr: 4444 });
+  assert(r.ok && r.updated === true, 'nick: editing other fields while keeping one\'s name is not asked again');
+  r = reg(1, 'zzanggo');
+  assert(!r.ok && r.code === 'nickname' && rowIn('시즌 2', 1)[C.nick] === '꿀듀', 'nick: an owner cannot switch to someone else\'s old name');
+  r = reg(2, '꿀듀');
+  assert(!r.ok && r.code === 'nickname' && /이미 쓰고 있는/.test(r.error), 'nick: a name taken this season gets the this-season message');
+  // 스팀은 같은데 디스코드를 다르게 적은 원래 주인: 닉네임이 아니라 디스코드를 다시 확인하라는 안내가 나와야 한다
+  set(6, '승인');                                       // 시즌 2에서는 6번(제외맨)만 승인된다. 2번(짱고2)은 대기로 남는다
+  season('시즌 3');
+  r = reg(2, 'ZzangGo', { discord: 'nick2_typo' });
+  assert(!r.ok && r.code === 'conflict' && /디스코드 사용자명을 다시 확인/.test(r.error), 'nick: the owner with a mistyped discord is told to check the discord, not that the name is taken');
+
+  // 시즌이 여러 번 지나도 묶여 있다. 시즌 2에서 승인된 닉네임도 묶인다
+  assert(reg(8, '꿀듀').code === 'nickname' && reg(8, 'ZzangGo').code === 'nickname' && reg(8, '제외맨').code === 'nickname' && reg(8, '짱고2').ok,
+    'nick: names stay held across several seasons (season 1 and season 2 alike); a name never approved (짱고2) is free');
+  // 떠난 선수의 닉네임을 풀어 주려면 운영자가 그 시즌 탭의 닉네임 칸을 고친다
+  rowIn('시즌 1', 2)[C.nick] = 'ZzangGo (떠남)';
+  r = reg(9, 'ZzangGo');
+  assert(r.ok, 'nick: the staff can release a name by editing it in the old season\'s tab');
+  // 이 기능이 생기기 전에 서로 다른 시즌에 두 사람이 같은 닉네임으로 승인된 적이 있으면, 둘 다 쓸 수 있다(먼저 등록한 쪽이 갖는다)
+  rowIn('시즌 2', 5)[C.nick] = '꿀듀'; rowIn('시즌 2', 5)[C.status] = '승인';
+  r = reg(5, '꿀듀');
+  assert(r.ok && reg(1, '꿀듀').code === 'nickname', 'nick: with two past owners either may use it; the first to register this season keeps it');
+  // 지난 시즌의 탭이 지워졌으면 그 시즌의 닉네임은 더 묶이지 않는다
+  S.tabs.splice(S.tabs.findIndex(t => t.getName() === '선수등록 (시즌 2)'), 1);
+  S.tabs.splice(S.tabs.findIndex(t => t.getName() === '선수등록 (시즌 1)'), 1);
+  r = reg(10, 'zzanggo (떠남)');
+  assert(r.ok, 'nick: a deleted season tab holds nothing');
+})();
+
 // 새 시즌을 시작하려는 순간 드라이브가 답하지 않으면: 기록이 없는 것으로 치고 넘어가지 않고, 아무것도 바꾸지 않은 채 멈춘다
 (() => {
   const S = makeEnv({ fresh: true });
