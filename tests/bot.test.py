@@ -95,12 +95,25 @@ class World:
         self.season = "시즌 1"
         self.season_no = None     # 시즌 번호. None 이면 번호를 주지 않는 예전 서버처럼 군다
         self.past = {}            # 끝난 시즌의 등록 명단 {시즌 번호: 명단}
+        # 서버가 답하지 않는 경우 {요청 이름: ["drop" | "lost" | "", …]}. 그 요청이 올 때마다 앞에서부터 하나씩 꺼내 쓴다.
+        # drop 은 요청이 서버에 닿지 못한 것, lost 는 서버는 처리했는데 답이 돌아오지 않은 것, "" 는 정상
+        self.glitch = {}
 
         async def call_server(payload):
             self.server.append(payload)
             action = payload["action"]
             if action in self.fail:
                 raise RuntimeError("서버 오류")
+            mode = self.glitch[action].pop(0) if self.glitch.get(action) else ""
+            if mode == "drop":
+                raise mod.ServerGlitch("서버가 40초 안에 답하지 않았습니다")
+            out = handle(payload)
+            if mode == "lost":
+                raise mod.ServerGlitch("서버가 알아볼 수 없는 답을 보냈습니다 (HTTP 500, text/html)")
+            return out
+
+        def handle(payload):
+            action = payload["action"]
             if action == "adminList":
                 k = payload.get("seasonNo")
                 if self.season_no is None:
@@ -125,6 +138,7 @@ class World:
         mod.call_server = call_server
         mod.match_problem = (lambda: "") if league is not None else (lambda: "꺼짐 (테스트)")
         mod.when = lambda ts: f"<t:{ts}:t>"      # 자정 무렵에 돌려도 결과가 같게, 날짜 표시는 따로 확인한다
+        mod.SERVER_WAIT = 0                      # 서버에 다시 물어보기 전에 기다리지 않는다
         mod.bot.lock = asyncio.Lock()
         mod.bot.current = None
         mod.bot.lineups = []
@@ -182,7 +196,7 @@ async def run(cmd, channel_id, u, *args):
 async def main():
     mod = load()
     KST = mod.KST
-    real_when, real_problem = mod.when, mod.match_problem
+    real_when, real_problem, real_call = mod.when, mod.match_problem, mod.call_server
     ADMIN = user(1, "운영자", admin=True)
     A, B, C = user(11, "가"), user(12, "나*별"), user(13, "다")
 
@@ -748,6 +762,81 @@ async def main():
     t, _ = await run(mod.extend, 100, ADMIN)
     check("다시 열었어요" in t and not rec.closed, "치운 판의 모집은 다시 열 수 있다")
     await run(mod.cancel, 100, ADMIN)
+
+    # ── 리그 서버가 답하지 않을 때 (구글 서버는 가끔 제때 답하지 않거나 오류 화면을 돌려준다) ──
+    # 올린 기록을 서버가 받았는지 모르는 채 다시 올리면 같은 경기가 두 번 기록된다. 그런 일이 없어야 한다
+    saves = lambda: [p for p in w.server if p["action"] == "saveLeague"]
+    w = World(mod, forum=True, league=league_of(12))
+    await gather(w, 10)
+    await run(mod.close_now, 100, ADMIN)
+    entry = mod.bot.lineups[0]
+    w.glitch["saveLeague"] = ["lost"]                        # 서버는 기록을 받았는데 답이 돌아오지 않았다
+    t, _ = await run(mod.record_win, 100, ADMIN, "r")
+    check("🏆" in t and len(saves()) == 1 and w.league["matches"] == [{"id": "m1"}] and entry["result"] == {"winner": "r", "match_id": "m1"},
+          "/승리: 올린 뒤 답을 받지 못해도, 서버에 들어간 것을 확인하고 한 번만 기록한다")
+    w.glitch["saveLeague"] = ["lost"]
+    t, _ = await run(mod.undo_win, 100, ADMIN)
+    check("결과 기록을 취소" in t and len(saves()) == 2 and w.league["matches"] == [] and entry["result"] is None,
+          "/승리취소: 올린 뒤 답을 받지 못해도, 서버에서 그 경기가 사라진 것을 확인하고 마무리한다")
+    w.glitch["saveLeague"] = ["drop"]                        # 이번에는 요청이 서버에 닿지 못했다
+    t, _ = await run(mod.record_win, 100, ADMIN, "d")
+    check("🏆" in t and len(saves()) == 4 and len(w.league["matches"]) == 1 and entry["result"]["winner"] == "d", "/승리: 서버에 닿지 못했으면 다시 올린다")
+    w.league = dict(w.league, matches=[])                    # 그사이 운영진이 매니저에서 그 경기를 지웠다
+    n = len(saves())
+    t, _ = await run(mod.undo_win, 100, ADMIN)
+    check("결과 기록을 취소" in t and len(saves()) == n and entry["result"] is None, "/승리취소: 되돌릴 경기가 서버에 이미 없으면 되돌린 것으로 마무리한다 (전에는 다시 기록할 수도 되돌릴 수도 없게 됐다)")
+
+    # 올린 뒤에 서버가 한동안 답하지 않아 들어갔는지 확인하지 못한 경우: 다음 /승리 가 먼저 확인한다
+    w = World(mod, forum=True, league=league_of(12))
+    await gather(w, 10)
+    await run(mod.close_now, 100, ADMIN)
+    entry = mod.bot.lineups[0]
+    w.glitch.update(saveLeague=["lost"], adminLeague=["", "drop", "drop"])
+    t, _ = await run(mod.record_win, 100, ADMIN, "r")
+    check(t.startswith("<@1>님, 리그 서버가 답하지 않아 결과가 기록됐는지 확인하지 못했어요.") and "두 번 기록되지 않습니다" in t and entry["result"] is None
+          and entry["tried"] == ["m1"] and len(w.league["matches"]) == 1 and not any("🏆" in x for x in w.texts(w.thread.send)),
+          "서버가 계속 답하지 않으면 기록됐는지 모른다고 알리고, 올리려던 경기를 적어 둔다")
+    check(json.loads(mod.STATE_PATH.read_text(encoding="utf-8"))["lineups"][0]["tried"] == ["m1"], "적어 둔 것은 껐다 켜도 남는다")
+    # 서버에 들어가 있던 기록(래디언트 승리)을 실제 모양으로 채워 두고, 운영진이 이번에는 다른 팀을 골랐다고 하자
+    w.league["matches"][0].update(winner="r", at="2026-10-07T12:00:00.000Z", rows=[
+        {"id": lane[s], "name": "선수", "side": s, "role": k + 1, "before": 3000, "delta": 20 if s == "r" else -20}
+        for k, lane in enumerate(entry["lanes"]) for s in ("r", "d")])
+    n = len(saves())
+    t, _ = await run(mod.record_win, 100, ADMIN, "d")
+    check("🏆 **래디언트 승리!**" in t and "`1 캐리` · <@100> · 3000 → **3020** (+20)" in t and len(saves()) == n and len(w.league["matches"]) == 1
+          and entry["result"] == {"winner": "r", "match_id": "m1"}, "다시 입력하면 서버에 들어가 있던 기록을 그대로 쓴다 (같은 경기를 두 번 기록하지 않는다)")
+    check("이미 기록돼 있었어요" in t and "/승리취소" in t, "지금 고른 팀과 다르면 그렇다고 알린다")
+
+    # 다시 보내도 되는 요청은 답을 받지 못하면 몇 번 더 보내고, 리그 기록 올리기는 한 번만 보낸다
+    sent = []
+
+    async def flaky(payload):
+        sent.append(payload["action"])
+        if len(sent) < 3:
+            raise mod.ServerGlitch("답 없음")
+        return {"ok": True, "tries": len(sent)}
+
+    mod.ask_server = flaky
+    r = await real_call({"action": "adminList"})
+    check(r["tries"] == 3, "등록 명단 읽기 같은 요청은 답을 받지 못하면 세 번까지 보낸다")
+    sent.clear()
+    try:
+        await real_call({"action": "saveLeague", "league": {}, "baseRev": 0})
+        check(False, "리그 기록 올리기는 답을 받지 못해도 그대로 다시 보내지 않는다")
+    except mod.ServerGlitch:
+        check(sent == ["saveLeague"], "리그 기록 올리기는 답을 받지 못해도 그대로 다시 보내지 않는다 (들어갔는지 먼저 확인해야 한다)")
+
+    async def refused(payload):
+        sent.append(payload["action"])
+        raise mod.ServerError("운영진 키가 맞지 않습니다", "auth")
+
+    mod.ask_server = refused
+    sent.clear()
+    try:
+        await real_call({"action": "adminList"})
+        check(False, "서버가 거절한 요청은 다시 보내지 않는다")
+    except mod.ServerError as e:
+        check(sent == ["adminList"] and e.code == "auth", "서버가 거절한 요청은 다시 보내지 않는다")
 
     w = World(mod, forum=True, league=league_of(12))         # 봇이 기록을 받아 간 사이에 매니저가 기록을 바꾼 경우
     await gather(w, 10)

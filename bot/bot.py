@@ -582,18 +582,54 @@ class ServerError(RuntimeError):
         self.code = code
 
 
-async def call_server(payload: dict) -> dict:
-    """리그 서버(Apps Script)에 운영진 요청을 보낸다. 실패하면 예외를 낸다."""
-    timeout = aiohttp.ClientTimeout(total=40)
-    async with aiohttp.ClientSession(timeout=timeout) as session:
-        # Apps Script 는 결과를 다른 주소로 넘겨 주므로 리다이렉트를 따라간다
-        async with session.post(SYNC_URL, data=json.dumps({**payload, "key": SYNC_KEY}),
-                                headers={"Content-Type": "text/plain;charset=utf-8"}) as resp:
-            text = await resp.text()
-    result = json.loads(text)
+class ServerGlitch(RuntimeError):
+    """리그 서버에서 답을 받지 못했다: 닿지 못했거나, 제때 답이 없거나, 답이 JSON 이 아니다(구글이 가끔 오류 화면을 돌려준다).
+    요청이 서버에서 처리됐는지는 알 수 없다."""
+
+
+# 다시 보내도 결과가 같은 요청(읽기, 통째로 덮어쓰는 명단·편성). 답을 받지 못하면 조금 기다렸다가 몇 번 더 보낸다.
+# 리그 기록 올리기(saveLeague)는 넣지 않는다. 처리됐는지 모르는 채 다시 보내면 같은 경기가 두 번 기록될 수 있어서 change_league 가 따로 확인한다.
+REPEATABLE = {"adminList", "adminLeague", "adminLeagueRev", "adminRoster", "adminLineup", "pushRoster", "pushLineup", "ping"}
+SERVER_TRIES = 3  # 한 요청을 몇 번까지 보낼지
+SERVER_WAIT = 3  # 다시 보내기 전에 기다리는 시간(초). 두 번째는 그 두 배
+
+
+async def ask_server(payload: dict) -> dict:
+    """리그 서버(Apps Script)에 요청을 한 번 보낸다."""
+    try:
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=40)) as session:
+            # Apps Script 는 결과를 다른 주소로 넘겨 주므로 리다이렉트를 따라간다
+            async with session.post(SYNC_URL, data=json.dumps({**payload, "key": SYNC_KEY}),
+                                    headers={"Content-Type": "text/plain;charset=utf-8"}) as resp:
+                status, kind, text = resp.status, resp.content_type, await resp.text(errors="replace")
+    except asyncio.TimeoutError:
+        raise ServerGlitch("서버가 40초 안에 답하지 않았습니다") from None
+    except (aiohttp.ClientError, OSError) as e:
+        raise ServerGlitch(f"서버에 연결하지 못했습니다 ({type(e).__name__})") from None
+    try:
+        result = json.loads(text)
+    except ValueError:  # 구글의 오류 화면(HTML)이나 빈 답
+        raise ServerGlitch(f"서버가 알아볼 수 없는 답을 보냈습니다 (HTTP {status}, {kind})") from None
+    if not isinstance(result, dict):
+        raise ServerGlitch("서버가 알아볼 수 없는 답을 보냈습니다")
     if not result.get("ok"):
         raise ServerError(result.get("error") or "서버가 요청을 처리하지 못했습니다", result.get("code") or "")
     return result
+
+
+async def call_server(payload: dict) -> dict:
+    """리그 서버(Apps Script)에 운영진 요청을 보낸다. 서버가 거절하면 ServerError, 답을 받지 못하면 ServerGlitch 를 낸다.
+    구글 서버는 가끔 제때 답하지 않거나 오류 화면을 돌려준다(1분마다 묻는 역할 맞추기에서 저녁 한나절에 아홉 번 봤다, 2026-10-07).
+    다시 보내도 되는 요청은 조금 기다렸다가 몇 번 더 보낸다."""
+    tries = SERVER_TRIES if payload.get("action") in REPEATABLE else 1
+    for n in range(1, tries + 1):
+        try:
+            return await ask_server(payload)
+        except ServerGlitch:
+            if n == tries:
+                raise
+            await asyncio.sleep(SERVER_WAIT * n)
+    raise ServerGlitch("서버에서 답을 받지 못했습니다")  # 여기까지 오지 않는다
 
 
 async def push_roster(rec: Recruitment, clear: bool = False) -> bool | None:
@@ -784,22 +820,56 @@ def settled(rec: Recruitment) -> bool:
     return bool(entry and entry.get("result"))
 
 
-async def change_league(payload: dict) -> dict:
+def match_changes(match: dict) -> list[dict]:
+    """서버의 경기 기록 한 판을 /승리 의 답에 쓰는 모양으로 바꾼다 (matchmaker.js 가 돌려주는 changes 와 같다)."""
+    return [{"id": r["id"], "name": r.get("name", ""), "side": r["side"], "role": r["role"], "before": r["before"], "delta": r["delta"],
+             "after": r["before"] + r["delta"]} for r in match.get("rows") or []]
+
+
+async def change_league(payload: dict, tried: list | None = None) -> dict:
     """서버의 리그 기록을 받아 matchmaker.js 로 고친 뒤 다시 올린다.
-    받아 온 사이에 매니저가 기록을 바꿨으면 서버가 받지 않으므로, 새 기록으로 한 번 더 한다."""
-    for attempt in (1, 2):
-        got = await call_server({"action": "adminLeague"})
-        if not got.get("league"):
+    받아 온 사이에 매니저가 기록을 바꿨으면 서버가 받지 않으므로(conflict), 새 기록으로 다시 한다.
+
+    올린 뒤 답을 받지 못하면(ServerGlitch) 서버가 그 기록을 받았는지 알 수 없다. 받았는데 모르고 다시 올리면 같은 경기가 두 번 기록된다.
+    그래서 올리기 전에 새 경기의 id 를 tried 에 적어 두고(편성에 붙어 state.json 에 남는다), 다시 할 때는 먼저 서버의 기록에 그 경기가 있는지 본다.
+    있으면 다시 계산하지 않고 그 경기를 결과로 삼는다. 되돌리기도 같다: 되돌릴 경기가 서버에 이미 없으면 되돌린 것으로 본다."""
+    tried = tried if tried is not None else []
+    for attempt in range(1, SERVER_TRIES + 1):
+        last = attempt == SERVER_TRIES
+        try:
+            got = await call_server({"action": "adminLeague"})
+        except ServerGlitch:
+            if last:
+                raise
+            continue  # call_server 가 이미 기다려 가며 몇 번 물어봤다
+        league = got.get("league")
+        if not league:
             raise RuntimeError("서버에 리그 기록이 없습니다")
-        result = await run_matchmaker({**payload, "league": got["league"], "now": int(time.time() * 1000)})
+        matches = league.get("matches") or []
+        if payload.get("mode") == "result":
+            done = next((m for m in matches if m.get("id") in tried), None)
+            if done is not None:  # 앞서 올리고 답을 받지 못한 기록이 서버에 들어가 있다
+                return {"ok": True, "league": league, "match": {"id": done["id"], "at": done.get("at"), "winner": done.get("winner")},
+                        "changes": match_changes(done)}
+        elif payload.get("mode") == "undo" and payload.get("matchId") and all(m.get("id") != payload["matchId"] for m in matches):
+            # 되돌릴 경기가 서버에 없다: 앞서 올린 되돌리기가 들어갔거나, 매니저에서 그 경기를 지웠다
+            return {"ok": True, "league": league, "match": {"id": payload["matchId"]}, "changes": []}
+        result = await run_matchmaker({**payload, "league": league, "now": int(time.time() * 1000)})
         if not result.get("ok"):
             raise RuntimeError(result.get("error") or "알 수 없는 문제")
+        if payload.get("mode") == "result":
+            tried.append(result["match"]["id"])
+            save_state()
         try:
             await call_server({"action": "saveLeague", "league": result["league"], "baseRev": got.get("rev", 0)})
             return result
         except ServerError as e:
-            if e.code != "conflict" or attempt == 2:
+            if e.code != "conflict" or last:
                 raise
+        except ServerGlitch:
+            if last:
+                raise
+            await asyncio.sleep(SERVER_WAIT * attempt)
     raise RuntimeError("기록을 올리지 못했습니다")  # 여기까지 오지 않는다
 
 
@@ -1054,7 +1124,7 @@ async def role_loop() -> None:
         try:
             await role_tick()
         except Exception as e:  # 서버나 디스코드가 잠깐 답하지 않아도 다음 차례에 다시 한다
-            print(f"참여 선수 역할 맞추기 실패: {e!r}")
+            print(f"[{datetime.now(KST):%m-%d %H:%M}] 참여 선수 역할을 이번에는 맞추지 못했습니다. 1분 뒤에 다시 합니다. ({e})")
         await asyncio.sleep(ROLE_POLL_SECONDS)
 
 
@@ -1406,15 +1476,25 @@ async def record_win(interaction: discord.Interaction, team: str) -> None:
             await answer(interaction, f"{actor}님이 <#{entry['place_id']}> 의 판을 경기 없이 정리했어요. 결과와 MMR은 바뀌지 않습니다.{more}")
             return
         try:
-            result = await change_league({"mode": "result", "lanes": entry["lanes"], "winner": team})
+            result = await change_league({"mode": "result", "lanes": entry["lanes"], "winner": team}, entry.setdefault("tried", []))
+        except ServerGlitch as e:  # 서버가 답하지 않았다. 올린 기록이 들어갔는지 모른다
+            print(f"결과 기록 실패: {e!r}")
+            await answer(interaction, f"{actor}님, 리그 서버가 답하지 않아 결과가 기록됐는지 확인하지 못했어요. ({e})\n"
+                                      "잠시 뒤에 `/승리` 를 다시 입력해 주세요. 앞의 기록이 서버에 들어가 있으면 그것을 쓰므로, 같은 경기가 두 번 기록되지 않습니다.")
+            return
         except Exception as e:
             print(f"결과 기록 실패: {e!r}")
             await answer(interaction, f"{actor}님, 결과를 기록하지 못했어요. 리그 매니저에서 기록해 주세요. ({e})")
             return
-        entry["result"] = {"winner": team, "match_id": result["match"]["id"]}
+        # 앞서 올리고 답을 받지 못한 기록이 서버에 들어가 있었으면, 그때 고른 팀이 기록돼 있다
+        winner = result["match"].get("winner") if result["match"].get("winner") in ("r", "d") else team
+        entry["result"] = {"winner": winner, "match_id": result["match"]["id"]}
         save_state()
-        text = f"{actor}님이 경기 결과를 기록했어요.\n" + result_text(team, result["changes"], entry.get("who") or {})
+        text = f"{actor}님이 경기 결과를 기록했어요.\n" + result_text(winner, result["changes"], entry.get("who") or {})
         await send_to(entry["place_id"], text)
+        if winner != team:
+            more = ("\n⚠️ 이 판은 앞서 입력한 대로 이미 기록돼 있었어요(그때는 서버의 답을 받지 못했습니다). 지금 고른 팀과 다르니, "
+                    "바꾸려면 `/승리취소` 로 되돌린 뒤 다시 기록하세요." + more)
     await answer(interaction, f"{text}\n\n순위 페이지와 구글 시트에 반영했어요. 잘못 기록했다면 `/승리취소` 로 되돌릴 수 있어요.{more}")
 
 
@@ -1431,6 +1511,11 @@ async def undo_win(interaction: discord.Interaction) -> None:
             return
         try:
             await change_league({"mode": "undo", "matchId": entry["result"]["match_id"]})
+        except ServerGlitch as e:  # 서버가 답하지 않았다. 되돌린 것이 들어갔는지 모른다
+            print(f"결과 되돌리기 실패: {e!r}")
+            await answer(interaction, f"{actor}님, 리그 서버가 답하지 않아 결과를 되돌렸는지 확인하지 못했어요. ({e})\n"
+                                      "잠시 뒤에 `/승리취소` 를 다시 입력해 주세요. 이미 되돌려져 있으면 그대로 마무리합니다.")
+            return
         except Exception as e:
             print(f"결과 되돌리기 실패: {e!r}")
             await answer(interaction, f"{actor}님, 결과를 되돌리지 못했어요. 리그 매니저에서 고쳐 주세요. ({e})")
