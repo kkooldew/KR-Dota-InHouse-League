@@ -65,6 +65,9 @@ class World:
         self.thread.get_partial_message = Mock(return_value=self.message)
         self.admin = Mock()
         self.admin.send = AsyncMock()
+        self.chat = Mock()            # 대화방 (/내전하자 를 쓰는 채널)
+        self.chat.id = 400
+        self.chat.send = AsyncMock()
         if forum:
             self.signup = Mock(spec=discord.ForumChannel)
             self.signup.flags = Mock(require_tag=False)
@@ -78,7 +81,7 @@ class World:
         self.place_id = 300 if forum else 200
 
         async def get_channel(cid):
-            return {100: self.admin, 200: self.signup, 300: self.thread}[cid]
+            return {100: self.admin, 200: self.signup, 300: self.thread, 400: self.chat}[cid]
 
         self.pushed = []
 
@@ -154,6 +157,7 @@ class World:
         mod.bot.role_season_no, mod.bot.role_revoke = None, None
         mod.bot.voice = {}
         mod.bot.manager_role_id = 0
+        mod.bot.wants, mod.bot.want_joined, mod.bot.want_alerted, mod.bot.want_channel_id, mod.bot.want_role_id = {}, set(), False, 0, 0
         mod.STATE_PATH.unlink(missing_ok=True)
 
     def texts(self, mock):
@@ -460,7 +464,7 @@ async def main():
         r.is_default = Mock(return_value=default)
         return r
 
-    MROLE, ANY = role_of(88, "리그 관리자"), role_of(55, "참여 선수")
+    MROLE, ANY = role_of(88, "리그 관리자"), role_of(55, "리그 선수")
     MANAGER = user(23, "관리자")
     MANAGER.roles = [MROLE]
     told = [(await run(mod.player_role, cid, who, ANY, None))[0] for cid, who in ((300, GUEST), (100, STAFF), (300, STAFF), (100, MANAGER))]
@@ -475,7 +479,7 @@ async def main():
           and json.loads(mod.STATE_PATH.read_text(encoding="utf-8"))["manager_role_id"] == 88, "관리자역할: 서버 관리자가 리그 관리자 역할을 정하면 기억한다 (역할 자동 부여는 건드리지 않는다)")
     check(not w.server and mod.bot.player_role_id == 0, "관리자역할만 정했을 때는 등록 명단을 읽지 않는다")
     t, _ = await run(mod.player_role, 100, MANAGER, None, None)
-    check(t.startswith("<@23>님, 참여 선수 역할 자동 부여가 꺼져 있어요."), "그 역할이 있는 사람은 이제 /선수역할 을 쓸 수 있다")
+    check(t.startswith("<@23>님, 리그 선수 역할 자동 부여가 꺼져 있어요."), "그 역할이 있는 사람은 이제 /선수역할 을 쓸 수 있다")
     t, _ = await run(mod.player_role, 300, MANAGER, None, None)
     check("운영진 채널에서만" in t, "리그 관리자도 /선수역할 은 운영진 채널에서 쓴다")
     t, _ = await run(mod.player_role, 100, MANAGER, None, None, ANY)
@@ -1080,7 +1084,7 @@ async def main():
     few.participants = {1: {"name": "가", "username": "u"}, 2: {"name": "나", "username": "u"}}
     check(mod.announcement_text(few).endswith("참여자 (2명): 가, 나"), "보통은 이름을 모두 적는다")
 
-    # ── 참여 선수 역할 자동 부여: 승인하면 역할을 주고, 제외하면 뺀다 ──
+    # ── 리그 선수 역할 자동 부여: 승인하면 역할을 주고, 제외하면 뺀다 ──
     class Role:
         def __init__(self, rid, name, position, managed=False, default=False):
             self.id, self.name, self.position, self.managed, self.default = rid, name, position, managed, default
@@ -1133,7 +1137,7 @@ async def main():
         return {"steamKey": f"s:{n}", "status": status, "discord": name, "nickname": nick or f"선수{n}", "mmr": 3000}
 
     w = World(mod, forum=True)
-    PLAYER = Role(500, "참여 선수", 5)
+    PLAYER = Role(500, "리그 선수", 5)
     kim, kim2, lee, park = member(21, "kim"), member(22, "kim2"), member(23, "lee", [PLAYER]), member(24, "park", [PLAYER])
     choi = member(100000000000000025, "choi")
     guild = Guild([kim2, kim, lee, park, choi])                  # kim2 가 먼저 나와도 사용자명이 똑같은 kim 을 골라야 한다
@@ -1167,7 +1171,7 @@ async def main():
     saved = json.loads(mod.STATE_PATH.read_text(encoding="utf-8"))["roles"]
     check(saved["role_id"] == 500 and saved["season"] == "시즌 1" and saved["seen"]["s:1"]["ok"] and not saved["seen"]["s:5"]["ok"] and saved["seen"]["s:6"]["ok"] and "s:4" not in saved["seen"],
           "정한 역할과 누구까지 맞췄는지를 파일에 적는다")
-    check(await mod.role_status() == "켜짐 (@참여 선수)", "켠 뒤의 상태 표시")
+    check(await mod.role_status() == "켜짐 (@리그 선수)", "켠 뒤의 상태 표시")
 
     n = len(guild.queries)
     await mod.role_tick()
@@ -1176,7 +1180,7 @@ async def main():
     w.registered[0]["status"], w.registered[2]["status"] = "제외", "승인"                # 김은 제외로, lee 는 승인으로
     await mod.role_tick()
     check(PLAYER not in kim.roles and PLAYER in lee.roles and "역할을 줬어요: <@23>" in admin_said()[-1] and "역할을 뺐어요: <@21>" in admin_said()[-1]
-          and admin_said()[-1].startswith("🎫 **참여 선수 역할**"), "상태가 바뀌면 역할도 따라 바뀌고 운영진 채널에 알린다")
+          and admin_said()[-1].startswith("🎫 **리그 선수 역할**"), "상태가 바뀌면 역할도 따라 바뀌고 운영진 채널에 알린다")
     check(w.admin.send.call_args.kwargs.get("allowed_mentions") is not None, "운영진 채널 알림도 조용히")
 
     # 승인했다가 대기로 돌려도 역할을 뺀다 (제외와 같다). 처음부터 대기인 등록은 건드리지 않는다
@@ -1514,6 +1518,180 @@ async def main():
     check(sorted(lobby.voice_states) == [1, 2, 3] and "<#901> 로 3명을 옮겼어요." in t and "기억했어요" not in t and not w.thread.send.await_count, "봇이 짠 팀이 없을 때의 /종료")
     t, _ = await run(mod.start_game, 100, user(2, "다른 운영자", admin=True))
     check(t.startswith("<@2>님, 배정된 팀이 없어서 옮길 사람이 없어요."), "다른 운영진이 쓰면 그 운영진을 멘션한다")
+
+    # ── /내전하자: 지금 내전을 하고 싶다고 알리기 (한 시간 유지, 10명이 모이면 대화방에서 리그 운영진을 멘션) ──
+    w = World(mod, forum=True)
+    PROLE, SROLE = role_of(55, "리그 선수"), role_of(66, "리그 운영진")
+    SROLE.mentionable = True
+
+    class Hall:   # 가짜 서버: 대화방 하나와 역할들
+        def __init__(self, can_send=True, can_ping=False):
+            self.me = Mock()
+            self.me.guild_permissions = Mock(mention_everyone=can_ping)
+            self.chat = Mock()
+            self.chat.name, self.chat.mention = "대화방", "<#400>"
+            self.chat.permissions_for = Mock(return_value=Mock(view_channel=True, send_messages=can_send, mention_everyone=can_ping))
+
+        def get_channel(self, cid):
+            return self.chat if cid == 400 else None
+
+        def get_role(self, rid):
+            return {55: PROLE, 66: SROLE}.get(rid)
+
+    def hall(**kw):
+        town = Hall(**kw)
+
+        async def get_town():
+            return town
+
+        mod.get_guild = get_town
+
+    def player(uid):
+        u = user(uid, f"선수{uid}")
+        u.roles = [PROLE]
+        return u
+
+    async def want(*uids):
+        t = ""
+        for uid in uids:
+            t, _ = await run(mod.want_game, 400, player(uid))
+        return t
+
+    hall()
+    mod.bot.player_role_id = 55
+    STAFF.roles = []
+    w.admin.permissions_for = Mock(side_effect=lambda who: Mock(view_channel=who is STAFF, use_application_commands=True))   # 운영진 채널은 리그 운영진만 본다
+    waiting = lambda: len(mod.wanting())
+    private = lambda i: i.response.send_message.call_args.kwargs.get("ephemeral") is True
+
+    t, i = await run(mod.want_game, 400, GUEST)
+    check("리그 선수만 쓸 수 있는 명령어예요" in t and private(i) and not mod.bot.wants, "/내전하자: 리그 선수가 아니면 쓰지 못한다")
+    t, i = await run(mod.want_game, 400, player(201))
+    first = mod.bot.wants[201]
+    until = int(first + 3600)
+    check(t.startswith("✅ 내전하자에 등록했습니다. 지금 내전을 하고 싶어 하는 사람이 **1명** 있습니다.")
+          and f"<t:{until}:t>까지 한 시간 동안 유지되고, 10명이 모이면 리그 운영진에게 알립니다." in t and private(i) and not w.chat.send.await_count,
+          "/내전하자: 등록하면 본인에게만 지금 몇 명인지 알려 준다")
+    t, i = await run(mod.want_game, 400, player(201))
+    check(t.startswith(f"이미 내전하자에 등록했습니다. <t:{until}:t>(<t:{until}:R>)부터 다시 쓸 수 있습니다.") and "**1명** 있습니다" in t and private(i)
+          and mod.bot.wants[201] == first, "한 시간 안에는 다시 쓸 수 없다 (등록한 시각은 그대로)")
+    await run(mod.want_game, 400, STAFF)
+    await run(mod.want_game, 400, ADMIN)
+    check(waiting() == 3, "리그 운영진과 리그 관리자도 쓸 수 있다 (리그 선수 이상)")
+    mod.bot.player_role_id = 0
+    await run(mod.want_game, 400, GUEST)
+    check(waiting() == 4, "리그 선수 역할을 정해 두지 않았으면 누구나 쓴다")
+    mod.bot.player_role_id = 55
+    mod.bot.wants.pop(22)
+    mod.bot.want_channel_id = 400
+    t, _ = await run(mod.want_game, 300, player(202))
+    check(t == "이 명령어는 <#400> 에서 써 주세요." and 202 not in mod.bot.wants, "대화방을 정해 두면 그 채널에서만 받는다")
+
+    # 10명이 모이면 대화방에서 리그 운영진 역할을 멘션한다. 한 번 알린 뒤에는 10명 아래로 내려갔다 다시 찰 때까지 알리지 않는다
+    mod.bot.want_role_id = 66
+    await want(202, 203, 204, 205, 206, 207)
+    check(waiting() == 9 and not w.chat.send.await_count and not mod.bot.want_alerted, "9명까지는 알리지 않는다")
+    t = await want(208)
+    sent = w.chat.send.call_args
+    check(w.chat.send.await_count == 1 and sent.args[0] == "<@&66> 지금 **10명**이 내전에 참여할 준비가 되어 있습니다. 내전 생성이 가능한 리그 운영진은 로비를 만들어 주세요."
+          and [r.id for r in sent.kwargs["allowed_mentions"].roles] == [66] and sent.kwargs["allowed_mentions"].everyone is False and sent.kwargs["allowed_mentions"].users is False,
+          "10명이 모이면 대화방에서 리그 운영진 역할을 멘션해 알린다 (그 역할의 알림만 울린다)")
+    check("**10명** 있습니다" in t and "10명이 모여 리그 운영진에게 알렸습니다" in t and not w.admin.send.await_count, "열 번째 사람에게는 알렸다는 것도 함께 알려 준다")
+    await want(209)
+    check(waiting() == 11 and w.chat.send.await_count == 1, "그 뒤에 더 모여도 다시 알리지 않는다")
+    for uid in (201, 202, 203):
+        mod.bot.wants[uid] -= 3601                            # 세 사람은 한 시간이 지났다
+    check(waiting() == 8 and 201 not in mod.bot.wants and not mod.bot.want_alerted, "한 시간이 지나면 저절로 풀린다 (10명 아래로 내려가면 다시 알릴 수 있게 된다)")
+    t = await want(201)
+    check(t.startswith("✅ 내전하자에 등록했습니다.") and "**9명**" in t and w.chat.send.await_count == 1, "한 시간이 지난 사람은 다시 쓸 수 있다")
+    await want(210)
+    check(waiting() == 10 and w.chat.send.await_count == 2 and "**10명**" in w.chat.send.call_args.args[0], "다시 10명이 되면 또 알린다")
+    saved = json.loads(mod.STATE_PATH.read_text(encoding="utf-8"))["want"]
+    check(len(saved["users"]) == 10 and saved["alerted"] is True and saved["channel_id"] == 400 and saved["role_id"] == 66, "등록한 사람들과 설정을 상태 파일에 적어 둔다")
+    keep = dict(mod.bot.wants)
+    mod.bot.wants, mod.bot.want_alerted, mod.bot.want_channel_id, mod.bot.want_role_id = {}, False, 0, 0
+    await mod.restore_state()
+    check(mod.bot.wants == keep and mod.bot.want_alerted and mod.bot.want_channel_id == 400 and mod.bot.want_role_id == 66, "봇을 껐다 켜도 이어진다")
+
+    # 모집이 열려 있는 동안에는 알리지 않고 모집 글을 알려 준다. 모집에 /참여 한 사람은 기다리는 사람으로 세지 않는다
+    mod.bot.wants, mod.bot.want_joined, mod.bot.want_alerted = {}, set(), False
+    n = w.chat.send.await_count
+    await run(mod.create_inhouse, 100, ADMIN)
+    t = await want(*range(301, 311))
+    check(waiting() == 10 and w.chat.send.await_count == n and not mod.bot.want_alerted and "지금 모집 중인 내전이 있습니다. <#300> 에서 `/참여` 를 입력하세요." in t,
+          "모집이 열려 있으면 10명이 돼도 알리지 않고, 모집 글에서 /참여 하라고 알려 준다")
+    for uid in (301, 302, 303):
+        await run(mod.join, 300, player(uid))
+    check(waiting() == 7 and 301 in mod.bot.wants, "모집에 /참여 한 사람은 기다리는 사람으로 세지 않는다 (다시 쓰려면 한 시간이 지나야 하는 것은 그대로)")
+    await run(mod.join, 300, player(320))
+    await want(320)
+    check(waiting() == 7 and 320 in mod.bot.wants, "이미 모집에 참여해 있는 사람이 입력해도 기다리는 사람으로 세지 않는다")
+    await run(mod.cancel, 100, ADMIN)
+    await want(311, 312)
+    check(waiting() == 9 and w.chat.send.await_count == n, "모집이 끝난 뒤에도 9명이면 알리지 않는다")
+    await want(313)
+    check(waiting() == 10 and w.chat.send.await_count == n + 1, "모집이 끝난 뒤 10명이 되면 알린다")
+
+    # 리그 운영진 역할을 정해 두지 않았을 때와, 대화방에 글을 올리지 못할 때
+    mod.bot.wants, mod.bot.want_joined, mod.bot.want_alerted, mod.bot.want_role_id = {}, set(), False, 0
+    w.admin.send.reset_mock()
+    await want(*range(401, 411))
+    check(w.chat.send.await_count == n + 2 and w.chat.send.call_args.args[0].startswith("지금 **10명**이 내전에 참여할 준비가 되어 있습니다.")
+          and w.chat.send.call_args.kwargs["allowed_mentions"].roles is False and "`/내전하자설정`" in w.texts(w.admin.send)[-1],
+          "리그 운영진 역할을 정해 두지 않았으면 멘션 없이 알리고, 운영진 채널에 정하는 법을 알린다")
+    mod.bot.wants, mod.bot.want_alerted, mod.bot.want_role_id = {}, False, 66
+    w.chat.send = AsyncMock(side_effect=discord.Forbidden(Mock(status=403, reason="Forbidden"), "Missing Permissions"))
+    with contextlib.redirect_stdout(io.StringIO()):
+        t = await want(*range(501, 511))
+    check("<#400> 에 알리지 못했어요" in w.texts(w.admin.send)[-1] and t.startswith("✅ 내전하자에 등록했습니다."), "대화방에 글을 올리지 못하면 운영진 채널에 알린다 (등록은 그대로 된다)")
+    w.chat.send = AsyncMock()
+
+    # /내전하자설정: 리그 관리자가 대화방과 알릴 역할을 정한다
+    mod.bot.wants, mod.bot.want_joined, mod.bot.want_alerted, mod.bot.want_channel_id, mod.bot.want_role_id = {}, set(), False, 0, 0
+    t, _ = await run(mod.want_setup, 100, STAFF, None, None)
+    check("리그 관리자만 쓸 수 있는 명령어예요" in t, "/내전하자설정 은 리그 관리자만 쓴다")
+    t, _ = await run(mod.want_setup, 100, ADMIN, None, None)
+    check(t.startswith("<@1>님, `/내전하자` 설정이에요.") and "대화방: 정하지 않음 (어느 채널에서나 받고" in t and "알릴 역할: 정하지 않음" in t and "지금 기다리는 사람: 0명" in t
+          and "⚠️ 리그 운영진 역할을 정하지 않아" in t and (await mod.want_status()).startswith("대화방을 정하지 않음(어느 채널에서나 받습니다), 알릴 역할을 정하지 않음 [확인 필요]"),
+          "/내전하자설정: 정하기 전의 상태")
+    room = Mock()
+    room.id = 400
+    SROLE.mentionable = False
+    t, _ = await run(mod.want_setup, 100, ADMIN, room, SROLE)
+    check(t.startswith("<@1>님이 `/내전하자` 설정을 바꿨어요.") and "대화방: <#400>" in t and "알릴 역할: <@&66>" in t and mod.bot.want_channel_id == 400 and mod.bot.want_role_id == 66
+          and "⚠️ 봇이 **리그 운영진** 역할을 멘션해도 알림이 울리지 않아요." in t and json.loads(mod.STATE_PATH.read_text(encoding="utf-8"))["want"]["role_id"] == 66,
+          "/내전하자설정: 대화방과 역할을 정하고, 멘션해도 알림이 울리지 않는 역할이면 고치는 법을 알린다")
+    hall(can_ping=True)
+    t, _ = await run(mod.want_setup, 100, ADMIN, None, None)
+    check("⚠️" not in t, "봇에 모든 역할을 멘션하는 권한이 있으면 문제없다")
+    hall()
+    SROLE.mentionable = True
+    t, _ = await run(mod.want_setup, 100, ADMIN, None, None)
+    check("⚠️" not in t and await mod.want_status() == "대화방 #대화방, 알릴 역할 @리그 운영진 - 권한 확인", "누구나 멘션할 수 있게 해 둔 역할이어도 문제없다 (켤 때 확인)")
+    hall(can_send=False)
+    check("[확인 필요] 봇이 <#400> 에 글을 올릴 수 없어요." in await mod.want_status(), "켤 때 확인: 대화방에 글을 올릴 수 없을 때")
+    hall()
+    t, _ = await run(mod.want_setup, 100, ADMIN, None, role_of(1, "@everyone", default=True))
+    check("고를 수 없어요" in t and mod.bot.want_role_id == 66, "@everyone 은 알릴 역할로 받지 않는다")
+
+    # ── /도움말: 자기 자리에서 쓸 수 있는 명령어만 본인에게 보여 준다 ──
+    helps, quiet = {}, []
+    for name, who in (("손님", GUEST), ("선수", player(601)), ("운영진", STAFF), ("관리자", ADMIN)):
+        helps[name], i = await run(mod.show_help, 400, who)
+        quiet.append(private(i) and len(helps[name]) < 2000)
+    check(all(quiet), "/도움말: 본인에게만 보이고 메시지 하나에 들어간다")
+    check("`/참여`" in helps["손님"] and "`/도움말`" in helps["손님"] and "선수 등록을 하고 승인을 받으면 `/내전하자` 도 쓸 수 있어요." in helps["손님"]
+          and "`/내전하자` —" not in helps["손님"] and "`/내전생성`" not in helps["손님"] and "<#100>" not in helps["손님"], "/도움말: 리그 선수가 아닌 사람에게는 누구나 쓰는 명령어만")
+    check("**리그 선수**가 쓸 수 있는 명령어예요." in helps["선수"] and "`/내전하자` — <#400> 에서 써요." in helps["선수"] and "`/참여`" in helps["선수"]
+          and "`/내전생성`" not in helps["선수"] and "`/선수역할`" not in helps["선수"], "/도움말: 리그 선수에게는 /내전하자 까지")
+    check("**리그 운영진**이 쓸 수 있는 명령어예요." in helps["운영진"] and "**리그 운영진** (<#100> 에서 써요)" in helps["운영진"]
+          and all(f"`/{c}`" in helps["운영진"] for c in ("내전하자", "내전생성", "마감", "연장", "취소", "시작", "종료", "승리", "승리취소"))
+          and "`/선수역할`" not in helps["운영진"] and "`/내전하자설정`" not in helps["운영진"], "/도움말: 리그 운영진에게는 내전을 여는 명령어까지")
+    check("**리그 관리자**가 쓸 수 있는 명령어예요." in helps["관리자"] and "`/선수역할`" in helps["관리자"] and "`/내전하자설정`" in helps["관리자"] and "`/내전생성`" in helps["관리자"],
+          "/도움말: 리그 관리자에게는 모두")
+    t, _ = await run(mod.show_help, 100, GUEST)
+    check("**리그 운영진**이 쓸 수 있는 명령어예요." in t, "/도움말: 운영진 채널에서 입력한 사람은 리그 운영진이다 (리그 운영진 역할을 따로 정하지 않았을 때)")
+    mod.bot.player_role_id = 0
 
     # ── 운영진 명령어로 봇이 하는 답은 모두 그 명령어를 쓴 운영진의 멘션으로 시작한다 (이 파일에서 돌린 모든 명령어를 본다) ──
     bare = [text for uid, text, _ in answers if not text.startswith(f"<@{uid}>")]

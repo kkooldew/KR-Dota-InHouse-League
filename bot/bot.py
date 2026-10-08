@@ -23,6 +23,9 @@
   매니저의 "봇이 올린 명단 불러오기", "봇이 짠 팀 불러오기"로 바로 받을 수 있음
 - 리그 관리자가 운영진 채널에서 /선수역할 로 역할을 정해 두면, 리그 관리자 페이지에서 승인한 선수에게 그 역할을 주고 승인을 푼 선수에게서는 뺌
   (등록 명단을 1분마다 읽어 맞춘다. 봇에 역할 관리 권한이 있고, 봇의 역할이 그 역할보다 위에 있어야 한다)
+- 리그 선수가 대화방에서 /내전하자  → 한 시간 동안 "지금 내전을 하고 싶은 사람"으로 남고, 10명이 모이면 대화방에서 리그 운영진 역할을 멘션해 알림
+  (대화방과 알릴 역할은 리그 관리자가 /내전하자설정 으로 정한다)
+- /도움말  → 입력한 사람이 쓸 수 있는 명령어만 본인에게 보여 줌
 - 진행 중인 모집과 역할 설정은 state.json 에 적어 두어, 봇을 껐다 켜도 이어짐
 
 설정은 같은 폴더의 config.json 에서 바꿉니다. (config.example.json 을 복사해 만드세요)
@@ -72,6 +75,7 @@ ROLE_POLL_SECONDS = 60  # 등록 명단의 승인·제외를 이만큼마다 확
 ROLE_RETRY_SECONDS = 600  # 서버에서 찾지 못한 사람은 이만큼 지난 뒤에 다시 찾아본다
 ROLE_BATCH = 30  # 한 번에 찾아볼 사람 수. 디스코드에 몰아서 묻지 않게 나눠 한다
 PLAYERS_NEEDED = 10  # 5 vs 5
+WANT_SECONDS = 3600  # /내전하자 로 알린 상태가 유지되는 시간. 이 시간이 지나야 다시 쓸 수 있다
 KST = timezone(timedelta(hours=9))  # 마감 시각 입력과 모집 글 제목에 쓰는 한국 시간
 DAY_STARTS_AT = 6  # 하루는 한국 시간 오전 6시에 바뀐다 (매니저의 팀 편성과 같은 기준)
 ROLE_NAMES = ["캐리", "미드", "오프", "서폿", "서폿"]
@@ -133,7 +137,7 @@ class InhouseBot(discord.Client):
         # 오늘 짠 팀 [{"at": 시각, "ids": 선수 id, "message_id": 모집 글}]. 결과를 아직 기록하지 않은 판도 오늘 뛴 것으로 치는 데 쓴다
         self.lineups: list[dict] = []
         self.restored = False
-        # 참여 선수 역할 자동 부여. player_role_id 가 0이면 꺼져 있다.
+        # 리그 선수 역할 자동 부여. player_role_id 가 0이면 꺼져 있다.
         # role_seen 은 등록마다 마지막으로 맞춘 내용 {스팀키: {"status", "discord", "ok", "tried"}}, role_season 은 그때의 시즌 이름이다
         self.player_role_id = PLAYER_ROLE_ID
         self.role_seen: dict[str, dict] = {}
@@ -149,6 +153,13 @@ class InhouseBot(discord.Client):
         self.voice: dict[str, int] = {}
         # 리그 관리자 역할. 0이면 정해 두지 않은 것이라 서버 관리자 권한이 있는 사람만 리그 관리자로 본다
         self.manager_role_id = MANAGER_ROLE_ID
+        # /내전하자: 지금 내전을 하고 싶다고 알린 사람 {디스코드 ID: 입력한 시각}. 한 시간 뒤에 저절로 풀리고, 그때까지는 다시 쓸 수 없다.
+        # want_joined 는 그 가운데 모집에 /참여 한 사람이다(이미 판에 들어갔으니 기다리는 사람으로 세지 않는다).
+        self.wants: dict[int, float] = {}
+        self.want_joined: set[int] = set()
+        self.want_alerted = False  # 10명이 모였다고 이미 알렸는지. 10명 아래로 내려가면 다시 알릴 수 있다
+        self.want_channel_id = 0   # /내전하자 를 쓰는 대화방. 0이면 어느 채널에서나 받고, 알림은 입력한 채널에 올린다
+        self.want_role_id = 0      # 10명이 모였을 때 멘션할 리그 운영진 역할 (/내전하자설정 으로 정한다)
 
     async def setup_hook(self) -> None:
         # 생성·마감·연장·취소가 겹치지 않게 한 번에 하나씩 처리한다
@@ -167,8 +178,9 @@ class InhouseBot(discord.Client):
                     await restore_state()
                 except Exception as e:  # 상태 파일의 모양이 어긋나 있어도 봇은 켜져야 한다 (역할 맞추기도 여기서 시작한다)
                     print(f"꺼지기 전의 상태를 이어받지 못해 새로 시작합니다. ({e!r})")
-            print(f"참여 선수 역할 자동 부여: {await role_status()}")
+            print(f"리그 선수 역할 자동 부여: {await role_status()}")
             print(f"리그 관리자(/선수역할 을 쓸 수 있는 사람): {await manager_status()}")
+            print(f"내전하자(/내전하자): {await want_status()}")
             print(f"음성 채널 이동(/시작·/종료): {await voice_status()}")
             self.role_task = asyncio.create_task(role_loop())
 
@@ -442,6 +454,8 @@ def save_state() -> None:
                       "seen": bot.role_seen, "revoke": bot.role_revoke},
             "voice": bot.voice,
             "manager_role_id": bot.manager_role_id,
+            "want": {"users": {str(uid): at for uid, at in bot.wants.items()}, "joined": sorted(bot.want_joined), "alerted": bot.want_alerted,
+                     "channel_id": bot.want_channel_id, "role_id": bot.want_role_id},
         }
         tmp = STATE_PATH.with_suffix(".tmp")
         tmp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
@@ -471,6 +485,14 @@ async def restore_state() -> None:
         bot.voice = {k: v for k, v in voice.items() if k in VOICE_ROOMS and isinstance(v, int)}
     if isinstance(data.get("manager_role_id"), int):  # /선수역할 의 관리자역할 칸으로 정한 리그 관리자 역할
         bot.manager_role_id = data["manager_role_id"] or MANAGER_ROLE_ID
+    want = data.get("want")
+    if isinstance(want, dict):  # /내전하자 로 알려 둔 사람들과 /내전하자설정 으로 정한 대화방·역할
+        users = want.get("users") if isinstance(want.get("users"), dict) else {}
+        bot.wants = {int(uid): float(at) for uid, at in users.items() if str(uid).isdigit() and isinstance(at, (int, float))}
+        bot.want_joined = {int(uid) for uid in want.get("joined") or [] if isinstance(uid, int)}
+        bot.want_alerted = bool(want.get("alerted"))
+        bot.want_channel_id = int(want.get("channel_id") or 0)
+        bot.want_role_id = int(want.get("role_id") or 0)
     cur = data.get("current")
     if not cur or not cur.get("message_id"):
         return
@@ -958,7 +980,7 @@ async def send_to(place_id: int, text: str) -> None:
         print(f"결과 공지 실패: {e}")
 
 
-# ── 참여 선수 역할 자동 부여 ──────────────────────────────────
+# ── 리그 선수 역할 자동 부여 ──────────────────────────────────
 # 리그 관리자 페이지에서 승인한 선수에게 역할을 주고, 승인을 푼 선수(대기로 돌렸거나 제외한 선수)에게서는 뺀다.
 # 처음부터 대기인 등록(막 등록하고 아직 확인을 기다리는 선수)은 건드리지 않는다.
 # 봇에는 서버가 승인을 알려 올 길이 없어서(봇은 밖에서 들어오는 요청을 받지 않는다) 등록 명단을 주기적으로 읽어 맞춘다.
@@ -1103,7 +1125,7 @@ async def sync_roles(force: bool = False) -> dict:
                 out["problem"] = "역할을 바꿀 권한이 없어요. 봇에 **역할 관리** 권한이 있는지, 봇의 역할이 그 역할보다 위에 있는지 확인해 주세요."
                 break
             except (discord.HTTPException, asyncio.TimeoutError) as e:  # 디스코드가 잠깐 답하지 않았다. 나중에 다시 한다
-                print(f"참여 선수 역할: {name} 을(를) 처리하지 못했습니다: {e!r}")
+                print(f"리그 선수 역할: {name} 을(를) 처리하지 못했습니다: {e!r}")
                 done = False
             seen[key] = {"status": status, "discord": name, "ok": done, "tried": now}
             changed = True
@@ -1150,7 +1172,7 @@ async def revoke_step(guild: discord.Guild, role: discord.Role, out: dict) -> bo
             out["problem"] = "시즌이 바뀌어 역할을 거두려 했지만 권한이 없어요. 봇에 **역할 관리** 권한이 있는지, 봇의 역할이 그 역할보다 위에 있는지 확인해 주세요."
             break
         except (discord.HTTPException, asyncio.TimeoutError) as e:  # 디스코드가 잠깐 답하지 않았다. 다음 차례에 이어서 한다
-            print(f"참여 선수 역할: {name} 의 역할을 거두지 못했습니다: {e!r}")
+            print(f"리그 선수 역할: {name} 의 역할을 거두지 못했습니다: {e!r}")
             plan["stuck"] = plan.get("stuck", 0) + 1
             if plan["stuck"] < 5:
                 break
@@ -1178,7 +1200,7 @@ def roles_text(out: dict) -> str:
         lines.append("⚠️ 디스코드 서버에서 찾지 못했어요: "
                      + ", ".join(f"{safe_name(str(p.get('nickname') or '?'))} (`{str(p.get('discord') or '').replace('`', '')}`)" for p in out["missing"])
                      + "\n서버에 들어와 있는지, 등록한 디스코드 사용자명이 맞는지 확인해 주세요. 10분마다 다시 찾아봅니다.")
-    return ("🎫 **참여 선수 역할**\n" + "\n".join(lines)) if lines else ""
+    return ("🎫 **리그 선수 역할**\n" + "\n".join(lines)) if lines else ""
 
 
 async def role_tick() -> None:
@@ -1189,7 +1211,7 @@ async def role_tick() -> None:
         await tell_admins(text)
     # 권한 문제는 같은 내용을 되풀이해 알리지 않는다. 풀렸다가 다시 생기면 또 알린다
     if out["problem"] and out["problem"] != bot.role_note:
-        await tell_admins("🎫 **참여 선수 역할**을 맞추지 못했어요. " + out["problem"])
+        await tell_admins("🎫 **리그 선수 역할**을 맞추지 못했어요. " + out["problem"])
     bot.role_note = out["problem"]
 
 
@@ -1199,7 +1221,7 @@ async def role_loop() -> None:
         try:
             await role_tick()
         except Exception as e:  # 서버나 디스코드가 잠깐 답하지 않아도 다음 차례에 다시 한다
-            print(f"[{datetime.now(KST):%m-%d %H:%M}] 참여 선수 역할을 이번에는 맞추지 못했습니다. 1분 뒤에 다시 합니다. ({e})")
+            print(f"[{datetime.now(KST):%m-%d %H:%M}] 리그 선수 역할을 이번에는 맞추지 못했습니다. 1분 뒤에 다시 합니다. ({e})")
         await asyncio.sleep(ROLE_POLL_SECONDS)
 
 
@@ -1637,7 +1659,7 @@ async def player_role(interaction: discord.Interaction, role: Optional[discord.R
         # 꺼 둔 동안 시즌이 넘어가도, 다시 켰을 때 역할을 거두지 않도록 시즌 번호도 잊는다
         bot.player_role_id, bot.role_seen, bot.role_season_no, bot.role_revoke = 0, {}, None, None
         save_state()
-        await answer(interaction, f"{actor}님이 참여 선수 역할 자동 부여를 껐어요. 이미 준 역할은 그대로 둡니다. 다시 켜려면 `/선수역할` 에서 역할을 골라 주세요.")
+        await answer(interaction, f"{actor}님이 리그 선수 역할 자동 부여를 껐어요. 이미 준 역할은 그대로 둡니다. 다시 켜려면 `/선수역할` 에서 역할을 골라 주세요.")
         return
     if role is not None:
         problem = role_problem(await get_guild(), role)
@@ -1648,7 +1670,7 @@ async def player_role(interaction: discord.Interaction, role: Optional[discord.R
             bot.player_role_id, bot.role_seen, bot.role_revoke = role.id, {}, None  # 역할이 바뀌면 처음부터 다시 맞춘다
             save_state()
     if not bot.player_role_id:
-        await answer(interaction, f"{actor}님, 참여 선수 역할 자동 부여가 꺼져 있어요. `/선수역할` 에서 **역할**을 고르면, 리그 관리자 페이지에서 승인한 선수에게 그 역할을 주고 승인을 푼(대기·제외) 선수에게서는 뺍니다.")
+        await answer(interaction, f"{actor}님, 리그 선수 역할 자동 부여가 꺼져 있어요. `/선수역할` 에서 **역할**을 고르면, 리그 관리자 페이지에서 승인한 선수에게 그 역할을 주고 승인을 푼(대기·제외) 선수에게서는 뺍니다.")
         return
     if not (SYNC_URL and SYNC_KEY):
         await answer(interaction, f"{actor}님, 역할은 정했지만, 봇이 등록 명단을 읽을 수 없어요. `config.json` 에 `sync_url` 과 `sync_key` 를 넣고 봇을 다시 켜 주세요.")
@@ -1656,13 +1678,13 @@ async def player_role(interaction: discord.Interaction, role: Optional[discord.R
     try:
         out = await sync_roles(force=True)
     except Exception as e:
-        print(f"참여 선수 역할 맞추기 실패: {e!r}")
+        print(f"리그 선수 역할 맞추기 실패: {e!r}")
         await answer(interaction, f"{actor}님, 등록 명단을 읽지 못했어요. 잠시 뒤에 다시 해 주세요. ({e})")
         return
     bot.role_note = out["problem"]
-    done = roles_text(out).replace("🎫 **참여 선수 역할**\n", "")  # 문제가 생기기 전에 처리한 것이 있으면 그것도 알린다
+    done = roles_text(out).replace("🎫 **리그 선수 역할**\n", "")  # 문제가 생기기 전에 처리한 것이 있으면 그것도 알린다
     if out["problem"]:
-        text = f"{actor}님, **참여 선수 역할**을 맞추지 못했어요. " + out["problem"] + (f"\n{done}" if done else "")
+        text = f"{actor}님, **리그 선수 역할**을 맞추지 못했어요. " + out["problem"] + (f"\n{done}" if done else "")
     elif bot.role_revoke is not None:  # 시즌이 넘어가 역할을 거두는 중이다. 한 번에 다 하지 못하면 다음 차례에 이어서 한다
         text = (f"{actor}님, 시즌이 바뀌어 지난 시즌 선수의 <@&{bot.player_role_id}> 역할을 거두는 중이에요. "
                 f"(남은 사람 {len(bot.role_revoke['left'])}명) 다 거둔 뒤에 새 시즌의 승인 선수에게 줍니다.")
@@ -1699,6 +1721,8 @@ async def join(interaction: discord.Interaction) -> None:
         return
 
     rec.participants[uid] = {"name": interaction.user.display_name, "username": interaction.user.name}
+    if uid in bot.wants:  # /내전하자 로 기다리던 사람이 판에 들어왔다. 기다리는 사람으로는 더 세지 않는다
+        bot.want_joined.add(uid)
     save_state()
     await interaction.response.send_message(
         f"✅ 참여 완료! {len(rec.participants)}번째 참여자예요. 마감 <t:{rec.end_ts}:R>", ephemeral=True
@@ -1718,6 +1742,203 @@ async def leave(interaction: discord.Interaction) -> None:
     save_state()
     await interaction.response.send_message("참여를 취소했어요.", ephemeral=True)
     await refresh_announcement(rec)
+
+
+# ── /내전하자: 지금 내전을 하고 싶다고 알리기 ───────────────────────
+# 리그 선수가 대화방에서 /내전하자 를 입력하면 한 시간 동안 "지금 내전을 하고 싶은 사람"으로 남고, 그 시간이 지나야 다시 쓸 수 있다.
+# 그런 사람이 10명이 되면 대화방에서 리그 운영진 역할을 멘션해 로비(모집)를 만들어 달라고 알린다 (운영자가 2026-10-09에 정한 기능).
+# 따로 도는 타이머는 없다. 명령어가 들어올 때마다 한 시간이 지난 사람을 빼고 센다.
+def wanting(now: float | None = None) -> list[int]:
+    """지금 내전을 기다리는 사람들. 한 시간이 지난 사람은 지우고, 그사이 모집에 /참여 한 사람은 세지 않는다."""
+    now = time.time() if now is None else now
+    bot.wants = {uid: at for uid, at in bot.wants.items() if now - at < WANT_SECONDS}
+    bot.want_joined &= set(bot.wants)
+    who = [uid for uid in bot.wants if uid not in bot.want_joined]
+    if len(who) < PLAYERS_NEEDED:
+        bot.want_alerted = False  # 10명 아래로 내려갔다. 다시 10명이 되면 또 알린다
+    return who
+
+
+def staff_role_id() -> int:
+    """리그 운영진 역할. /내전하자설정 으로 정한 역할이 먼저고, 없으면 config.json 의 admin_role_id"""
+    return bot.want_role_id or ADMIN_ROLE_ID
+
+
+async def can_want(user: discord.abc.User) -> bool:
+    """리그 선수 이상인가: 리그 선수 역할(/선수역할 로 정한 역할)이 있거나, 리그 운영진·리그 관리자다.
+    리그 선수 역할을 정해 두지 않았으면 가릴 수 없으므로 누구나 쓴다."""
+    if not isinstance(user, discord.Member):
+        return False
+    if not bot.player_role_id:
+        return True
+    mine = {role.id for role in user.roles}
+    if bot.player_role_id in mine or (staff_role_id() and staff_role_id() in mine):
+        return True
+    return await is_admin(user, False)
+
+
+def want_problem(guild: discord.Guild) -> str:
+    """/내전하자 의 알림을 대화방에 올릴 수 없거나, 리그 운영진 역할을 멘션해도 알림이 울리지 않는 까닭. 문제가 없으면 빈 글."""
+    me = guild.me
+    channel = guild.get_channel(bot.want_channel_id) if bot.want_channel_id else None
+    if bot.want_channel_id:
+        if channel is None:
+            return "정해 둔 대화방을 찾지 못했어요. `/내전하자설정` 의 **대화방** 칸에서 다시 골라 주세요."
+        perms = channel.permissions_for(me) if me is not None else None
+        if perms is not None and not (perms.view_channel and perms.send_messages):
+            return f"봇이 {channel.mention} 에 글을 올릴 수 없어요. 그 채널의 권한에서 봇에게 **채널 보기**와 **메시지 보내기**를 허용해 주세요."
+    role_id = staff_role_id()
+    if not role_id:
+        return "리그 운영진 역할을 정하지 않아, 10명이 모여도 멘션하지 못해요. `/내전하자설정` 의 **운영진역할** 칸에서 골라 주세요."
+    role = guild.get_role(role_id)
+    if role is None:
+        return "정해 둔 리그 운영진 역할을 찾지 못했어요. `/내전하자설정` 의 **운영진역할** 칸에서 다시 골라 주세요."
+    if me is not None and not role.mentionable:
+        # 누구나 멘션할 수 있게 해 둔 역할이 아니면, 봇에 모든 역할을 멘션하는 권한이 있어야 알림이 울린다
+        perms = channel.permissions_for(me) if channel is not None else me.guild_permissions
+        if not perms.mention_everyone:
+            return (f"봇이 **{role.name}** 역할을 멘션해도 알림이 울리지 않아요. 서버 설정 → 역할에서 그 역할의 "
+                    "**누구나 이 역할을 멘션할 수 있도록 허용**을 켜거나, 봇의 역할에 **@everyone, @here, 모든 역할 멘션하기**를 켜 주세요.")
+    return ""
+
+
+async def want_status() -> str:
+    """지금 설정을 한 줄로 (켤 때 창에 찍는다)"""
+    try:
+        guild = await get_guild()
+    except discord.HTTPException as e:
+        return f"[확인 필요] 디스코드 서버를 확인하지 못했습니다 ({e})"
+    channel = guild.get_channel(bot.want_channel_id) if bot.want_channel_id else None
+    role = guild.get_role(staff_role_id()) if staff_role_id() else None
+    where = f"대화방 #{channel.name}" if channel is not None else "대화방을 정하지 않음(어느 채널에서나 받습니다)"
+    who = f"알릴 역할 @{role.name}" if role is not None else "알릴 역할을 정하지 않음"
+    problem = want_problem(guild)
+    return f"{where}, {who}" + (f" [확인 필요] {problem}" if problem else " - 권한 확인")
+
+
+async def announce_want(channel_id: int, count: int) -> None:
+    """10명이 모였다고 대화방에 알린다. 리그 운영진 역할을 멘션해 알림이 가게 한다 (봇의 다른 글은 역할 알림을 막아 두었다)."""
+    role_id = staff_role_id()
+    text = (f"<@&{role_id}> " if role_id else "") + f"지금 **{count}명**이 내전에 참여할 준비가 되어 있습니다. 내전 생성이 가능한 리그 운영진은 로비를 만들어 주세요."
+    mentions = discord.AllowedMentions(everyone=False, users=False, roles=[discord.Object(id=role_id)] if role_id else False)
+    try:
+        channel = await get_channel(channel_id)
+        await channel.send(text, allowed_mentions=mentions)
+    except discord.HTTPException as e:
+        print(f"내전하자 알림 전송 실패: {e}")
+        await tell_admins(f"`/내전하자` 로 {count}명이 모였는데 <#{channel_id}> 에 알리지 못했어요. 봇이 그 채널에 글을 올릴 수 있는지 확인해 주세요. ({e})")
+        return
+    if not role_id:
+        await tell_admins(f"`/내전하자` 로 {count}명이 모였어요. 리그 운영진 역할을 정해 두지 않아 멘션은 하지 못했어요. "
+                          "리그 관리자가 `/내전하자설정` 의 **운영진역할** 칸에서 정해 주세요.")
+
+
+@bot.tree.command(name="내전하자", description="지금 내전을 하고 싶다고 알립니다. 한 시간 동안 유지되고, 10명이 모이면 리그 운영진에게 알려요 (리그 선수)", guild=GUILD)
+async def want_game(interaction: discord.Interaction) -> None:
+    if bot.want_channel_id and interaction.channel_id != bot.want_channel_id:
+        await interaction.response.send_message(f"이 명령어는 <#{bot.want_channel_id}> 에서 써 주세요.", ephemeral=True)
+        return
+    if not await can_want(interaction.user):
+        await interaction.response.send_message(
+            "이 명령어를 사용할 권한이 없어요. 리그 선수만 쓸 수 있는 명령어예요. 선수 등록을 하고 승인을 받으면 쓸 수 있어요.", ephemeral=True)
+        return
+    uid, now = interaction.user.id, time.time()
+    who = wanting(now)
+    rec = bot.current if bot.current is not None and not bot.current.closed else None  # 지금 모집 중인 내전
+    hint = f"\n👉 지금 모집 중인 내전이 있습니다. <#{rec.place_id}> 에서 `/참여` 를 입력하세요." if rec is not None else ""
+    if uid in bot.wants:  # 한 시간 안에 이미 썼다. 그 시간이 지나야 다시 쓸 수 있다
+        again = int(bot.wants[uid] + WANT_SECONDS)
+        await interaction.response.send_message(
+            f"이미 내전하자에 등록했습니다. <t:{again}:t>(<t:{again}:R>)부터 다시 쓸 수 있습니다.\n"
+            f"지금 내전을 하고 싶어 하는 사람이 **{len(who)}명** 있습니다.{hint}", ephemeral=True)
+        return
+
+    bot.wants[uid] = now
+    if rec is not None and uid in rec.participants:  # 이미 그 모집에 참여해 있는 사람은 기다리는 사람으로 세지 않는다
+        bot.want_joined.add(uid)
+    who = wanting(now)
+    # 모집이 열려 있는 동안에는 알리지 않는다(이미 로비가 만들어졌다). 그 모집이 끝난 뒤에도 10명이 기다리면 다음 입력 때 알린다
+    alert = len(who) >= PLAYERS_NEEDED and not bot.want_alerted and rec is None
+    if alert:
+        bot.want_alerted = True
+    save_state()
+    until = int(now + WANT_SECONDS)
+    text = (f"✅ 내전하자에 등록했습니다. 지금 내전을 하고 싶어 하는 사람이 **{len(who)}명** 있습니다.\n"
+            f"<t:{until}:t>까지 한 시간 동안 유지되고, {PLAYERS_NEEDED}명이 모이면 리그 운영진에게 알립니다.")
+    if alert:
+        text += f"\n📣 {len(who)}명이 모여 리그 운영진에게 알렸습니다."
+    await interaction.response.send_message(text + hint, ephemeral=True)
+    if alert:
+        await announce_want(interaction.channel_id, len(who))
+
+
+@bot.tree.command(name="내전하자설정", description="/내전하자 를 쓰는 대화방과, 10명이 모였을 때 알릴 리그 운영진 역할을 정합니다 (리그 관리자 전용)", guild=GUILD)
+@app_commands.rename(channel="대화방", role="운영진역할")
+@app_commands.describe(channel="선수들이 /내전하자 를 입력하는 채널. 10명이 모이면 이 채널에 알립니다. 비우면 지금 설정을 보여 줍니다",
+                       role="10명이 모였을 때 멘션할 리그 운영진 역할")
+async def want_setup(interaction: discord.Interaction, channel: Optional[discord.TextChannel] = None, role: Optional[discord.Role] = None) -> None:
+    if not await admin_only(interaction, manager=True):
+        return
+    await interaction.response.defer()
+    actor = by(interaction)
+    if role is not None and (role.is_default() or role.managed):
+        await answer(interaction, f"{actor}님, **{role.name}** 역할은 고를 수 없어요(@everyone 이거나 봇·연동이 관리하는 역할).")
+        return
+    changed = channel is not None or role is not None
+    if channel is not None:
+        bot.want_channel_id = channel.id
+    if role is not None:
+        bot.want_role_id = role.id
+    if changed:
+        save_state()
+    where = f"<#{bot.want_channel_id}>" if bot.want_channel_id else "정하지 않음 (어느 채널에서나 받고, 10명이 모이면 입력한 채널에 알려요)"
+    who = f"<@&{staff_role_id()}>" if staff_role_id() else "정하지 않음"
+    problem = want_problem(await get_guild())
+    await answer(interaction, (f"{actor}님이 `/내전하자` 설정을 바꿨어요." if changed else f"{actor}님, `/내전하자` 설정이에요.")
+                 + f"\n- 대화방: {where}\n- 10명이 모이면 알릴 역할: {who}"
+                 + f"\n- 지금 기다리는 사람: {len(wanting())}명 (등록하면 한 시간 동안 유지돼요)"
+                 + (f"\n⚠️ {problem}" if problem else ""))
+
+
+# ── /도움말: 내가 쓸 수 있는 명령어 ─────────────────────────────
+@bot.tree.command(name="도움말", description="내가 쓸 수 있는 퍼그나봇 명령어를 보여 줍니다", guild=GUILD)
+async def show_help(interaction: discord.Interaction) -> None:
+    """입력한 사람의 자리(리그 관리자, 리그 운영진, 리그 선수, 그 밖)에 맞춰, 쓸 수 있는 명령어만 본인에게 보여 준다."""
+    user = interaction.user
+    manager = is_manager(user)
+    staff = manager or await is_admin(user, interaction.channel_id == ADMIN_CHANNEL_ID)
+    player = staff or await can_want(user)
+    if manager:
+        head = "**리그 관리자**가 쓸 수 있는 명령어예요."
+    elif staff:
+        head = "**리그 운영진**이 쓸 수 있는 명령어예요."
+    elif player:
+        head = "**리그 선수**가 쓸 수 있는 명령어예요."
+    else:
+        head = "지금 쓸 수 있는 명령어예요. 선수 등록을 하고 승인을 받으면 `/내전하자` 도 쓸 수 있어요."
+    parts = ["**퍼그나봇 명령어**\n" + head]
+    parts.append("**누구나**\n"
+                 "`/참여` · `/참여취소` — 내전 모집 글에서 참여를 신청하거나 취소해요.\n"
+                 "`/도움말` — 이 안내를 다시 봐요.")
+    if player:
+        where = f"<#{bot.want_channel_id}> 에서 써요. " if bot.want_channel_id else ""
+        parts.append("**리그 선수**\n"
+                     f"`/내전하자` — {where}지금 내전을 하고 싶다고 알려요. 한 시간 동안 유지되고, {PLAYERS_NEEDED}명이 모이면 리그 운영진에게 알려요.")
+    if staff:
+        parts.append(f"**리그 운영진** (<#{ADMIN_CHANNEL_ID}> 에서 써요)\n"
+                     "`/내전생성` — 내전 모집을 열어요. **마감** 칸에 마감 시각을 적을 수 있어요.\n"
+                     "`/마감` — 지금까지 모인 인원으로 바로 마감해요.\n"
+                     f"`/연장` — 마감을 {minutes_text(EXTEND_SECONDS)} 뒤로 미뤄요. 마감한 뒤에도 다시 열 수 있어요.\n"
+                     "`/취소` — 이번 내전을 취소해요.\n"
+                     "`/시작` — 로비 음성 채널에 있는 선수를 팀 음성 채널로 옮겨요.\n"
+                     "`/종료` — 팀 음성 채널에 있는 사람을 모두 로비로 옮겨요.\n"
+                     "`/승리` — 이긴 팀을 골라 결과를 기록해요. 열리지 않은 판은 **경기 안 함**으로 치워요.\n"
+                     "`/승리취소` — 방금 기록한 결과를 되돌려요.")
+    if manager:
+        parts.append(f"**리그 관리자** (<#{ADMIN_CHANNEL_ID}> 에서 써요)\n"
+                     "`/선수역할` — 승인한 선수에게 자동으로 줄 역할을 정해요.\n"
+                     "`/내전하자설정` — `/내전하자` 를 쓰는 대화방과, 10명이 모였을 때 알릴 역할을 정해요.")
+    await interaction.response.send_message("\n\n".join(parts), ephemeral=True)
 
 
 @bot.tree.error
