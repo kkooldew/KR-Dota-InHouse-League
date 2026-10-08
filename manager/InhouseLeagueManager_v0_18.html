@@ -447,8 +447,8 @@ ol.rules b{color:var(--bone);font-weight:500}
     <h2>선수 명단 불러오기</h2>
     <p class="hint">구글 시트나 엑셀에서 표를 복사해 아래에 붙여넣거나, CSV 파일을 고르세요. 첫 줄은 머리글로 봅니다.<br>
       인식하는 열 이름: 이름 / MMR / 1지망 … 4지망. 지망 칸에는 <code>1</code> 캐리, <code>2</code> 미드, <code>3</code> 오프, <code>4</code> 서폿을 적거나 <code>캐리</code>·<code>서폿</code>처럼 이름을 적습니다. 예전 표의 <code>5</code>와 5지망 열도 서폿으로 읽습니다. <b>선호포지션</b> 한 칸에 <code>1,3,4</code>처럼 순서대로 적어도 됩니다. <code>디스코드</code>·<code>스팀</code> 열이 있으면 함께 읽습니다.<br>
-      리그 사이트 운영진 페이지에서 받은 <b>선수명단 JSON</b>도 <b>CSV 파일 고르기</b>로 그대로 불러옵니다. 디스코드나 스팀이 같은 선수는 닉네임이 바뀌었어도 같은 선수로 이어집니다.<br>
-      리그 서버에 이어 두었다면 운영진 페이지에서 <b>승인한 선수는 저절로 이 선수단에 들어옵니다.</b> 따로 불러오지 않아도 됩니다.</p>
+      리그 사이트 리그 관리자 페이지에서 받은 <b>선수명단 JSON</b>도 <b>CSV 파일 고르기</b>로 그대로 불러옵니다. 디스코드나 스팀이 같은 선수는 닉네임이 바뀌었어도 같은 선수로 이어집니다.<br>
+      리그 서버에 이어 두었다면 리그 관리자 페이지에서 <b>승인한 선수는 저절로 이 선수단에 들어옵니다.</b> 따로 불러오지 않아도 됩니다.</p>
     <textarea id="pasteBox" placeholder="이름	MMR	1지망	2지망	3지망	4지망
 불멸의소환사	5200	1	2	3	4
 미드장인	4700	2	3	1	4
@@ -538,8 +538,8 @@ ol.rules b{color:var(--bone);font-weight:500}
     <p>명단을 다시 불러올 때 <b>이름이 같으면 갱신</b>을 고르면 기존 선수의 MMR이 바뀌고 전적은 남습니다. 지망은 불러온 표에 지망 열이 있을 때만 바뀝니다. 불러온 표 안에 같은 이름이 여러 줄 있으면 아래쪽 줄을 씁니다. <b>명단 전체 교체</b>는 말 그대로 처음부터 새로 만듭니다. 새 명단과 이어지지 않는 지난 경기 기록도 함께 지우므로, 바꾸기 전에 확인창이 뜹니다. 이미 경기를 치른 선수는 불러온 MMR을 고쳐도 인하우스 MMR이 되돌아가지 않습니다.</p>
 
     <h3>리그 사이트·디스코드 봇과 함께 쓰기</h3>
-    <p>리그 사이트에서 등록받은 선수는 운영진 페이지에서 <b>승인</b>하면 서버가 선수단에 바로 넣습니다. 이 매니저를 리그 서버에 이어 두면 그 선수가 여기에도 나타나고, 봇은 매니저를 열지 않아도 그 선수로 팀을 짭니다. 승인을 풀면(대기·제외) 아직 경기를 치르지 않은 선수는 선수단에서 빠집니다. 승인된 선수를 여기서 지우면 다음에 다시 들어오니, 선수단에서 빼려는 선수는 운영진 페이지에서 먼저 제외하세요.</p>
-    <p>서버에 잇지 않고 쓸 때는 운영진 페이지의 <b>매니저용 명단 받기</b>로 파일을 받아 선수단 탭의 <b>CSV 파일 고르기</b>로 불러옵니다. 디스코드와 스팀 정보가 함께 들어와, 다음에 다시 불러올 때 닉네임이 바뀌었어도 같은 선수로 이어집니다.</p>
+    <p>리그 사이트에서 등록받은 선수는 리그 관리자 페이지에서 <b>승인</b>하면 서버가 선수단에 바로 넣습니다. 이 매니저를 리그 서버에 이어 두면 그 선수가 여기에도 나타나고, 봇은 매니저를 열지 않아도 그 선수로 팀을 짭니다. 승인을 풀면(대기·제외) 아직 경기를 치르지 않은 선수는 선수단에서 빠집니다. 승인된 선수를 여기서 지우면 다음에 다시 들어오니, 선수단에서 빼려는 선수는 리그 관리자 페이지에서 먼저 제외하세요.</p>
+    <p>서버에 잇지 않고 쓸 때는 리그 관리자 페이지의 <b>매니저용 명단 받기</b>로 파일을 받아 선수단 탭의 <b>CSV 파일 고르기</b>로 불러옵니다. 디스코드와 스팀 정보가 함께 들어와, 다음에 다시 불러올 때 닉네임이 바뀌었어도 같은 선수로 이어집니다.</p>
     <p>디스코드 봇이 모집을 마감하면 관리자 채널에 <b>매니저 붙여넣기용</b> 명단이 올라옵니다. 팀 편성 탭의 <b>디스코드 봇의 참가 명단·짠 팀 불러오기</b>에 붙여넣으면 그 사람들이 참가자로 골라집니다. 데이터·설정 탭에서 공개 페이지를 연결해 두면 붙여넣지 않고 <b>봇이 올린 명단 불러오기</b>로 바로 받아올 수도 있습니다. 봇이 팀까지 짜서 공지했다면 <b>봇이 짠 팀 불러오기</b>를 누르세요. 공지된 편성이 그대로 보드에 올라와서, 경기가 끝난 뒤 이긴 팀만 누르면 됩니다.</p>
     <p>데이터·설정 탭에서 리그 서버를 연결하고 <b>서버와 자동으로 맞추기</b>를 켜 두면, 여기서 고친 기록이 몇 초 뒤 서버에 올라가 순위 페이지와 구글 시트에 반영됩니다. 디스코드에서 봇에게 <b>/승리</b>로 경기 결과를 기록하면 그 결과도 서버를 거쳐 이 매니저로 들어옵니다. 위쪽 <b>기록 저장</b>은 그대로 써서 파일 백업을 따로 받아 두세요.</p>
 
@@ -675,10 +675,10 @@ ol.rules b{color:var(--bone);font-weight:500}
 
   <div class="panel">
     <h2>리그 서버 연결</h2>
-    <p class="hint">리그 사이트와 디스코드 봇이 함께 쓰는 서버에 연결합니다. 연결하면 <b>기록의 원본이 서버</b>에 놓입니다. 이 매니저에서 고친 것은 서버에 올라가고, 봇이 <b>/승리</b>로 기록한 경기 결과는 서버에서 받아 옵니다. 서버는 받은 기록으로 순위 페이지와 구글 시트의 <b>순위</b>, <b>경기 기록</b> 탭을 다시 씁니다. <b>서버와 자동으로 맞추기</b>를 켜 두면 이 과정이 저절로 됩니다. 서버에 더 새로운 기록이 있을 때는 덮어쓰지 않고 먼저 불러옵니다. 서버 주소와 운영진 키는 이 브라우저에만 저장되며 기록 파일에는 들어가지 않습니다. 순위 페이지에는 이름·MMR·전적·경기 기록만 나가고 디스코드와 스팀 정보는 빠집니다.</p>
+    <p class="hint">리그 사이트와 디스코드 봇이 함께 쓰는 서버에 연결합니다. 연결하면 <b>기록의 원본이 서버</b>에 놓입니다. 이 매니저에서 고친 것은 서버에 올라가고, 봇이 <b>/승리</b>로 기록한 경기 결과는 서버에서 받아 옵니다. 서버는 받은 기록으로 순위 페이지와 구글 시트의 <b>순위</b>, <b>경기 기록</b> 탭을 다시 씁니다. <b>서버와 자동으로 맞추기</b>를 켜 두면 이 과정이 저절로 됩니다. 서버에 더 새로운 기록이 있을 때는 덮어쓰지 않고 먼저 불러옵니다. 서버 주소와 리그 관리자 키는 이 브라우저에만 저장되며 기록 파일에는 들어가지 않습니다. 순위 페이지에는 이름·MMR·전적·경기 기록만 나가고 디스코드와 스팀 정보는 빠집니다.</p>
     <div class="row">
       <label class="field grow">서버 주소 (Apps Script 웹 앱)<input type="url" id="syncUrl" placeholder="https://script.google.com/macros/s/…/exec" spellcheck="false"></label>
-      <label class="field grow">운영진 키<input type="password" id="syncKey" autocomplete="off" spellcheck="false"></label>
+      <label class="field grow">리그 관리자 키<input type="password" id="syncKey" autocomplete="off" spellcheck="false"></label>
     </div>
     <div class="row" style="margin-top:12px">
       <label class="checkline"><input type="checkbox" id="syncAuto"> 서버와 자동으로 맞추기</label>
@@ -2507,8 +2507,8 @@ $('#rosterTable').addEventListener('click', e=>{
   const del = e.target.closest('[data-del]');
   if(del){
     const p = byId(del.dataset.del);
-    // 서버에 이어 쓰는 동안에는, 운영진 페이지에서 승인된 선수를 서버가 선수단에 다시 넣는다. 지우기 전에 알려 준다
-    const again = syncReady() ? '\n\n운영진 페이지에서 승인된 선수라면 다음에 다시 들어옵니다. 선수단에서 빼려면 운영진 페이지에서 먼저 제외해 주세요.' : '';
+    // 서버에 이어 쓰는 동안에는, 리그 관리자 페이지에서 승인된 선수를 서버가 선수단에 다시 넣는다. 지우기 전에 알려 준다
+    const again = syncReady() ? '\n\n리그 관리자 페이지에서 승인된 선수라면 다음에 다시 들어옵니다. 선수단에서 빼려면 리그 관리자 페이지에서 먼저 제외해 주세요.' : '';
     if(confirm(p.name + ' 선수를 명단에서 지울까요? 지난 경기 기록은 남습니다.' + again)){
       const fresh = !!plan && candKey === buildKey(state.players.filter(x=>picked.has(x.id)));
       state.players = state.players.filter(x=>x.id !== p.id);
@@ -2922,7 +2922,7 @@ $('#btnReset').addEventListener('click', async ()=>{
 /* =========================================================
    디스코드 참가 명단과 리그 서버 연결 (v0.18, 서버가 원본이 된 것은 v0.20)
    ========================================================= */
-// 서버 주소와 운영진 키는 기록(state)과 따로 이 브라우저에만 둔다. 기록 파일로 내보내도 따라가지 않는다.
+// 서버 주소와 리그 관리자 키는 기록(state)과 따로 이 브라우저에만 둔다. 기록 파일로 내보내도 따라가지 않는다.
 // rev는 이 브라우저가 서버와 마지막으로 맞춘 기록 번호, hash는 그때의 기록 지문이다(v0.20).
 const SYNC_STORE = 'dota_inhouse_sync';
 let sync = {url:'', key:'', auto:false, rev:0, hash:''};
@@ -2951,7 +2951,7 @@ async function syncPost(body){
     throw e;
   }
   // 구글 서버가 요청을 처리하고도 답을 전해 주지 못하면, 브라우저가 되돌려진 주소를 따라가 요청과 상관없는 공개 상태(ok: true)를 받는 일이 있다.
-  // 공개 상태에는 version 이 있고 운영진에게만 주는 registered 가 없다. 그런 답은 받지 못한 것으로 친다(요청이 처리됐는지는 알 수 없다)
+  // 공개 상태에는 version 이 있고 리그 관리자에게만 주는 registered 가 없다. 그런 답은 받지 못한 것으로 친다(요청이 처리됐는지는 알 수 없다)
   if('version' in j && !('registered' in j)) throw new Error(LOST_ANSWER);
   return j;
 }
@@ -2997,7 +2997,7 @@ function schedulePublish(){
 }
 // 이 브라우저의 기록을 서버에 올린다. force는 서버 기록이 더 새로워도 덮어쓴다(운영자가 그렇게 고른 때만 쓴다).
 async function pushLeague(manual, force){
-  if(!syncReady()){ if(manual) toast('서버 주소와 운영진 키를 먼저 넣어 주세요'); return; }
+  if(!syncReady()){ if(manual) toast('서버 주소와 리그 관리자 키를 먼저 넣어 주세요'); return; }
   if(syncBusy){ pubAgain = true; return; }
   if(!manual && !force && !unsent()) return;                  // 올릴 변경이 없다
   syncBusy = true;
@@ -3028,7 +3028,7 @@ async function pushLeague(manual, force){
 // 서버의 기록을 받아 온다. 서버가 더 새로우면 이 브라우저의 기록을 그것으로 바꾼다.
 // 이 브라우저에 아직 올리지 않은 변경이 있는데 서버도 바뀌었으면, 어느 쪽을 남길지 운영자에게 묻는다.
 async function pullLeague(manual){
-  if(!syncReady()){ if(manual) toast('서버 주소와 운영진 키를 먼저 넣어 주세요'); return; }
+  if(!syncReady()){ if(manual) toast('서버 주소와 리그 관리자 키를 먼저 넣어 주세요'); return; }
   if(syncBusy) return;
   syncBusy = true;
   let push = false;
@@ -3134,7 +3134,7 @@ $('#syncAuto').addEventListener('change', e => {
 $('#btnSyncTest').addEventListener('click', async () => {
   sync.url = $('#syncUrl').value.trim(); sync.key = $('#syncKey').value.trim(); keepSync(); renderSyncForm();
   const info = $('#syncInfo');
-  if(!syncReady()){ info.classList.add('bad'); info.textContent = 'https://script.google.com/macros/s/…/exec 모양의 주소와 운영진 키를 모두 넣어 주세요.'; return; }
+  if(!syncReady()){ info.classList.add('bad'); info.textContent = 'https://script.google.com/macros/s/…/exec 모양의 주소와 리그 관리자 키를 모두 넣어 주세요.'; return; }
   info.classList.remove('bad'); info.textContent = '확인하는 중';
   try{
     const r = await syncPost({action:'ping'});

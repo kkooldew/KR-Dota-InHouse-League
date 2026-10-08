@@ -14,7 +14,7 @@
   //  - 답을 찾지 못해 웹 앱 주소로 되돌려 보내고, 브라우저가 그것을 따라가 요청과 상관없는 공개 상태(ok: true)를 받는다
   // 둘 다 "답을 받지 못했다"로 본다. 요청이 서버에서 처리됐는지는 알 수 없다(code 가 없는 오류로 낸다).
   const LOST = '서버의 답을 받지 못했습니다. 잠시 후 다시 시도해 주세요.';
-  // 공개 상태(doGet 의 답)의 모양: version 은 있는데 운영진에게만 주는 registered 가 없다. POST 의 답은 이런 모양일 수 없다
+  // 공개 상태(doGet 의 답)의 모양: version 은 있는데 리그 관리자에게만 주는 registered 가 없다. POST 의 답은 이런 모양일 수 없다
   const strayStatus = j => !!j && j.ok === true && 'version' in j && !('registered' in j);
 
   // wait: 답을 기다리는 시간(ms). 새 시즌 시작처럼 서버가 여러 일을 한꺼번에 하는 요청은 더 길게 준다
@@ -77,9 +77,9 @@
     const foot = document.getElementById('site-foot');
     if(foot){
       foot.className = 'site-foot';
+      // 리그 관리자 페이지(admin.html)로 가는 링크는 두지 않는다. 리그 관리자는 주소를 따로 알고 들어온다 (운영자가 2026-10-09에 빼 달라고 함)
       foot.innerHTML = '<div class="wrap"><span>' + esc(L.title) + '</span>' +
-        '<span>' + (L.discordInvite ? '<a href="' + esc(L.discordInvite) + '" target="_blank" rel="noopener">디스코드</a> &nbsp; ' : '') +
-        '<a href="admin.html">운영진</a></span></div>';
+        (L.discordInvite ? '<span><a href="' + esc(L.discordInvite) + '" target="_blank" rel="noopener">디스코드</a></span>' : '') + '</div>';
     }
     if(season) setSeason(season);
   }

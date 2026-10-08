@@ -2,12 +2,14 @@
  * 도타 2 인하우스 리그 서버 (Google Apps Script)
  *
  * 하는 일
- *  - 선수 등록 페이지에서 받은 정보를 이 구글 시트에 저장한다 (시트는 운영진 계정에만 보인다)
+ *  - 선수 등록 페이지에서 받은 정보를 이 구글 시트에 저장한다 (시트는 시트를 만든 사람의 구글 계정에만 보인다)
  *    시즌마다 '선수등록 (시즌 이름)' 탭을 따로 쓴다. 지난 시즌에 승인됐던 선수가 같은 스팀 프로필과 디스코드로 다시 등록하면
  *    그 시즌이 끝났을 때의 인하우스 MMR을 이어받는다
- *  - 운영진 키가 있는 사람에게만 등록 명단을 돌려주고, 승인 상태와 등록 기간을 바꾸고 새 시즌을 시작하게 한다
+ *  - 리그 관리자 키가 있는 사람에게만 등록 명단을 돌려주고, 승인 상태와 등록 기간을 바꾸고 새 시즌을 시작하게 한다
+ *    리그 관리자는 선수 승인처럼 리그를 관리하는 사람이다(주인 키를 가진 사람과, 키를 따로 받은 사람).
+ *    디스코드에서 봇 명령어로 내전을 열고 결과를 기록하는 리그 운영진은 키를 쓰지 않는다(봇이 자기 키로 대신 한다)
  *    (새 시즌을 시작하면 끝난 시즌의 리그 기록을 따로 보관하고, 새 시즌은 빈 기록에서 시작한다)
- *  - 운영진이 승인한 선수를 리그 기록의 선수단에 바로 넣는다 (봇이 그 선수로 팀을 짤 수 있게)
+ *  - 리그 관리자가 승인한 선수를 리그 기록의 선수단에 바로 넣는다 (봇이 그 선수로 팀을 짤 수 있게)
  *  - 리그 매니저가 올린 경기 기록을 받아, 개인 정보를 뺀 공개용 기록으로 내보낸다
  *  - 디스코드 봇이 올린 참가 명단을 보관했다가 리그 매니저에 넘겨준다
  *
@@ -15,10 +17,10 @@
  * 코드를 고친 뒤에는 배포 → 배포 관리 → 수정(연필) → 버전: 새 버전 → 배포 를 눌러야 반영됩니다.
  */
 
-const SERVER_VERSION = 12;                            // 서버를 고칠 때마다 올린다. 상태 응답에 실려서 새 버전이 배포됐는지 밖에서 확인할 수 있다
+const SERVER_VERSION = 13;                           // 서버를 고칠 때마다 올린다. 상태 응답에 실려서 새 버전이 배포됐는지 밖에서 확인할 수 있다
 const SHEET_NAME = '선수등록';                             // 등록 탭 이름의 앞부분. 시즌마다 '선수등록 (시즌 이름)' 탭을 따로 쓴다
 // 칸을 더할 때는 맨 뒤에 붙이고 LAYOUT 을 올린다. 이미 있는 탭에는 ready_ 가 새 머리글을 채워 넣는다
-// 처리자·처리시각: 그 등록의 상태(승인·제외·대기)를 마지막으로 바꾼 운영진과 그 시각 (버전 11)
+// 처리자·처리시각: 그 등록의 상태(승인·제외·대기)를 마지막으로 바꾼 리그 관리자와 그 시각 (버전 11)
 const HEADERS = ['등록시각', '수정시각', '상태', '닉네임', '스팀프로필', '스팀키', '디스코드', 'MMR', '1지망', '2지망', '3지망', '4지망', '비고', '최고MMR', '처리자', '처리시각'];
 const LAYOUT = '3';
 const COL = HEADERS.reduce((o, h, i) => (o[h] = i, o), {});
@@ -30,13 +32,13 @@ const ROSTER_MAX = 60;
 const STEAM_TRIES = 4;                                     // 스팀 조회를 몇 번까지 시도할지
 const DRIVE_TRIES = 3;                                     // 드라이브 파일을 몇 번까지 다시 읽어 볼지
 const LEAGUE_MAX = 8000000;                                // 리그 기록의 최대 크기(글자 수)
-const SEASON_WORD = '시즌 변경';                            // 새 시즌을 시작할 때 운영진이 직접 입력해야 하는 확인 문구
+const SEASON_WORD = '시즌 변경';                            // 새 시즌을 시작할 때 리그 관리자가 직접 입력해야 하는 확인 문구
 const LINKED = '1';                                        // 승인한 선수를 선수단에 넣기 시작했다는 표시 (버전 10). ready_ 가 처음 한 번 맞춘다
 const OWNER_NAME = '주인';                                 // 주인 키(ADMIN_KEY)로 한 일에 남기는 이름
-const STAFF_MAX = 30;                                      // 키를 따로 받는 운영진의 최대 인원
+const STAFF_MAX = 30;                                      // 키를 따로 받는 리그 관리자의 최대 인원
 const LOG_TAB = '운영 기록';                                // 누가 무엇을 했는지 남기는 탭
-const LOG_HEADERS = ['시각', '시즌', '운영진', '한 일', '대상', '내용'];
-let ACTOR = null;                                          // 이번 요청을 보낸 운영진 {owner, id, name}. requireAdmin_ 이 채운다
+const LOG_HEADERS = ['시각', '시즌', '리그 관리자', '한 일', '대상', '내용'];
+let ACTOR = null;                                          // 이번 요청을 보낸 리그 관리자 {owner, id, name}. requireAdmin_ 이 채운다
 let PAST_ROWS = null;                                      // 이번 요청에서 읽은 끝난 시즌들의 등록 명단 {시즌 번호: 줄들} (pastRows_)
 
 /* =========================================================
@@ -58,15 +60,15 @@ function setup() {
   if (moved.failed.length) Logger.log('스팀에서 찾지 못해 그대로 둔 선수: ' + moved.failed.join(', ') + ' (시트의 스팀프로필 칸을 직접 확인해 주세요)');
   if (moved.duplicates.length) Logger.log('같은 스팀 계정이 여러 줄에 있습니다: ' + moved.duplicates.join(', ') + ' (시트에서 한 줄만 남겨 주세요)');
   Logger.log('준비가 끝났습니다. 시트: ' + sheet.getName());
-  Logger.log('운영진 키: ' + key);
-  Logger.log('이 키는 운영진 페이지·리그 매니저·디스코드 봇에 넣습니다. 다른 사람에게 보이지 않게 보관하세요.');
+  Logger.log('주인 키: ' + key);
+  Logger.log('이 키는 리그 관리자 페이지·리그 매니저·디스코드 봇에 넣습니다. 다른 사람에게 보이지 않게 보관하세요.');
 }
 
-/** 운영진 키가 새어 나갔을 때 실행하면 새 키를 만듭니다. 운영진 페이지·매니저·봇의 키도 바꿔야 합니다. */
+/** 주인 키가 새어 나갔을 때 실행하면 새 키를 만듭니다. 리그 관리자 페이지·매니저·봇에 넣어 둔 주인 키도 바꿔야 합니다. */
 function resetAdminKey() {
   const key = (Utilities.getUuid() + Utilities.getUuid()).replace(/-/g, '');
   PropertiesService.getScriptProperties().setProperty('ADMIN_KEY', key);
-  Logger.log('새 운영진 키: ' + key);
+  Logger.log('새 주인 키: ' + key);
 }
 
 /* =========================================================
@@ -97,7 +99,7 @@ function doPost(e) {
       case 'adminSetStatus': requireAdmin_(body); return setStatus_(body);
       case 'adminSyncPlayers': requireAdmin_(body); return syncNow_();
       case 'adminConfig': requireAdmin_(body); return setConfig_(body);
-      // 되돌릴 수 없는 일(새 시즌 시작)과 운영진을 늘리고 줄이는 일은 주인 키로만 한다
+      // 되돌릴 수 없는 일(새 시즌 시작)과 리그 관리자를 늘리고 줄이는 일은 주인 키로만 한다
       case 'adminNewSeason': requireOwner_(body); return newSeason_(body);
       case 'adminStaff': requireOwner_(body); return staffList_();
       case 'adminStaffAdd': requireOwner_(body); return staffAdd_(body);
@@ -143,13 +145,13 @@ function fail_(message, code) {
   throw err;
 }
 
-// 운영진 키를 확인하고, 누가 보낸 요청인지 돌려준다(ACTOR 에도 적어 둔다).
-// 키는 두 가지다: 주인 키(ADMIN_KEY, 운영자와 봇이 쓴다)와 운영진마다 따로 만들어 준 키(버전 11, 아래 "운영진" 절).
+// 리그 관리자 키를 확인하고, 누가 보낸 요청인지 돌려준다(ACTOR 에도 적어 둔다).
+// 키는 두 가지다: 주인 키(ADMIN_KEY, 운영자와 봇이 쓴다)와 리그 관리자마다 따로 만들어 준 키(버전 11, 아래 "리그 관리자" 절).
 function requireAdmin_(body) {
   const key = PropertiesService.getScriptProperties().getProperty('ADMIN_KEY');
   const given = typeof body.key === 'string' ? body.key : '';
   if (key && given && given === key) return (ACTOR = { owner: true, id: '', name: OWNER_NAME });
-  if (given.length >= 32 && given.length <= 200) {         // 운영진 키는 64자다. 터무니없이 짧거나 긴 값은 지문을 내 보지도 않는다
+  if (given.length >= 32 && given.length <= 200) {         // 리그 관리자 키는 64자다. 터무니없이 짧거나 긴 값은 지문을 내 보지도 않는다
     const hash = keyHash_(given);
     const me = staff_().filter(s => s.hash === hash)[0];
     if (me) {
@@ -157,12 +159,12 @@ function requireAdmin_(body) {
       return (ACTOR = { owner: false, id: me.id, name: me.name });
     }
   }
-  fail_('운영진 키가 맞지 않습니다', 'auth');
+  fail_('리그 관리자 키가 맞지 않습니다', 'auth');
 }
 
 function requireOwner_(body) {
   const who = requireAdmin_(body);
-  if (!who.owner) fail_('이 일은 주인 키로만 할 수 있습니다. 리그 운영자에게 부탁해 주세요.', 'owner');
+  if (!who.owner) fail_('이 일은 주인 키로만 할 수 있습니다. 주인 키를 가진 리그 관리자에게 부탁해 주세요.', 'owner');
   return who;
 }
 
@@ -187,8 +189,8 @@ function statusInfo_() {
   };
 }
 
-// 운영진에게는 등록 인원 수와 지난 시즌 이름도 함께 준다 (오래된 시즌이 앞).
-// role 과 name 은 지금 쓰는 키가 누구의 것인지다. 운영진 페이지가 주인 키로만 할 수 있는 칸을 가릴 때 본다
+// 리그 관리자에게는 등록 인원 수와 지난 시즌 이름도 함께 준다 (오래된 시즌이 앞).
+// role 과 name 은 지금 쓰는 키가 누구의 것인지다. 리그 관리자 페이지가 주인 키로만 할 수 있는 칸을 가릴 때 본다
 function adminStatus_() {
   return Object.assign(statusInfo_(), {
     registered: Math.max(0, getSheet_().getLastRow() - 1),
@@ -215,13 +217,13 @@ function setConfig_(body) {
 }
 
 /* =========================================================
-   운영진 (버전 11)
+   리그 관리자 (버전 11)
    ========================================================= */
-// 운영진마다 키를 따로 준다. 전에는 모두가 주인 키 하나를 같이 써서, 한 사람만 빼려면 키를 새로 만들어 모두에게 다시 돌려야 했고
-// 누가 무엇을 했는지도 알 수 없었다(운영자가 2026-10-08에 "다른 운영진을 편하게 추가·제거"할 방법을 골랐다).
-//  - 주인 키(ADMIN_KEY)는 그대로다. 운영자와 봇이 쓴다. 운영진을 늘리고 줄이는 일과 새 시즌 시작은 주인 키로만 한다.
-//  - 운영진의 키는 만들 때 한 번만 돌려주고, 서버에는 지문(SHA-256)만 둔다. 스크립트 속성을 들여다봐도 키를 알 수 없다.
-//    키는 244비트 난수라 지문에서 거꾸로 찾을 수 없다. 잃어버리면 그 운영진을 끊고 새로 추가한다.
+// 리그 관리자마다 키를 따로 준다. 전에는 모두가 주인 키 하나를 같이 써서, 한 사람만 빼려면 키를 새로 만들어 모두에게 다시 돌려야 했고
+// 누가 무엇을 했는지도 알 수 없었다(운영자가 2026-10-08에 "다른 리그 관리자를 편하게 추가·제거"할 방법을 골랐다).
+//  - 주인 키(ADMIN_KEY)는 그대로다. 운영자와 봇이 쓴다. 리그 관리자를 늘리고 줄이는 일과 새 시즌 시작은 주인 키로만 한다.
+//  - 리그 관리자의 키는 만들 때 한 번만 돌려주고, 서버에는 지문(SHA-256)만 둔다. 스크립트 속성을 들여다봐도 키를 알 수 없다.
+//    키는 244비트 난수라 지문에서 거꾸로 찾을 수 없다. 잃어버리면 그 리그 관리자를 끊고 새로 추가한다.
 //  - 스크립트 속성 STAFF 에 [{id, name, hash, createdAt}] 로 적는다. 마지막으로 쓴 날은 STAFF_SEEN_<id> 에 따로 둔다
 //    (목록을 고치는 요청과 겹쳐 서로 덮어쓰지 않게).
 function staff_() {
@@ -229,7 +231,7 @@ function staff_() {
     const list = JSON.parse(PropertiesService.getScriptProperties().getProperty('STAFF') || '[]');
     return Array.isArray(list) ? list.filter(s => s && typeof s === 'object' && s.id && s.hash && s.name) : [];
   } catch (err) {
-    console.warn('운영진 목록을 읽지 못했습니다: ' + err);
+    console.warn('리그 관리자 목록을 읽지 못했습니다: ' + err);
     return [];
   }
 }
@@ -243,7 +245,7 @@ function today_() {
   return Utilities.formatDate(new Date(), 'Asia/Seoul', 'yyyy-MM-dd HH:mm').slice(0, 10);
 }
 
-// 그 운영진이 마지막으로 키를 쓴 날(한국 날짜)을 적어 둔다. 하루에 한 번만 쓴다
+// 그 리그 관리자가 마지막으로 키를 쓴 날(한국 날짜)을 적어 둔다. 하루에 한 번만 쓴다
 function touchStaff_(me) {
   try {
     const props = PropertiesService.getScriptProperties(), day = today_();
@@ -253,7 +255,7 @@ function touchStaff_(me) {
 
 function staffName_(v) {
   const s = String(v == null ? '' : v).replace(/[\u0000-\u001f\u007f<>]/g, '').replace(/\s+/g, ' ').trim();
-  if (!s) fail_('운영진의 이름을 넣어 주세요', 'name');
+  if (!s) fail_('리그 관리자의 이름을 넣어 주세요', 'name');
   if (s.length > 20) fail_('이름은 20자 이내로 넣어 주세요', 'name');
   return s;
 }
@@ -263,12 +265,12 @@ function staffList_() {
   return { staff: staff_().map(s => ({ id: s.id, name: s.name, createdAt: s.createdAt || '', lastDay: props.getProperty('STAFF_SEEN_' + s.id) || '' })) };
 }
 
-// 운영진을 추가하고 그 사람의 키를 돌려준다. 키는 이 답에만 실리고 서버에는 남지 않는다
+// 리그 관리자를 추가하고 그 사람의 키를 돌려준다. 키는 이 답에만 실리고 서버에는 남지 않는다
 function staffAdd_(body) {
   const name = staffName_(body.name);
   return withLock_(() => {
     const list = staff_();
-    if (list.length >= STAFF_MAX) fail_('운영진은 ' + STAFF_MAX + '명까지 둘 수 있습니다. 쓰지 않는 운영진을 먼저 끊어 주세요.', 'name');
+    if (list.length >= STAFF_MAX) fail_('리그 관리자는 ' + STAFF_MAX + '명까지 둘 수 있습니다. 쓰지 않는 리그 관리자를 먼저 끊어 주세요.', 'name');
     if (nameKey_(name) === nameKey_(OWNER_NAME) || list.some(s => nameKey_(s.name) === nameKey_(name)))
       fail_('이미 있는 이름입니다. 다른 이름을 넣어 주세요.', 'name');
     const key = (Utilities.getUuid() + Utilities.getUuid()).replace(/-/g, '');
@@ -276,28 +278,28 @@ function staffAdd_(body) {
     for (let n = 0; !id || list.some(s => s.id === id); n++) id = 'a' + Date.now().toString(36) + n.toString(36);
     list.push({ id: id, name: name, hash: keyHash_(key), createdAt: new Date().toISOString() });
     PropertiesService.getScriptProperties().setProperty('STAFF', JSON.stringify(list));
-    log_('운영진 추가', name, '');
+    log_('리그 관리자 추가', name, '');
     return Object.assign(staffList_(), { key: key, name: name });
   });
 }
 
-// 운영진을 끊는다. 그 사람의 키는 바로 쓸 수 없게 된다
+// 리그 관리자를 끊는다. 그 사람의 키는 바로 쓸 수 없게 된다
 function staffRemove_(body) {
   const id = String(body.id || '');
   return withLock_(() => {
     const props = PropertiesService.getScriptProperties();
     const list = staff_();
     const me = list.filter(s => s.id === id)[0];
-    if (!me) fail_('그런 운영진이 없습니다. 목록을 새로 고쳐 주세요.', 'staff');
+    if (!me) fail_('그런 리그 관리자가 없습니다. 목록을 새로 고쳐 주세요.', 'staff');
     props.setProperty('STAFF', JSON.stringify(list.filter(s => s !== me)));
     try { props.deleteProperty('STAFF_SEEN_' + id); } catch (err) { /* 남아 있어도 쓰이지 않는다 */ }
-    log_('운영진 끊기', me.name, '');
+    log_('리그 관리자 끊기', me.name, '');
     return staffList_();
   });
 }
 
 /* ---- 운영 기록 ----
-   누가 무엇을 했는지를 시트의 '운영 기록' 탭에 한 줄씩 남긴다(등록 승인·제외·대기, 등록 열고 닫기, 시즌, 운영진 추가·끊기).
+   누가 무엇을 했는지를 시트의 '운영 기록' 탭에 한 줄씩 남긴다(등록 승인·제외·대기, 등록 열고 닫기, 시즌, 리그 관리자 추가·끊기).
    기록을 남기지 못해도 하던 일은 그대로 끝낸다. */
 function log_(what, target, detail) {
   logRows_([[what, target, detail]]);
@@ -318,6 +320,8 @@ function logRows_(rows) {
       sheet = ss.insertSheet(LOG_TAB);
       sheet.getRange(1, 1, 1, LOG_HEADERS.length).setValues([LOG_HEADERS]).setFontWeight('bold');
       sheet.setFrozenRows(1);
+    } else if (String(sheet.getRange(1, 3, 1, 1).getDisplayValues()[0][0]) === '운영진') {
+      sheet.getRange(1, 3, 1, 1).setValues([[LOG_HEADERS[2]]]);   // 버전 13에서 이름을 바꿨다 (운영진 → 리그 관리자)
     }
     const list = seasons_(), now = new Date(), who = ACTOR ? ACTOR.name : '';
     const season = list[list.length - 1].name;
@@ -379,7 +383,7 @@ function ready_() {
     try { finishSeason_(list); }
     catch (err) { console.error('리그 기록을 새로 시작하지 못했습니다. 다음 요청에서 다시 합니다: ' + (err && err.stack || err)); }
     if (props.getProperty('LINKED') !== LINKED) {
-      // 한 번만 해 본다. 여기서 못 해도 다음에 누군가를 승인할 때나 운영진 페이지의 "선수단 다시 맞추기"로 채워진다
+      // 한 번만 해 본다. 여기서 못 해도 다음에 누군가를 승인할 때나 리그 관리자 페이지의 "선수단 다시 맞추기"로 채워진다
       props.setProperty('LINKED', LINKED);
       linkPlayers_(readRows_(getSheet_()), [], []);
     }
@@ -449,9 +453,9 @@ function renameSeason_(v) {
 function newSeason_(body) {
   const name = seasonName_(body.season);
   if (!name) fail_('새 시즌의 이름을 넣어 주세요', 'season');
-  // 되돌릴 수 없는 일이라, 운영진 페이지에서 바뀌는 것들을 보고 확인 문구를 직접 입력한 요청만 받는다
+  // 되돌릴 수 없는 일이라, 리그 관리자 페이지에서 바뀌는 것들을 보고 확인 문구를 직접 입력한 요청만 받는다
   if (body.confirm !== SEASON_WORD)
-    fail_('새 시즌을 시작하려면 확인 문구("' + SEASON_WORD + '")를 입력해야 합니다. 운영진 페이지를 새로 고친 뒤 다시 해 주세요.', 'confirm');
+    fail_('새 시즌을 시작하려면 확인 문구("' + SEASON_WORD + '")를 입력해야 합니다. 리그 관리자 페이지를 새로 고친 뒤 다시 해 주세요.', 'confirm');
   return withLock_(() => {
     const props = PropertiesService.getScriptProperties();
     const list = seasons_();
@@ -563,17 +567,17 @@ function register_(body) {
 
     // 예전에 사용자 지정 주소로 저장된 줄(id:이름)도 같은 사람으로 알아본다
     const mine = rows.find(r => sameSteam_(r, steam));
-    if (!mine && rows.length >= MAX_ROWS) fail_('등록 인원이 가득 찼습니다. 운영진에게 문의해 주세요.');   // 이미 등록한 사람의 수정은 가득 차도 받는다
+    if (!mine && rows.length >= MAX_ROWS) fail_('등록 인원이 가득 찼습니다. 리그 관리자에게 문의해 주세요.');   // 이미 등록한 사람의 수정은 가득 차도 받는다
     const nickOwner = rows.find(r => nameKey_(r.nickname) === nameKey_(nickname));
     const discordOwner = rows.find(r => r.discord === discord);
 
     if (mine && mine.discord !== discord)
-      fail_('이 스팀 프로필은 다른 디스코드 계정으로 이미 등록돼 있습니다. 디스코드 계정이 바뀌었다면 운영진에게 알려 주세요.', 'conflict');
+      fail_('이 스팀 프로필은 다른 디스코드 계정으로 이미 등록돼 있습니다. 디스코드 계정이 바뀌었다면 리그 관리자에게 알려 주세요.', 'conflict');
     if (!mine && discordOwner)
-      fail_('이 디스코드 계정은 다른 스팀 프로필로 이미 등록돼 있습니다. 스팀 프로필이 바뀌었다면 운영진에게 알려 주세요.', 'conflict');
-    // 운영진이 승인하거나 제외한 등록은 본인이 고칠 수 없다. 운영진이 상태를 대기로 돌리면 다시 고칠 수 있다.
+      fail_('이 디스코드 계정은 다른 스팀 프로필로 이미 등록돼 있습니다. 스팀 프로필이 바뀌었다면 리그 관리자에게 알려 주세요.', 'conflict');
+    // 리그 관리자가 승인하거나 제외한 등록은 본인이 고칠 수 없다. 리그 관리자가 상태를 대기로 돌리면 다시 고칠 수 있다.
     if (mine && mine.status !== '대기')
-      fail_('운영진이 확인을 마친 등록이라 직접 고칠 수 없습니다. 바꿀 내용이 있으면 운영진에게 알려 주세요.', 'locked');
+      fail_('리그 관리자가 확인을 마친 등록이라 직접 고칠 수 없습니다. 바꿀 내용이 있으면 리그 관리자에게 알려 주세요.', 'locked');
     if (nickOwner && nickOwner !== mine)
       fail_('다른 선수가 이미 쓰고 있는 닉네임입니다. 다른 닉네임을 넣어 주세요.', 'nickname');
     // 지난 시즌에 다른 선수가 쓰던 닉네임도 그 선수만 다시 쓸 수 있다(버전 12, nickHeld_).
@@ -615,7 +619,7 @@ function register_(body) {
         ? ' · ' + (got.season === past.season ? '' : label(got.season) + ' ') + '인하우스 MMR 이어받음'
         : ' · 그때 등록한 MMR 이어받음');
     } else if (past) {
-      // 지난 시즌에 등록은 했지만 승인되지 않았던 사람. 처음 온 선수처럼 받되, 운영진이 알아보게 적어 둔다
+      // 지난 시즌에 등록은 했지만 승인되지 않았던 사람. 처음 온 선수처럼 받되, 리그 관리자가 알아보게 적어 둔다
       note = label(past.season) + '에도 등록함 (그때 ' + past.row.status + ')';
     }
     const line = new Array(HEADERS.length).fill('');
@@ -663,8 +667,8 @@ function findPast_(steam, discord, strict) {
     if (approved.length) {
       if (!strict) return null;
       fail_(approved.some(r => sameSteam_(r, steam))
-        ? '이 스팀 프로필은 지난 시즌에 다른 디스코드 계정으로 등록돼 있었습니다. 디스코드 사용자명을 다시 확인해 주세요. 계정이 바뀌었다면 운영진에게 알려 주세요.'
-        : '이 디스코드 계정은 지난 시즌에 다른 스팀 프로필로 등록돼 있었습니다. 스팀 프로필 주소를 다시 확인해 주세요. 계정이 바뀌었다면 운영진에게 알려 주세요.', 'conflict');
+        ? '이 스팀 프로필은 지난 시즌에 다른 디스코드 계정으로 등록돼 있었습니다. 디스코드 사용자명을 다시 확인해 주세요. 계정이 바뀌었다면 리그 관리자에게 알려 주세요.'
+        : '이 디스코드 계정은 지난 시즌에 다른 스팀 프로필로 등록돼 있었습니다. 스팀 프로필 주소를 다시 확인해 주세요. 계정이 바뀌었다면 리그 관리자에게 알려 주세요.', 'conflict');
     }
     if (!waiting) {
       const same = rows.filter(r => sameSteam_(r, steam) && r.discord === discord)[0];
@@ -819,7 +823,7 @@ function migrateSteamKeys_() {
 
 // 디스코드 사용자명(영문 소문자·숫자·밑줄·마침표) 또는 숫자로 된 사용자 ID를 받는다.
 // 예전 방식(이름#1234)은 받지 않는다(버전 9). 지금의 디스코드 계정에는 없는 모양이라 봇이 그 선수를 찾지 못하고,
-// 이름 부분에 아무 글자나 들어갈 수 있어서 운영진 화면이나 디스코드 메시지에 그대로 실리면 위험하다.
+// 이름 부분에 아무 글자나 들어갈 수 있어서 리그 관리자 화면이나 디스코드 메시지에 그대로 실리면 위험하다.
 function normDiscord_(v) {
   const s = String(v == null ? '' : v).trim().replace(/^@/, '').toLowerCase();
   if (/^\d{17,20}$/.test(s)) return s;
@@ -836,7 +840,7 @@ function parseMmr_(v) {
   return n;
 }
 
-// 최고 MMR(도타 2를 하면서 가장 높았던 MMR)은 운영진이 참고만 하는 값이다. 인하우스 MMR에는 쓰지 않는다.
+// 최고 MMR(도타 2를 하면서 가장 높았던 MMR)은 리그 관리자가 참고만 하는 값이다. 인하우스 MMR에는 쓰지 않는다.
 // 이 칸이 없던 때의 등록 페이지는 값을 보내지 않으므로, 비어 있으면 빈칸으로 둔다(null).
 function parsePeak_(v, mmr) {
   if (v === undefined || v === null || v === '') return null;
@@ -855,7 +859,7 @@ function parsePrefs_(v) {
 }
 
 /* =========================================================
-   운영진: 등록 명단
+   리그 관리자: 등록 명단
    ========================================================= */
 function readRows_(sheet) {
   const last = sheet.getLastRow();
@@ -965,7 +969,7 @@ function setStatus_(body) {
 /* =========================================================
    승인한 선수를 선수단에 넣기 (버전 10)
    ========================================================= */
-// 운영진이 등록을 승인하면 그 선수를 리그 기록의 선수단에 바로 넣는다. 전에는 운영진이 명단 파일을 받아 리그 매니저에 불러와야 했고,
+// 리그 관리자가 등록을 승인하면 그 선수를 리그 기록의 선수단에 바로 넣는다. 전에는 리그 관리자가 명단 파일을 받아 리그 매니저에 불러와야 했고,
 // 그 일을 빠뜨리면 봇이 그 선수를 몰라 팀을 짜지 못했다. 리그 매니저가 명단 파일을 "같은 선수면 갱신"으로 불러올 때와 같은 기준으로 한다.
 //  - 같은 선수인지는 디스코드 → 스팀 → 닉네임 순서로 본다. 닉네임이 같아도 디스코드가 서로 다르면 다른 사람이다.
 //  - 방금 승인한 선수(fresh): 선수단에 없으면 넣는다. 있으면 닉네임·디스코드·스팀·등록 MMR·지망을 등록한 값으로 맞춘다.
@@ -1060,7 +1064,7 @@ function linkPlayers_(rows, fresh, gone) {
   }
 }
 
-// 운영진 페이지의 "선수단 다시 맞추기": 승인돼 있는데 선수단에 없는 선수를 모두 넣는다. 이미 있는 선수는 건드리지 않는다
+// 리그 관리자 페이지의 "선수단 다시 맞추기": 승인돼 있는데 선수단에 없는 선수를 모두 넣는다. 이미 있는 선수는 건드리지 않는다
 function syncNow_() {
   return withLock_(() => ({ league: linkPlayers_(readRows_(getSheet_()), [], []) }));
 }
@@ -1183,7 +1187,7 @@ function writePublic_(clean) {
    리그 기록 (원본)
    ========================================================= */
 // 선수의 인하우스 MMR·전적, 경기 기록, 설정 전체. 리그 매니저와 디스코드 봇이 함께 읽고 쓴다.
-// 공개 기록과 달리 거르지 않고 드라이브의 비공개 파일에 그대로 두며, 운영진 키가 있어야만 돌려준다.
+// 공개 기록과 달리 거르지 않고 드라이브의 비공개 파일에 그대로 두며, 리그 관리자 키가 있어야만 돌려준다.
 // 쓸 때마다 번호(rev)를 하나 올린다. 올리는 쪽은 자기가 보고 고친 번호(baseRev)를 함께 보내고, 그사이 번호가 바뀌었으면 받지 않는다.
 // 매니저와 봇이 서로의 변경을 모르고 덮어쓰는 일을 막기 위해서다.
 function leagueRev_() {
@@ -1264,7 +1268,7 @@ function storeLeague_(league, text, clean) {
 }
 
 /* ---- 시트의 순위·경기 기록 탭 ----
-   운영진이 시트에서 바로 볼 수 있게, 리그 기록이 바뀔 때마다 두 탭을 통째로 다시 쓴다. 원본은 위의 리그 기록이고 이 탭은 보기용이다.
+   리그 관리자가 시트에서 바로 볼 수 있게, 리그 기록이 바뀔 때마다 두 탭을 통째로 다시 쓴다. 원본은 위의 리그 기록이고 이 탭은 보기용이다.
    MMR과 전적은 경기마다 이어서 계산한 값이라, 시트에서 숫자를 고치거나 줄을 지워도 다시 계산되지 않는다. 그래서 여기서는 읽기만 한다. */
 const MIRROR_NOTE = '이 탭은 봇이나 리그 매니저가 기록을 바꿀 때마다 자동으로 다시 씁니다. 여기서 고친 내용은 지워지니, 고칠 때는 리그 매니저를 쓰세요.';
 const ROLE_LABELS = ['캐리', '미드', '오프', '서폿', '서폿'];

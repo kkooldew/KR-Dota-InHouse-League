@@ -1,23 +1,27 @@
 """
 도타 2 인하우스 내전 모집 봇
 
-- 관리자 채널에서 /내전생성  → 참여 신청 채널에 모집 글을 올리고 모집 시작
+사람은 두 갈래다 (2026-10-09에 운영자가 정한 이름):
+- 리그 운영진: 디스코드의 운영진 채널(admin_channel_id)에서 봇 명령어로 내전을 열고 결과를 기록하는 사람
+- 리그 관리자: 선수 승인처럼 리그를 관리하는 사람(리그 관리자 페이지와 키를 쓴다). 봇의 설정을 바꾸는 /선수역할 은 리그 관리자만 쓴다
+
+- 운영진 채널에서 /내전생성  → 참여 신청 채널에 모집 글을 올리고 모집 시작
   (참여 신청 채널이 포럼이면 내전마다 새 글을 만들고, 일반 채널이면 공지 메시지를 올림)
   · /내전생성 마감:2026-10-07-21-30 처럼 마감 시각(한국 시간)을 적으면 그 시각에 마감
   · 비우면 모집 시간(기본 5분) 뒤를 분 단위로 올림한 시각. 12:00:30 에 만들면 12:06:00 마감
 - 모집 글(일반 채널이면 그 채널)에서 /참여, /참여취소
 - 마감 시각이 되면 참여 명단을 공지하고, 리그 매니저와 같은 로직으로 팀을 짜서 알림 (matchmaker.js, Node 필요)
   · 팀 편성 공지에는 선수별 인하우스 MMR과 이기면·지면 바뀌는 점수, 팀 평균과 같은 자리·라인끼리의 MMR 차이가 함께 나감
-- 관리자 채널에서 /마감 (지금 인원으로 바로 마감), /연장 (마감을 5분 뒤로, 마감한 뒤에도 가능), /취소 (내전 취소)
-- 경기가 끝나면 관리자 채널에서 /승리 (이긴 팀을 골라 결과 기록과 MMR 정산), /승리취소 (방금 기록한 결과 되돌리기)
+- 운영진 채널에서 /마감 (지금 인원으로 바로 마감), /연장 (마감을 5분 뒤로, 마감한 뒤에도 가능), /취소 (내전 취소)
+- 경기가 끝나면 운영진 채널에서 /승리 (이긴 팀을 골라 결과 기록과 MMR 정산), /승리취소 (방금 기록한 결과 되돌리기)
   · 정산도 리그 매니저의 로직 그대로 한다. 리그 기록의 원본은 서버에 있고, 봇은 받아서 고친 뒤 다시 올린다
-- 경기를 시작할 때 관리자 채널에서 /시작 (로비 음성 채널에 있는 선수를 배정된 팀의 음성 채널로 옮김), 끝나면 /종료 (팀 음성 채널의 모두를 로비로)
+- 경기를 시작할 때 운영진 채널에서 /시작 (로비 음성 채널에 있는 선수를 배정된 팀의 음성 채널로 옮김), 끝나면 /종료 (팀 음성 채널의 모두를 로비로)
   · 음성 채널은 /시작 의 로비·래디언트·다이어 칸에서 한 번 고르면 기억한다. 봇에 멤버 이동 권한이 있어야 한다
-- 운영진 명령어로 봇이 올리는 글은 모두 그 명령어를 쓴 운영진의 멘션으로 시작한다 (본인에게만 보이는 안내는 빼고)
-- 관리자 채널에는 리그 매니저에 붙여넣을 명단(디스코드 ID·사용자명·별명)을 함께 올림
-- 서버 주소(sync_url)와 운영진 키(sync_key)를 적어 두면, 명단과 짠 팀을 리그 서버에도 올려
+- 리그 운영진 명령어로 봇이 올리는 글은 모두 그 명령어를 쓴 사람의 멘션으로 시작한다 (본인에게만 보이는 안내는 빼고)
+- 운영진 채널에는 리그 매니저에 붙여넣을 명단(디스코드 ID·사용자명·별명)을 함께 올림
+- 서버 주소(sync_url)와 리그 관리자 키(sync_key)를 적어 두면, 명단과 짠 팀을 리그 서버에도 올려
   매니저의 "봇이 올린 명단 불러오기", "봇이 짠 팀 불러오기"로 바로 받을 수 있음
-- 관리자 채널에서 /선수역할 로 역할을 정해 두면, 운영진 페이지에서 승인한 선수에게 그 역할을 주고 제외한 선수에게서는 뺌
+- 리그 관리자가 운영진 채널에서 /선수역할 로 역할을 정해 두면, 리그 관리자 페이지에서 승인한 선수에게 그 역할을 주고 승인을 푼 선수에게서는 뺌
   (등록 명단을 1분마다 읽어 맞춘다. 봇에 역할 관리 권한이 있고, 봇의 역할이 그 역할보다 위에 있어야 한다)
 - 진행 중인 모집과 역할 설정은 state.json 에 적어 두어, 봇을 껐다 켜도 이어짐
 
@@ -53,6 +57,8 @@ GUILD = discord.Object(id=int(config["guild_id"]))
 ADMIN_CHANNEL_ID = int(config["admin_channel_id"])
 SIGNUP_CHANNEL_ID = int(config["signup_channel_id"])
 ADMIN_ROLE_ID = int(config.get("admin_role_id", 0))
+# 리그 관리자 역할. 보통은 비워 두고 디스코드에서 /선수역할 의 관리자역할 칸으로 정한다(그 값은 state.json 에 남는다)
+MANAGER_ROLE_ID = int(config.get("manager_role_id", 0) or 0)
 SIGNUP_SECONDS = int(float(config.get("signup_minutes", 5)) * 60)
 EXTEND_SECONDS = int(float(config.get("extend_minutes", 5)) * 60)
 ANNOUNCEMENT = config["announcement"]
@@ -136,11 +142,13 @@ class InhouseBot(discord.Client):
         # role_revoke 는 거두는 중인 일 {"to": 새 시즌 번호, "left": [아직 확인하지 않은 디스코드], "removed": 거둔 수, "total": 전체}
         self.role_season_no: int | None = None
         self.role_revoke: dict | None = None
-        self.role_note = ""  # 마지막으로 관리자 채널에 알린 문제. 같은 문제를 1분마다 다시 알리지 않으려고 적어 둔다
+        self.role_note = ""  # 마지막으로 운영진 채널에 알린 문제. 같은 문제를 1분마다 다시 알리지 않으려고 적어 둔다
         self.role_lock: asyncio.Lock | None = None
         self.role_task: asyncio.Task | None = None
         # /시작 에서 골라 둔 음성 채널 {"lobby": 채널 ID, "radiant": …, "dire": …}. 없는 것은 이름으로 찾는다
         self.voice: dict[str, int] = {}
+        # 리그 관리자 역할. 0이면 정해 두지 않은 것이라 서버 관리자 권한이 있는 사람만 리그 관리자로 본다
+        self.manager_role_id = MANAGER_ROLE_ID
 
     async def setup_hook(self) -> None:
         # 생성·마감·연장·취소가 겹치지 않게 한 번에 하나씩 처리한다
@@ -160,6 +168,7 @@ class InhouseBot(discord.Client):
                 except Exception as e:  # 상태 파일의 모양이 어긋나 있어도 봇은 켜져야 한다 (역할 맞추기도 여기서 시작한다)
                     print(f"꺼지기 전의 상태를 이어받지 못해 새로 시작합니다. ({e!r})")
             print(f"참여 선수 역할 자동 부여: {await role_status()}")
+            print(f"리그 관리자(/선수역할 을 쓸 수 있는 사람): {await manager_status()}")
             print(f"음성 채널 이동(/시작·/종료): {await voice_status()}")
             self.role_task = asyncio.create_task(role_loop())
 
@@ -177,7 +186,7 @@ async def get_channel(channel_id: int):
 
 async def check_setup() -> None:
     """켤 때 채널 ID와 봇 권한을 확인해서, 고칠 곳이 있으면 모집을 시작하기 전에 알려 준다."""
-    for label, channel_id in (("관리자 채널", ADMIN_CHANNEL_ID), ("참여 신청 채널", SIGNUP_CHANNEL_ID)):
+    for label, channel_id in (("운영진 채널", ADMIN_CHANNEL_ID), ("참여 신청 채널", SIGNUP_CHANNEL_ID)):
         try:
             channel = await get_channel(channel_id)
         except discord.HTTPException as e:
@@ -191,10 +200,10 @@ async def check_setup() -> None:
         missing = [name for attr, name in wanted.items() if not getattr(perms, attr)]
         print(f"{label}: #{channel.name} ({'포럼' if forum else '일반 채널'})"
               + (f" [확인 필요] 봇에 없는 권한: {', '.join(missing)}" if missing else " - 권한 확인"))
-        # 운영진 역할을 정해 두지 않았으면 관리자 채널을 볼 수 있는 사람이 곧 운영진이다. 그 채널이 모두에게 열려 있으면 누구나 운영진 명령어를 쓸 수 있다
+        # 리그 운영진 역할을 정해 두지 않았으면 운영진 채널을 볼 수 있는 사람이 곧 리그 운영진이다. 그 채널이 모두에게 열려 있으면 누구나 리그 운영진 명령어를 쓸 수 있다
         if channel_id == ADMIN_CHANNEL_ID and ADMIN_ROLE_ID == 0 and channel.permissions_for(channel.guild.default_role).view_channel:
-            print("[확인 필요] 관리자 채널을 서버의 모든 사람이 볼 수 있습니다. 지금은 그 채널에 글을 쓸 수 있는 사람이면 누구나 /내전생성·/승리 같은 운영진 명령어를 쓸 수 있습니다. "
-                  "디스코드에서 그 채널을 운영진만 보게 바꾸거나, config.json 의 admin_role_id 에 운영진 역할의 ID를 넣어 주세요.")
+            print("[확인 필요] 운영진 채널을 서버의 모든 사람이 볼 수 있습니다. 지금은 그 채널에 글을 쓸 수 있는 사람이면 누구나 /내전생성·/승리 같은 리그 운영진 명령어를 쓸 수 있습니다. "
+                  "디스코드에서 그 채널을 리그 운영진만 보게 바꾸거나, config.json 의 admin_role_id 에 리그 운영진 역할의 ID를 넣어 주세요.")
     print(f"자동 팀 편성: {match_problem() or '켜짐'}")
 
 
@@ -211,13 +220,24 @@ def match_problem() -> str:
     return ""
 
 
-async def is_admin(user: discord.abc.User, inside: bool) -> bool:
-    """운영진인가. inside 는 관리자 채널에서 명령어를 입력했는지.
-    운영진 역할(admin_role_id)을 정해 두지 않았으면 관리자 채널에서 명령어를 쓸 수 있는 사람이 곧 운영진이다.
-    그래서 다른 채널에서 입력한 사람은 관리자 채널의 권한(채널 보기, 명령어 사용)을 보고 가린다."""
+def is_manager(user: discord.abc.User) -> bool:
+    """리그 관리자인가. 선수 승인처럼 리그를 관리하는 사람이고, 봇의 설정을 바꾸는 /선수역할 은 리그 관리자만 쓴다 (운영자가 정함, 2026-10-09).
+    디스코드에서는 서버 관리자 권한이 있는 사람과, /선수역할 의 관리자역할 칸으로 정해 둔 역할이 있는 사람이다."""
     if not isinstance(user, discord.Member):
         return False
     if user.guild_permissions.administrator:
+        return True
+    return bool(bot.manager_role_id) and any(role.id == bot.manager_role_id for role in user.roles)
+
+
+async def is_admin(user: discord.abc.User, inside: bool) -> bool:
+    """리그 운영진인가 (봇 명령어로 내전을 열고 결과를 기록하는 사람). inside 는 운영진 채널에서 명령어를 입력했는지.
+    리그 관리자는 리그 운영진이 하는 일도 모두 한다.
+    리그 운영진 역할(admin_role_id)을 정해 두지 않았으면 운영진 채널에서 명령어를 쓸 수 있는 사람이 곧 리그 운영진이다.
+    그래서 다른 채널에서 입력한 사람은 운영진 채널의 권한(채널 보기, 명령어 사용)을 보고 가린다."""
+    if not isinstance(user, discord.Member):
+        return False
+    if is_manager(user):
         return True
     if ADMIN_ROLE_ID:
         return any(role.id == ADMIN_ROLE_ID for role in user.roles)
@@ -225,8 +245,8 @@ async def is_admin(user: discord.abc.User, inside: bool) -> bool:
         return True
     try:
         perms = (await get_channel(ADMIN_CHANNEL_ID)).permissions_for(user)
-    except Exception as e:  # 관리자 채널을 확인하지 못하면 운영진으로 치지 않는다 (관리자 채널에서 입력하면 그대로 된다)
-        print(f"관리자 채널의 권한을 확인하지 못했습니다: {e!r}")
+    except Exception as e:  # 운영진 채널을 확인하지 못하면 리그 운영진으로 치지 않는다 (운영진 채널에서 입력하면 그대로 된다)
+        print(f"운영진 채널의 권한을 확인하지 못했습니다: {e!r}")
         return False
     return bool(perms.view_channel and perms.use_application_commands)
 
@@ -347,7 +367,7 @@ async def refresh_announcement(rec: Recruitment) -> None:
 async def open_signup(rec: Recruitment, title_ts: float | None = None) -> None:
     """참여 신청 채널에 모집 글을 올린다. 포럼이면 새 글을 만들고, 일반 채널이면 메시지를 보낸다."""
     signup = await get_channel(SIGNUP_CHANNEL_ID)
-    options = {"allowed_mentions": discord.AllowedMentions.none()}  # 본문 맨 앞에 모집을 연 운영진을 적는다. 알림은 울리지 않는다
+    options = {"allowed_mentions": discord.AllowedMentions.none()}  # 본문 맨 앞에 모집을 연 리그 운영진을 적는다. 알림은 울리지 않는다
     if isinstance(signup, discord.ForumChannel):
         if signup.flags.require_tag and signup.available_tags:
             options["applied_tags"] = signup.available_tags[:1]  # 태그가 필수인 포럼이면 첫 태그를 붙인다
@@ -359,7 +379,7 @@ async def open_signup(rec: Recruitment, title_ts: float | None = None) -> None:
 
 async def post(rec: Recruitment, text: str, quiet: bool = False, skip: int | None = None) -> None:
     """모집 글(포럼) 또는 참여 신청 채널에 메시지를 보낸다. quiet 면 멘션 알림을 보내지 않는다. 실패해도 모집 처리는 계속한다.
-    skip 은 글에 멘션돼 있어도 알림은 보내지 않을 사람이다 (글 맨 앞에 적는, 명령어를 쓴 운영진).
+    skip 은 글에 멘션돼 있어도 알림은 보내지 않을 사람이다 (글 맨 앞에 적는, 명령어를 쓴 리그 운영진).
     글이 길면 여러 메시지로 나눠 보낸다."""
     try:
         place = rec.thread or await get_channel(SIGNUP_CHANNEL_ID)
@@ -381,7 +401,7 @@ async def tell_admins(text: str) -> None:
         for chunk in split_message(text):
             await admin.send(chunk, allowed_mentions=discord.AllowedMentions.none())
     except discord.HTTPException as e:
-        print(f"관리자 채널 전송 실패: {e}")
+        print(f"운영진 채널 전송 실패: {e}")
 
 
 async def set_locked(rec: Recruitment, locked: bool) -> None:
@@ -421,6 +441,7 @@ def save_state() -> None:
             "roles": {"role_id": bot.player_role_id, "season": bot.role_season, "season_no": bot.role_season_no,
                       "seen": bot.role_seen, "revoke": bot.role_revoke},
             "voice": bot.voice,
+            "manager_role_id": bot.manager_role_id,
         }
         tmp = STATE_PATH.with_suffix(".tmp")
         tmp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
@@ -448,6 +469,8 @@ async def restore_state() -> None:
     voice = data.get("voice")
     if isinstance(voice, dict):  # /시작 에서 골라 둔 음성 채널
         bot.voice = {k: v for k, v in voice.items() if k in VOICE_ROOMS and isinstance(v, int)}
+    if isinstance(data.get("manager_role_id"), int):  # /선수역할 의 관리자역할 칸으로 정한 리그 관리자 역할
+        bot.manager_role_id = data["manager_role_id"] or MANAGER_ROLE_ID
     cur = data.get("current")
     if not cur or not cur.get("message_id"):
         return
@@ -478,7 +501,7 @@ async def restore_state() -> None:
 
 
 # ── 마감 · 연장 · 취소 (bot.lock 을 잡은 상태에서 부른다) ─────────
-# by 는 그 명령어를 쓴 운영진의 디스코드 ID다. 모집 글에 올리는 알림의 맨 앞에 멘션한다(알림은 울리지 않는다).
+# by 는 그 명령어를 쓴 리그 운영진의 디스코드 ID다. 모집 글에 올리는 알림의 맨 앞에 멘션한다(알림은 울리지 않는다).
 async def close_recruitment(rec: Recruitment, by: int | None = None) -> None:
     """by 가 없으면 마감 시각이 되어 저절로 마감하는 것이다."""
     if rec.closed:
@@ -507,7 +530,7 @@ async def close_recruitment(rec: Recruitment, by: int | None = None) -> None:
     # 모집 글(참여 신청 채널): 참여자들에게 알림(멘션)이 가도록 전송
     await post(rec, (f"<@{by}>님이 모집을 마감했어요.\n\n" if by else "") + roster_text, skip=by)
 
-    # 관리자 채널: 같은 명단을 알림 없이 전송하고, 리그 매니저에 붙여넣을 명단을 따로 올린다
+    # 운영진 채널: 같은 명단을 알림 없이 전송하고, 리그 매니저에 붙여넣을 명단을 따로 올린다
     synced = await push_roster(rec) if roster else None
     if synced:
         rec.synced = True
@@ -519,12 +542,12 @@ async def close_recruitment(rec: Recruitment, by: int | None = None) -> None:
             for chunk in manager_blocks(rec):
                 await admin.send(chunk, allowed_mentions=discord.AllowedMentions.none())
         if synced is not None:
-            await admin.send("리그 서버에 명단을 올렸습니다. 매니저에서 '봇이 올린 명단 불러오기'를 누르세요."
-                             if synced else "리그 서버에 명단을 올리지 못했습니다. 위 명단을 복사해 붙여넣어 주세요.")
+            await admin.send("리그 서버에 명단을 올렸습니다. 리그 관리자가 매니저에서 팀을 직접 짤 때는 '봇이 올린 명단 불러오기'로 받습니다."
+                             if synced else "리그 서버에 명단을 올리지 못했습니다. 리그 관리자가 매니저에서 팀을 직접 짤 때는 위 명단을 복사해 붙여넣습니다.")
         if count < PLAYERS_NEEDED:
             await admin.send(f"`/연장` 으로 {minutes_text(EXTEND_SECONDS)} 더 모집하거나 `/취소` 로 이번 내전을 취소할 수 있어요.")
     except discord.HTTPException as e:
-        print(f"관리자 채널 전송 실패: {e}")
+        print(f"운영진 채널 전송 실패: {e}")
 
     if count >= PLAYERS_NEEDED and not match_problem():
         await auto_match(rec)
@@ -637,13 +660,13 @@ async def ask_server(payload: dict) -> dict:
 def stray_status(result: dict) -> bool:
     """요청의 답이 아니라 서버의 공개 상태가 대신 돌아온 것인지.
     구글 서버가 요청을 처리하고도 그 답을 전해 주지 못하면, 웹 앱 주소로 되돌려 보내서 요청과 상관없는 공개 상태(ok: true)가 온다
-    (2026-10-08에 실제 서버에서 마흔 번에 한 번꼴로 봤다). 공개 상태에는 version 이 있고 운영진에게만 주는 registered 가 없다.
+    (2026-10-08에 실제 서버에서 마흔 번에 한 번꼴로 봤다). 공개 상태에는 version 이 있고 리그 관리자에게만 주는 registered 가 없다.
     이것을 진짜 답으로 믿으면 저장되지 않은 경기를 저장됐다고 알리게 되므로, 답을 받지 못한 것(ServerGlitch)으로 친다."""
     return "version" in result and "registered" not in result
 
 
 async def call_server(payload: dict) -> dict:
-    """리그 서버(Apps Script)에 운영진 요청을 보낸다. 서버가 거절하면 ServerError, 답을 받지 못하면 ServerGlitch 를 낸다.
+    """리그 서버(Apps Script)에 리그 관리자 키가 필요한 요청을 보낸다. 서버가 거절하면 ServerError, 답을 받지 못하면 ServerGlitch 를 낸다.
     구글 서버는 가끔 제때 답하지 않거나 오류 화면을 돌려준다(1분마다 묻는 역할 맞추기에서 저녁 한나절에 아홉 번 봤다, 2026-10-07).
     다시 보내도 되는 요청은 조금 기다렸다가 몇 번 더 보낸다."""
     tries = SERVER_TRIES if payload.get("action") in REPEATABLE else 1
@@ -676,7 +699,7 @@ async def push_roster(rec: Recruitment, clear: bool = False) -> bool | None:
 def match_players(rec: Recruitment, players: list[dict]) -> tuple[dict[str, int], list[int]]:
     """참가자를 리그 기록의 선수와 맞춘다. 디스코드 사용자 ID → 사용자명 순서로 찾고, 디스코드가 적혀 있지 않은 선수만 이름(서버 별명)으로 찾는다.
     디스코드가 적힌 선수까지 이름으로 찾으면, 서버 별명을 그 선수의 닉네임으로 바꾼 다른 사람이 그 선수의 자리에 들어가
-    남의 MMR과 전적으로 경기를 치르게 된다. 리그 매니저는 운영진이 고른 명단을 눈으로 보지만, 봇은 그대로 팀을 짜고 정산한다.
+    남의 MMR과 전적으로 경기를 치르게 된다. 리그 매니저는 리그 관리자가 고른 명단을 눈으로 보지만, 봇은 그대로 팀을 짜고 정산한다.
     돌려주는 값: ({선수 id: 디스코드 사용자 ID}, 선수단에서 찾지 못한 참가자의 디스코드 사용자 ID)"""
     def norm(v) -> str:
         return str(v or "").strip().lstrip("@").lower()
@@ -761,28 +784,31 @@ def lineup_text(result: dict, who: dict[str, int], missing: list[int]) -> str:
 
 
 async def auto_match(rec: Recruitment) -> None:
-    """마감한 모집의 참가자로 팀을 짜서 모집 글과 관리자 채널에 알리고, 매니저가 불러올 수 있게 서버에 올린다.
-    어디서 막히든 모집 마감은 끝까지 가야 하므로, 문제는 관리자 채널에 알리고 넘어간다."""
+    """마감한 모집의 참가자로 팀을 짜서 모집 글과 운영진 채널에 알리고, 매니저가 불러올 수 있게 서버에 올린다.
+    어디서 막히든 모집 마감은 끝까지 가야 하므로, 문제는 운영진 채널에 알리고 넘어간다.
+    리그 운영진은 리그 관리자 페이지와 매니저를 쓰지 못하므로(키가 없다), 그쪽에서 고쳐야 하는 문제는 리그 관리자에게 알리라고 적는다."""
     try:
         # sync: 승인돼 있는데 선수단에 빠진 선수가 있으면 서버가 먼저 채워 넣고 기록을 준다(서버 버전 10부터. 예전 서버는 이 값을 모른 채 기록만 준다).
         # 승인한 선수는 승인할 때 선수단에 들어가지만, 그때 드라이브가 답하지 않았거나 매니저가 예전 기록으로 덮어쓴 경우가 여기서 메워진다
         league = (await call_server({"action": "adminLeague", "sync": True})).get("league")
     except Exception as e:
         print(f"리그 기록을 받지 못했습니다: {e!r}")
-        await tell_admins("리그 서버에서 기록을 받지 못해 팀을 자동으로 짜지 못했습니다. 매니저에서 직접 짜 주세요.")
+        await tell_admins("리그 서버에서 기록을 받지 못해 팀을 자동으로 짜지 못했습니다. 잠시 뒤 `/연장` → `/마감` 하면 다시 짭니다. "
+                          "그래도 안 되면 리그 관리자에게 리그 매니저로 팀을 짜 달라고 알려 주세요.")
         return
     if not league or not league.get("players"):
-        await tell_admins("서버의 선수단에 선수가 없어 팀을 자동으로 짜지 못했습니다. 선수단에는 운영진 페이지에서 **승인**한 선수가 들어갑니다(새 시즌을 시작하면 비워집니다). "
+        await tell_admins("서버의 선수단에 선수가 없어 팀을 자동으로 짜지 못했습니다. 리그 관리자에게 알려 주세요. "
+                          "선수단에는 리그 관리자가 **승인**한 선수가 들어갑니다(새 시즌을 시작하면 비워집니다). "
                           "참가자들의 등록을 승인한 뒤 `/연장` → `/마감` 하면 다시 짭니다. "
-                          "승인한 선수가 있는데도 이 글이 나오면 운영진 페이지의 **선수단 다시 맞추기**를 눌러 보세요.")
+                          "승인한 선수가 있는데도 이 글이 나오면 리그 관리자 페이지의 **선수단 다시 맞추기**를 눌러야 합니다.")
         return
 
     who, missing = match_players(rec, league["players"])
     if len(who) < PLAYERS_NEEDED:
-        await post(rec, f"⚠️ 선수 등록이 확인된 참가자가 {len(who)}명이라 팀을 자동으로 짜지 못했어요. 운영진의 안내를 기다려 주세요.", quiet=True)
+        await post(rec, f"⚠️ 선수 등록이 확인된 참가자가 {len(who)}명이라 팀을 자동으로 짜지 못했어요. 리그 운영진의 안내를 기다려 주세요.", quiet=True)
         await tell_admins(f"선수단과 맞는 참가자가 {len(who)}명이라 팀을 자동으로 짜지 못했습니다. 선수단에 없는 참가자: "
                           + (" ".join(f"<@{uid}>" for uid in missing) or "없음")
-                          + "\n운영진 페이지에서 그 선수의 등록을 승인했는지, 등록할 때 적은 디스코드 사용자명이 실제 계정과 같은지 확인해 주세요. "
+                          + "\n리그 관리자에게 알려 주세요. 리그 관리자 페이지에서 그 선수의 등록을 승인했는지, 등록할 때 적은 디스코드 사용자명이 실제 계정과 같은지 확인해야 합니다. "
                             "고친 뒤 `/연장` → `/마감` 하면 다시 짭니다.")
         return
 
@@ -794,7 +820,7 @@ async def auto_match(rec: Recruitment) -> None:
             raise RuntimeError(result.get("error") or "알 수 없는 문제")
     except Exception as e:
         print(f"팀 편성 실패: {e!r}")
-        await tell_admins(f"팀을 자동으로 짜지 못했습니다. 매니저에서 직접 짜 주세요. ({e})")
+        await tell_admins(f"팀을 자동으로 짜지 못했습니다. 리그 관리자에게 리그 매니저로 팀을 짜 달라고 알려 주세요. ({e})")
         return
 
     text = lineup_text(result, who, missing)
@@ -811,7 +837,8 @@ async def auto_match(rec: Recruitment) -> None:
         "result": None,  # /승리 로 기록하면 {"winner", "match_id"}
     })
     note = ("경기가 끝나면 `/승리` 로 이긴 팀을 골라 결과를 기록하세요. MMR이 정산되고 순위 페이지에 반영됩니다.\n"
-            "대타가 뛰었거나 자리를 바꿔 뛰었다면 `/승리` 대신 리그 매니저의 **봇이 짠 팀 불러오기**로 편성을 올린 뒤 고쳐서 기록하세요.")
+            "대타가 뛰었거나 자리를 바꿔 뛰었다면 `/승리` 로 기록하지 말고 리그 관리자에게 알려 주세요. "
+            "리그 관리자가 리그 매니저의 **봇이 짠 팀 불러오기**로 편성을 올린 뒤 고쳐서 기록합니다.")
     try:
         await call_server({"action": "pushLineup", "lineup": {
             "post": getattr(rec.message, "jump_url", ""), "lanes": lanes, "bench": [p["id"] for p in result["bench"]],
@@ -932,7 +959,7 @@ async def send_to(place_id: int, text: str) -> None:
 
 
 # ── 참여 선수 역할 자동 부여 ──────────────────────────────────
-# 운영진 페이지에서 승인한 선수에게 역할을 주고, 승인을 푼 선수(대기로 돌렸거나 제외한 선수)에게서는 뺀다.
+# 리그 관리자 페이지에서 승인한 선수에게 역할을 주고, 승인을 푼 선수(대기로 돌렸거나 제외한 선수)에게서는 뺀다.
 # 처음부터 대기인 등록(막 등록하고 아직 확인을 기다리는 선수)은 건드리지 않는다.
 # 봇에는 서버가 승인을 알려 올 길이 없어서(봇은 밖에서 들어오는 요청을 받지 않는다) 등록 명단을 주기적으로 읽어 맞춘다.
 async def get_guild() -> discord.Guild:
@@ -958,10 +985,23 @@ def role_problem(guild: discord.Guild, role: discord.Role | None) -> str:
     return ""
 
 
+async def manager_status() -> str:
+    """리그 관리자를 어떻게 가리는지 한 줄로 (켤 때 창에 찍는다)"""
+    if not bot.manager_role_id:
+        return "서버 관리자 권한이 있는 사람 (리그 관리자 역할을 따로 정하려면 `/선수역할` 의 관리자역할 칸에서 고릅니다)"
+    try:
+        role = (await get_guild()).get_role(bot.manager_role_id)
+    except discord.HTTPException as e:
+        return f"[확인 필요] 디스코드 서버를 확인하지 못했습니다 ({e})"
+    if role is None:
+        return "[확인 필요] 정해 둔 리그 관리자 역할을 찾지 못했습니다. 지금은 서버 관리자 권한이 있는 사람만 `/선수역할` 을 쓸 수 있습니다."
+    return f"@{role.name} 역할이 있는 사람과 서버 관리자 권한이 있는 사람"
+
+
 async def role_status() -> str:
     """지금 설정을 한 줄로 (켤 때 창에 찍고, /선수역할 에 답할 때 쓴다)"""
     if not bot.player_role_id:
-        return "꺼짐 (디스코드 관리자 채널에서 `/선수역할` 로 줄 역할을 정하면 켜집니다)"
+        return "꺼짐 (리그 관리자가 디스코드 운영진 채널에서 `/선수역할` 로 줄 역할을 정하면 켜집니다)"
     if not (SYNC_URL and SYNC_KEY):
         return "꺼짐 (config.json 에 sync_url 과 sync_key 가 있어야 합니다)"
     try:
@@ -1033,7 +1073,7 @@ async def sync_roles(force: bool = False) -> dict:
                 continue
             last = seen.get(key) or {}
             # 대기는 봇이 승인이나 제외로 본 적이 있는 등록만 본다: 승인했다가 대기로 돌린 선수에게서 역할을 뺀다(운영자가 2026-10-08에 확인한 규칙).
-            # 처음부터 대기인 등록은 넘어간다. 등록만 한 사람을 하나하나 디스코드에 물어보지 않고, 운영진이 손으로 준 역할을 빼지도 않으려는 것이다
+            # 처음부터 대기인 등록은 넘어간다. 등록만 한 사람을 하나하나 디스코드에 물어보지 않고, 리그 관리자가 손으로 준 역할을 빼지도 않으려는 것이다
             if status == "대기" and not last:
                 continue
             same = last.get("status") == status and last.get("discord") == name
@@ -1126,7 +1166,7 @@ async def revoke_step(guild: discord.Guild, role: discord.Role, out: dict) -> bo
 
 
 def roles_text(out: dict) -> str:
-    """역할을 맞춘 결과를 관리자 채널에 알릴 글. 알릴 것이 없으면 빈 글."""
+    """역할을 맞춘 결과를 운영진 채널에 알릴 글. 알릴 것이 없으면 빈 글."""
     lines = []
     if out.get("revoked"):
         lines.append(f"🔄 시즌이 바뀌어 지난 시즌 선수의 역할을 거뒀어요: {out['revoked']['removed']}명 (명단 {out['revoked']['total']}명 확인)")
@@ -1142,7 +1182,7 @@ def roles_text(out: dict) -> str:
 
 
 async def role_tick() -> None:
-    """등록 명단을 한 번 읽어 역할을 맞추고, 바뀐 것이 있을 때만 관리자 채널에 알린다."""
+    """등록 명단을 한 번 읽어 역할을 맞추고, 바뀐 것이 있을 때만 운영진 채널에 알린다."""
     out = await sync_roles()
     text = roles_text(out)
     if text:
@@ -1206,7 +1246,7 @@ def voice_problem(guild: discord.Guild, targets: list) -> str:
 
 async def voice_setup(picked: dict[str, int] | None = None) -> tuple[discord.Guild, dict, str, str]:
     """/시작·/종료 가 쓸 음성 채널을 정한다. picked 는 방금 명령어에서 고른 채널 {"lobby": 채널 ID, …}.
-    돌려주는 값: (서버, {"lobby": 채널, …}, 쓸 수 없는 까닭, 채널을 새로 기억했을 때 운영진에게 덧붙일 안내)
+    돌려주는 값: (서버, {"lobby": 채널, …}, 쓸 수 없는 까닭, 채널을 새로 기억했을 때 리그 운영진에게 덧붙일 안내)
     세 곳을 다 찾으면 state.json 에 적어 둔다. 나중에 비슷한 이름의 채널이 생겨도 쓰던 채널을 그대로 쓰게 하려는 것이다."""
     before = dict(bot.voice)
     if picked:
@@ -1253,35 +1293,38 @@ async def move_people(guild: discord.Guild, moves: list[tuple[int, discord.Voice
     return {uid for uid, _ in moves} - set(failed), failed, any(isinstance(r, discord.Forbidden) for r in results)
 
 
-# ── 슬래시 명령어: 운영진 ─────────────────────────────────────
-async def admin_only(interaction: discord.Interaction) -> bool:
-    """운영진 명령어 공통 확인: 운영진이, 관리자 채널에서 입력했는지.
-    운영진이 아닌 사람에게는 어디에서 입력했든 사용 권한이 없다고만 알린다 (운영자가 정함, 2026-10-08).
-    관리자 채널에서 쓰라는 안내는 다른 채널에서 입력한 운영진에게만 한다."""
+# ── 슬래시 명령어: 리그 운영진 (/선수역할 은 리그 관리자) ─────────
+async def admin_only(interaction: discord.Interaction, manager: bool = False) -> bool:
+    """명령어 공통 확인: 쓸 수 있는 사람이, 운영진 채널에서 입력했는지.
+    보통은 리그 운영진이면 되고, manager 면(/선수역할) 리그 관리자여야 한다.
+    쓸 수 없는 사람에게는 어디에서 입력했든 사용 권한이 없다고만 알린다 (운영자가 정함, 2026-10-08).
+    운영진 채널에서 쓰라는 안내는 다른 채널에서 입력한, 쓸 수 있는 사람에게만 한다."""
     inside = interaction.channel_id == ADMIN_CHANNEL_ID
-    if not await is_admin(interaction.user, inside):
-        await interaction.response.send_message("이 명령어를 사용할 권한이 없어요. 운영진만 쓸 수 있는 명령어예요.", ephemeral=True)
+    allowed = is_manager(interaction.user) if manager else await is_admin(interaction.user, inside)
+    if not allowed:
+        who = "리그 관리자" if manager else "리그 운영진"
+        await interaction.response.send_message(f"이 명령어를 사용할 권한이 없어요. {who}만 쓸 수 있는 명령어예요.", ephemeral=True)
         return False
     if not inside:
-        await interaction.response.send_message("이 명령어는 관리자 채널에서만 쓸 수 있어요.", ephemeral=True)
+        await interaction.response.send_message("이 명령어는 운영진 채널에서만 쓸 수 있어요.", ephemeral=True)
         return False
     return True
 
 
 def by(interaction: discord.Interaction) -> str:
-    """명령어를 쓴 운영진의 멘션. 운영진 명령어로 봇이 올리는 글은 모두 이 멘션으로 시작한다 (운영자가 정한 규칙, 2026-10-07).
-    한 일을 알릴 때는 '@운영진님이 …했어요', 운영진을 대신해 전하는 안내는 '@운영진: …', 운영진에게 하는 말은 '@운영진님, …' 꼴로 쓴다.
+    """명령어를 쓴 사람(리그 운영진)의 멘션. 이 명령어들로 봇이 올리는 글은 모두 이 멘션으로 시작한다 (운영자가 정한 규칙, 2026-10-07).
+    한 일을 알릴 때는 '@아무개님이 …했어요', 그 사람을 대신해 전하는 안내는 '@아무개: …', 그 사람에게 하는 말은 '@아무개님, …' 꼴로 쓴다.
     본인에게만 보이는 안내(ephemeral)에는 붙이지 않는다."""
     return f"<@{interaction.user.id}>"
 
 
 async def answer(interaction: discord.Interaction, text: str) -> None:
-    """운영진 명령어에 관리자 채널에서 답한다. 길면 나눠 보내고, 멘션 알림은 울리지 않는다."""
+    """리그 운영진 명령어에 운영진 채널에서 답한다. 길면 나눠 보내고, 멘션 알림은 울리지 않는다."""
     for chunk in split_message(text):
         await interaction.followup.send(chunk, allowed_mentions=discord.AllowedMentions.none())
 
 
-@bot.tree.command(name="내전생성", description="내전 참여자 모집을 시작합니다 (운영진 전용)", guild=GUILD)
+@bot.tree.command(name="내전생성", description="내전 참여자 모집을 시작합니다 (리그 운영진 전용)", guild=GUILD)
 @app_commands.rename(deadline="마감")
 @app_commands.describe(deadline=f"참여 신청을 마감할 시각(한국 시간). 예) 2026-10-07-21-30  비우면 {minutes_text(SIGNUP_SECONDS)} 뒤에 마감")
 async def create_inhouse(interaction: discord.Interaction, deadline: Optional[str] = None) -> None:
@@ -1308,7 +1351,7 @@ async def create_inhouse(interaction: discord.Interaction, deadline: Optional[st
     actor = by(interaction)
 
     async with bot.lock:
-        # 글을 올리는 사이에 다른 운영진이 먼저 만들었을 수 있으니 다시 확인한다
+        # 글을 올리는 사이에 다른 리그 운영진이 먼저 만들었을 수 있으니 다시 확인한다
         if bot.current is not None and not bot.current.closed:
             await answer(interaction, f"{actor}님, " + busy.format(bot.current.end_ts))
             return
@@ -1331,7 +1374,7 @@ async def create_inhouse(interaction: discord.Interaction, deadline: Optional[st
     )
 
 
-@bot.tree.command(name="마감", description="지금까지 모인 인원으로 모집을 바로 마감합니다 (운영진 전용)", guild=GUILD)
+@bot.tree.command(name="마감", description="지금까지 모인 인원으로 모집을 바로 마감합니다 (리그 운영진 전용)", guild=GUILD)
 async def close_now(interaction: discord.Interaction) -> None:
     if not await admin_only(interaction):
         return
@@ -1348,7 +1391,7 @@ async def close_now(interaction: discord.Interaction) -> None:
 
 @bot.tree.command(
     name="연장",
-    description=f"모집 마감을 {minutes_text(EXTEND_SECONDS)} 뒤로 미룹니다. 마감한 뒤에도 다시 열 수 있어요 (운영진 전용)",
+    description=f"모집 마감을 {minutes_text(EXTEND_SECONDS)} 뒤로 미룹니다. 마감한 뒤에도 다시 열 수 있어요 (리그 운영진 전용)",
     guild=GUILD,
 )
 async def extend(interaction: discord.Interaction) -> None:
@@ -1373,7 +1416,7 @@ async def extend(interaction: discord.Interaction) -> None:
     )
 
 
-@bot.tree.command(name="취소", description="이번 내전을 취소합니다 (운영진 전용)", guild=GUILD)
+@bot.tree.command(name="취소", description="이번 내전을 취소합니다 (리그 운영진 전용)", guild=GUILD)
 async def cancel(interaction: discord.Interaction) -> None:
     if not await admin_only(interaction):
         return
@@ -1391,7 +1434,7 @@ async def cancel(interaction: discord.Interaction) -> None:
     await answer(interaction, f"{actor}님이 내전을 취소했어요." + (f" {rec.message.jump_url}" if rec.message else ""))
 
 
-@bot.tree.command(name="시작", description="로비 음성 채널에 있는 선수를 배정된 팀의 음성 채널로 옮깁니다 (운영진 전용)", guild=GUILD)
+@bot.tree.command(name="시작", description="로비 음성 채널에 있는 선수를 배정된 팀의 음성 채널로 옮깁니다 (리그 운영진 전용)", guild=GUILD)
 @app_commands.rename(lobby="로비", radiant="래디언트", dire="다이어")
 @app_commands.describe(lobby="선수들이 모여 있는 음성 채널. 한 번 고르면 기억하니 다음부터는 비워 두세요",
                        radiant="래디언트 팀이 쓸 음성 채널", dire="다이어 팀이 쓸 음성 채널")
@@ -1444,7 +1487,7 @@ async def start_game(interaction: discord.Interaction, lobby: Optional[discord.V
     await answer(interaction, "\n".join(lines) + note)
 
 
-@bot.tree.command(name="종료", description="래디언트·다이어 음성 채널에 있는 사람을 모두 로비 음성 채널로 옮깁니다 (운영진 전용)", guild=GUILD)
+@bot.tree.command(name="종료", description="래디언트·다이어 음성 채널에 있는 사람을 모두 로비 음성 채널로 옮깁니다 (리그 운영진 전용)", guild=GUILD)
 async def end_game(interaction: discord.Interaction) -> None:
     if not await admin_only(interaction):
         return
@@ -1474,7 +1517,7 @@ async def end_game(interaction: discord.Interaction) -> None:
     await answer(interaction, "\n".join(lines) + note)
 
 
-@bot.tree.command(name="승리", description="봇이 짠 팀의 경기 결과를 기록하고 MMR을 정산합니다 (운영진 전용)", guild=GUILD)
+@bot.tree.command(name="승리", description="봇이 짠 팀의 경기 결과를 기록하고 MMR을 정산합니다 (리그 운영진 전용)", guild=GUILD)
 @app_commands.rename(team="팀")
 @app_commands.describe(team="이긴 팀. 팀만 짜고 경기를 하지 않은 판이면 '경기 안 함'을 고르세요")
 @app_commands.choices(team=[app_commands.Choice(name="래디언트", value="r"), app_commands.Choice(name="다이어", value="d"),
@@ -1522,7 +1565,7 @@ async def record_win(interaction: discord.Interaction, team: str) -> None:
             return
         except Exception as e:
             print(f"결과 기록 실패: {e!r}")
-            await answer(interaction, f"{actor}님, 결과를 기록하지 못했어요. 리그 매니저에서 기록해 주세요. ({e})")
+            await answer(interaction, f"{actor}님, 결과를 기록하지 못했어요. 리그 관리자에게 리그 매니저로 기록해 달라고 알려 주세요. ({e})")
             return
         # 앞서 올리고 답을 받지 못한 기록이 서버에 들어가 있었으면, 그때 고른 팀이 기록돼 있다
         winner = result["match"].get("winner") if result["match"].get("winner") in ("r", "d") else team
@@ -1536,7 +1579,7 @@ async def record_win(interaction: discord.Interaction, team: str) -> None:
     await answer(interaction, f"{text}\n\n순위 페이지와 구글 시트에 반영했어요. 잘못 기록했다면 `/승리취소` 로 되돌릴 수 있어요.{more}")
 
 
-@bot.tree.command(name="승리취소", description="/승리 로 기록한 마지막 결과를 되돌립니다 (운영진 전용)", guild=GUILD)
+@bot.tree.command(name="승리취소", description="/승리 로 기록한 마지막 결과를 되돌립니다 (리그 운영진 전용)", guild=GUILD)
 async def undo_win(interaction: discord.Interaction) -> None:
     if not await admin_only(interaction):
         return
@@ -1556,7 +1599,7 @@ async def undo_win(interaction: discord.Interaction) -> None:
             return
         except Exception as e:
             print(f"결과 되돌리기 실패: {e!r}")
-            await answer(interaction, f"{actor}님, 결과를 되돌리지 못했어요. 리그 매니저에서 고쳐 주세요. ({e})")
+            await answer(interaction, f"{actor}님, 결과를 되돌리지 못했어요. 리그 관리자에게 리그 매니저로 고쳐 달라고 알려 주세요. ({e})")
             return
         entry["result"] = None
         save_state()
@@ -1564,14 +1607,32 @@ async def undo_win(interaction: discord.Interaction) -> None:
     await answer(interaction, f"{actor}님이 결과 기록을 취소하고 MMR을 되돌렸어요. 다시 기록하려면 `/승리` 를 쓰세요.")
 
 
-@bot.tree.command(name="선수역할", description="승인한 선수에게 자동으로 줄 역할을 정합니다. 승인을 풀면(대기·제외) 뺍니다 (운영진 전용)", guild=GUILD)
-@app_commands.rename(role="역할", off="끄기")
-@app_commands.describe(role="승인한 선수에게 줄 역할. 비우면 지금 설정을 보여 주고 바로 한 번 맞춥니다", off="자동으로 역할 주기를 끕니다")
-async def player_role(interaction: discord.Interaction, role: Optional[discord.Role] = None, off: Optional[bool] = None) -> None:
-    if not await admin_only(interaction):
+@bot.tree.command(name="선수역할", description="승인한 선수에게 자동으로 줄 역할을 정합니다. 승인을 풀면(대기·제외) 뺍니다 (리그 관리자 전용)", guild=GUILD)
+@app_commands.rename(role="역할", off="끄기", manager_role="관리자역할")
+@app_commands.describe(role="승인한 선수에게 줄 역할. 비우면 지금 설정을 보여 주고 바로 한 번 맞춥니다", off="자동으로 역할 주기를 끕니다",
+                       manager_role="이 명령어를 쓸 수 있는 리그 관리자 역할을 정합니다 (서버 관리자 권한이 있는 사람만 정할 수 있어요)")
+async def player_role(interaction: discord.Interaction, role: Optional[discord.Role] = None, off: Optional[bool] = None,
+                      manager_role: Optional[discord.Role] = None) -> None:
+    # 봇이 누구에게 어떤 역할을 줄지를 바꾸는 명령어라 리그 관리자만 쓴다. 리그 운영진도 쓸 수 있으면, 역할을 잘못 골랐을 때
+    # 승인된 선수 모두에게 그 역할이 간다 (운영자가 2026-10-09에 리그 관리자만 쓰게 해 달라고 함)
+    if not await admin_only(interaction, manager=True):
         return
     await interaction.response.defer()
     actor = by(interaction)
+    if manager_role is not None:
+        # 리그 관리자 역할은 서버 관리자 권한이 있는 사람만 정한다 (리그 관리자가 그 범위를 스스로 넓히지 못하게)
+        if not interaction.user.guild_permissions.administrator:
+            await answer(interaction, f"{actor}님, 리그 관리자 역할은 서버 관리자 권한이 있는 사람만 정할 수 있어요.")
+            return
+        if manager_role.is_default() or manager_role.managed:
+            await answer(interaction, f"{actor}님, **{manager_role.name}** 역할은 리그 관리자 역할로 정할 수 없어요(@everyone 이거나 봇·연동이 관리하는 역할).")
+            return
+        bot.manager_role_id = manager_role.id
+        save_state()
+        await answer(interaction, f"{actor}님이 리그 관리자 역할을 {manager_role.mention} 역할로 정했어요. "
+                                  "이제 이 역할이 있는 사람과 서버 관리자 권한이 있는 사람만 `/선수역할` 을 쓸 수 있어요.")
+        if role is None and not off:
+            return
     if off:
         # 꺼 둔 동안 시즌이 넘어가도, 다시 켰을 때 역할을 거두지 않도록 시즌 번호도 잊는다
         bot.player_role_id, bot.role_seen, bot.role_season_no, bot.role_revoke = 0, {}, None, None
@@ -1587,7 +1648,7 @@ async def player_role(interaction: discord.Interaction, role: Optional[discord.R
             bot.player_role_id, bot.role_seen, bot.role_revoke = role.id, {}, None  # 역할이 바뀌면 처음부터 다시 맞춘다
             save_state()
     if not bot.player_role_id:
-        await answer(interaction, f"{actor}님, 참여 선수 역할 자동 부여가 꺼져 있어요. `/선수역할` 에서 **역할**을 고르면, 운영진 페이지에서 승인한 선수에게 그 역할을 주고 승인을 푼(대기·제외) 선수에게서는 뺍니다.")
+        await answer(interaction, f"{actor}님, 참여 선수 역할 자동 부여가 꺼져 있어요. `/선수역할` 에서 **역할**을 고르면, 리그 관리자 페이지에서 승인한 선수에게 그 역할을 주고 승인을 푼(대기·제외) 선수에게서는 뺍니다.")
         return
     if not (SYNC_URL and SYNC_KEY):
         await answer(interaction, f"{actor}님, 역할은 정했지만, 봇이 등록 명단을 읽을 수 없어요. `config.json` 에 `sync_url` 과 `sync_key` 를 넣고 봇을 다시 켜 주세요.")
@@ -1662,7 +1723,7 @@ async def leave(interaction: discord.Interaction) -> None:
 @bot.tree.error
 async def on_app_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError) -> None:
     print(f"명령어 오류: {error!r}")
-    msg = "명령어 처리 중 오류가 발생했어요. 운영진에게 알려 주세요."
+    msg = "명령어 처리 중 오류가 발생했어요. 리그 운영진에게 알려 주세요."
     if interaction.response.is_done():
         await interaction.followup.send(msg, ephemeral=True)
     else:

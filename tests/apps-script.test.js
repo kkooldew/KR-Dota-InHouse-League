@@ -694,7 +694,7 @@ assert(props.ADMIN_KEY === key, 'running setup again keeps the admin key');
     'link: when the reset finishes, the players approved meanwhile are put into the new league');
 })();
 
-// ── 운영진마다 키를 따로 준다 (버전 11). 운영진 추가·끊기와 새 시즌 시작은 주인 키만, 누가 승인·제외했는지는 시트에 남긴다 ──
+// ── 리그 관리자마다 키를 따로 준다 (버전 11. 그때는 '운영진'이라고 불렀다). 리그 관리자 추가·끊기와 새 시즌 시작은 주인 키만, 누가 승인·제외했는지는 시트에 남긴다 ──
 (() => {
   const crypto = require('crypto');
   const S = makeEnv({ fresh: true });
@@ -726,7 +726,12 @@ assert(props.ADMIN_KEY === key, 'running setup again keeps the admin key');
     && !('hash' in r.staff[0]) && !('key' in r.staff[0]), 'staff: adding returns that person\'s own key once');
   assert(!S.props.STAFF.includes(k1) && JSON.parse(S.props.STAFF)[0].hash === crypto.createHash('sha256').update(k1).digest('hex') && !JSON.stringify(S.props).replace(S.props.ADMIN_KEY, '').includes(k1),
     'staff: the server keeps only a fingerprint (SHA-256) of the key');
-  assert(lastLog() === '시즌 1|주인|운영진 추가|짱고|' && log()[0].join() === '시각,시즌,운영진,한 일,대상,내용' && isDate(log()[1][0]), 'staff: adding is written to the log tab');
+  assert(lastLog() === '시즌 1|주인|리그 관리자 추가|짱고|' && log()[0].join() === '시각,시즌,리그 관리자,한 일,대상,내용' && isDate(log()[1][0]), 'staff: adding is written to the log tab');
+  // 버전 12까지 만들어진 탭의 머리글(운영진)은 다음에 기록을 남길 때 새 이름으로 고친다
+  log()[0][2] = '운영진';
+  r = post({ action: 'adminStaffAdd', key: owner, name: '머리글' });
+  assert(r.ok && log()[0].join() === '시각,시즌,리그 관리자,한 일,대상,내용' && lastLog() === '시즌 1|주인|리그 관리자 추가|머리글|', 'staff: an old log tab gets the new column name');
+  assert(post({ action: 'adminStaffRemove', key: owner, id: r.staff[r.staff.length - 1].id }).staff.length === 1, 'staff: (the extra one is removed again)');
   assert(!JSON.stringify(post({ action: 'adminStaff', key: owner })).includes(k1), 'staff: the key cannot be read back later');
 
   // 그 키로 할 수 있는 일: 등록 명단, 승인, 등록 열고 닫기, 리그 기록 (매니저도 이 키로 쓴다)
@@ -808,7 +813,7 @@ assert(props.ADMIN_KEY === key, 'running setup again keeps the admin key');
   // 끊기: 그 키는 바로 쓸 수 없다
   assert(post({ action: 'adminStaffRemove', key: owner, id: 'nope' }).code === 'staff', 'staff: removing someone unknown is refused');
   r = post({ action: 'adminStaffRemove', key: owner, id: id1 });
-  assert(r.ok && r.staff.length === 1 && r.staff[0].id === id2 && !('STAFF_SEEN_' + id1 in S.props) && lastLog() === '겨울 시즌|주인|운영진 끊기|짱고|', 'staff: removing is logged and forgets that key');
+  assert(r.ok && r.staff.length === 1 && r.staff[0].id === id2 && !('STAFF_SEEN_' + id1 in S.props) && lastLog() === '겨울 시즌|주인|리그 관리자 끊기|짱고|', 'staff: removing is logged and forgets that key');
   assert(post({ action: 'ping', key: k1 }).code === 'auth' && post({ action: 'adminList', key: k1 }).code === 'auth' && post({ action: 'saveLeague', key: k1, league: lg.league, baseRev: 0, force: true }).code === 'auth'
     && post({ action: 'ping', key: k2 }).ok, 'staff: a removed key stops working at once; the others keep working');
   r = post({ action: 'adminStaffAdd', key: owner, name: '짱고' });

@@ -153,6 +153,7 @@ class World:
         mod.bot.player_role_id, mod.bot.role_seen, mod.bot.role_season, mod.bot.role_note = 0, {}, "", ""
         mod.bot.role_season_no, mod.bot.role_revoke = None, None
         mod.bot.voice = {}
+        mod.bot.manager_role_id = 0
         mod.STATE_PATH.unlink(missing_ok=True)
 
     def texts(self, mock):
@@ -188,7 +189,7 @@ def said(i):
     return calls[-1].args[0] if calls else ""
 
 
-answers = []  # 명령어에 봇이 관리자 채널에서 한 답 (명령어를 쓴 사람, 첫 메시지, 알림을 껐는지). 끝에서 한꺼번에 본다
+answers = []  # 명령어에 봇이 운영진 채널에서 한 답 (명령어를 쓴 사람, 첫 메시지, 알림을 껐는지). 끝에서 한꺼번에 본다
 
 
 async def run(cmd, channel_id, u, *args):
@@ -219,10 +220,10 @@ async def main():
     # ── 포럼 ──
     w = World(mod, forum=True)
     t, _ = await run(mod.create_inhouse, 999, ADMIN)
-    check("관리자 채널에서만" in t and mod.bot.current is None, "다른 채널의 /내전생성 거절")
+    check("운영진 채널에서만" in t and mod.bot.current is None, "다른 채널의 /내전생성 거절")
     for cmd, nm in ((mod.close_now, "마감"), (mod.extend, "연장"), (mod.cancel, "취소")):
         t, _ = await run(cmd, 300, ADMIN)
-        check("관리자 채널에서만" in t, f"다른 채널의 /{nm} 거절")
+        check("운영진 채널에서만" in t, f"다른 채널의 /{nm} 거절")
     t, _ = await run(mod.close_now, 100, ADMIN)
     check("모집 중인 내전이 없어요" in t, "모집이 없을 때 /마감")
     t, _ = await run(mod.extend, 100, ADMIN)
@@ -284,7 +285,7 @@ async def main():
           "/마감: 마감한 운영진을 맨 앞에 멘션하고, 알림은 참여자에게만 보낸다")
     check("모집 마감** — 최종 2명" in w.message.edit.call_args.kwargs["content"], "본문이 마감 상태로 바뀜")
     adm = w.texts(w.admin.send)
-    check(adm[0].startswith("[모집 종료] 주최: <@1>") and "```\n11 u11 가\n12 u12 나*별\n```" in adm[1], "관리자 채널에 명단과 매니저용 블록")
+    check(adm[0].startswith("[모집 종료] 주최: <@1>") and "```\n11 u11 가\n12 u12 나*별\n```" in adm[1], "운영진 채널에 명단과 매니저용 블록")
     check(any("`/연장` 으로 5분 더" in x for x in adm), "인원 부족 시 연장·취소 안내")
     check(w.thread.edit.call_args.kwargs == {"locked": True, "archived": False}, "모집 글 잠금")
     check(t == "<@1>님이 모집을 마감했어요. (최종 2명)", "운영진에게 마감 안내")
@@ -412,21 +413,21 @@ async def main():
     named(w.admin, "운영진", view_channel=True, send_messages=True)
     named(w.signup, "내전모집", view_channel=True, send_messages=True, send_messages_in_threads=True, manage_threads=True)
     out = await startup(w)
-    check(out[:2] == ["관리자 채널: #운영진 (일반 채널) - 권한 확인", "참여 신청 채널: #내전모집 (포럼) - 권한 확인"], "켤 때 확인: 정상")
+    check(out[:2] == ["운영진 채널: #운영진 (일반 채널) - 권한 확인", "참여 신청 채널: #내전모집 (포럼) - 권한 확인"], "켤 때 확인: 정상")
     check(out[2] == "자동 팀 편성: 꺼짐 (테스트)", "켤 때 확인: 자동 팀 편성 상태")
     check(real_problem().startswith("꺼짐 (config.json 에 sync_url"), "서버 연결 설정이 없으면 자동 팀 편성은 꺼짐")
     named(w.signup, "내전모집", view_channel=True, send_messages=False, send_messages_in_threads=True, manage_threads=False)
     out = await startup(w)
     check(out[1] == "참여 신청 채널: #내전모집 (포럼) [확인 필요] 봇에 없는 권한: 글 올리기, 스레드 관리(글 잠그기)", "켤 때 확인: 없는 권한 안내")
-    # 운영진 역할을 정하지 않았는데 관리자 채널이 모두에게 보이면, 누구나 운영진 명령어를 쓸 수 있다고 알린다
+    # 운영진 역할을 정하지 않았는데 운영진 채널이 모두에게 보이면, 누구나 운영진 명령어를 쓸 수 있다고 알린다
     named(w.admin, "운영진", everyone=True, view_channel=True, send_messages=True)
     named(w.signup, "내전모집", everyone=True, view_channel=True, send_messages=True, send_messages_in_threads=True, manage_threads=True)
     out = await startup(w)
-    check(len(out) == 4 and out[1].startswith("[확인 필요] 관리자 채널을 서버의 모든 사람이 볼 수 있습니다.") and "admin_role_id" in out[1]
-          and out[2] == "참여 신청 채널: #내전모집 (포럼) - 권한 확인", "켤 때 확인: 관리자 채널이 모두에게 열려 있으면 알린다 (참여 신청 채널은 열려 있어도 된다)")
+    check(len(out) == 4 and out[1].startswith("[확인 필요] 운영진 채널을 서버의 모든 사람이 볼 수 있습니다.") and "admin_role_id" in out[1]
+          and out[2] == "참여 신청 채널: #내전모집 (포럼) - 권한 확인", "켤 때 확인: 운영진 채널이 모두에게 열려 있으면 알린다 (참여 신청 채널은 열려 있어도 된다)")
     mod.ADMIN_ROLE_ID = 77
     out = await startup(w)
-    check(len(out) == 3, "운영진 역할을 정해 두었으면 관리자 채널이 열려 있어도 알리지 않는다")
+    check(len(out) == 3, "운영진 역할을 정해 두었으면 운영진 채널이 열려 있어도 알리지 않는다")
     mod.ADMIN_ROLE_ID = 0
     named(w.admin, "운영진", view_channel=True, send_messages=True)
 
@@ -435,41 +436,90 @@ async def main():
 
     mod.get_channel = missing_channel
     out = await startup(w)
-    check(len(out) == 3 and out[0].startswith("[확인 필요] 관리자 채널(100)을 찾지 못했습니다."), "켤 때 확인: 채널을 못 찾을 때")
+    check(len(out) == 3 and out[0].startswith("[확인 필요] 운영진 채널(100)을 찾지 못했습니다."), "켤 때 확인: 채널을 못 찾을 때")
 
-    # ── 운영진이 아닌 사람이 운영진 명령어를 쓰면, 어디에서 입력했든 사용 권한이 없다고만 알린다 ──
+    # ── 리그 운영진이 아닌 사람이 리그 운영진 명령어를 쓰면, 어디에서 입력했든 사용 권한이 없다고만 알린다 ──
     w = World(mod, forum=True)
-    STAFF, GUEST = user(21, "운영진"), user(22, "손님")   # 둘 다 서버 관리자 권한은 없다. 운영진만 관리자 채널을 볼 수 있다
+    STAFF, GUEST = user(21, "운영진"), user(22, "손님")   # 둘 다 서버 관리자 권한은 없다. 리그 운영진만 운영진 채널을 볼 수 있다
     w.admin.permissions_for = Mock(side_effect=lambda who: Mock(view_channel=who is STAFF, use_application_commands=True))
     commands = ((mod.create_inhouse, ()), (mod.close_now, ()), (mod.extend, ()), (mod.cancel, ()), (mod.start_game, ()), (mod.end_game, ()),
-                (mod.record_win, ("r",)), (mod.undo_win, ()), (mod.player_role, (None, None)))
+                (mod.record_win, ("r",)), (mod.undo_win, ()))
     told = [(await run(cmd, 300, GUEST, *args))[0] for cmd, args in commands]
-    check(all("사용할 권한이 없어요" in t and "관리자 채널" not in t for t in told) and mod.bot.current is None and not w.server,
-          "운영진이 아닌 사람의 운영진 명령어 9개: 사용 권한이 없다고 알린다 (관리자 채널로 가라고 하지 않는다)")
+    check(all("사용할 권한이 없어요. 리그 운영진만" in t and "운영진 채널" not in t for t in told) and mod.bot.current is None and not w.server,
+          "리그 운영진이 아닌 사람의 리그 운영진 명령어 8개: 사용 권한이 없다고 알린다 (운영진 채널로 가라고 하지 않는다)")
     t, i = await run(mod.create_inhouse, 999, GUEST)
     check("사용할 권한이 없어요" in t and i.response.send_message.call_args.kwargs.get("ephemeral") is True and not w.signup.create_thread.await_count,
           "그 안내는 본인에게만 보이고, 모집은 만들어지지 않는다")
     told = [(await run(cmd, 300, STAFF, *args))[0] for cmd, args in commands]
-    check(all("관리자 채널에서만" in t and "권한이 없어요" not in t for t in told) and mod.bot.current is None, "운영진이 다른 채널에서 쓰면 관리자 채널에서 쓰라고 알린다")
+    check(all("운영진 채널에서만" in t and "권한이 없어요" not in t for t in told) and mod.bot.current is None, "리그 운영진이 다른 채널에서 쓰면 운영진 채널에서 쓰라고 알린다")
+
+    # /선수역할 은 리그 관리자만 쓴다 (서버 관리자 권한이 있는 사람과, 관리자역할 칸으로 정해 둔 역할이 있는 사람). 리그 운영진은 쓰지 못한다
+    def role_of(rid, name, default=False, managed=False):
+        r = Mock()
+        r.id, r.name, r.mention, r.managed = rid, name, f"<@&{rid}>", managed
+        r.is_default = Mock(return_value=default)
+        return r
+
+    MROLE, ANY = role_of(88, "리그 관리자"), role_of(55, "참여 선수")
+    MANAGER = user(23, "관리자")
+    MANAGER.roles = [MROLE]
+    told = [(await run(mod.player_role, cid, who, ANY, None))[0] for cid, who in ((300, GUEST), (100, STAFF), (300, STAFF), (100, MANAGER))]
+    check(all("사용할 권한이 없어요. 리그 관리자만 쓸 수 있는 명령어예요." in t and "운영진 채널" not in t for t in told) and mod.bot.player_role_id == 0,
+          "/선수역할: 리그 운영진과 아직 정해지지 않은 역할의 사람은 쓰지 못한다 (리그 관리자만 쓴다고 알린다)")
+    t, _ = await run(mod.player_role, 100, ADMIN, None, None, role_of(1, "@everyone", default=True))
+    check("리그 관리자 역할로 정할 수 없어요" in t and mod.bot.manager_role_id == 0, "관리자역할: @everyone 은 받지 않는다")
+    t, _ = await run(mod.player_role, 100, ADMIN, None, None, role_of(70, "다른 봇", managed=True))
+    check("리그 관리자 역할로 정할 수 없어요" in t and mod.bot.manager_role_id == 0, "관리자역할: 봇·연동이 관리하는 역할은 받지 않는다")
+    t, _ = await run(mod.player_role, 100, ADMIN, None, None, MROLE)
+    check(t.startswith("<@1>님이 리그 관리자 역할을 <@&88> 역할로 정했어요.") and mod.bot.manager_role_id == 88
+          and json.loads(mod.STATE_PATH.read_text(encoding="utf-8"))["manager_role_id"] == 88, "관리자역할: 서버 관리자가 리그 관리자 역할을 정하면 기억한다 (역할 자동 부여는 건드리지 않는다)")
+    check(not w.server and mod.bot.player_role_id == 0, "관리자역할만 정했을 때는 등록 명단을 읽지 않는다")
+    t, _ = await run(mod.player_role, 100, MANAGER, None, None)
+    check(t.startswith("<@23>님, 참여 선수 역할 자동 부여가 꺼져 있어요."), "그 역할이 있는 사람은 이제 /선수역할 을 쓸 수 있다")
+    t, _ = await run(mod.player_role, 300, MANAGER, None, None)
+    check("운영진 채널에서만" in t, "리그 관리자도 /선수역할 은 운영진 채널에서 쓴다")
+    t, _ = await run(mod.player_role, 100, MANAGER, None, None, ANY)
+    check(t == "<@23>님, 리그 관리자 역할은 서버 관리자 권한이 있는 사람만 정할 수 있어요." and mod.bot.manager_role_id == 88, "리그 관리자 역할은 서버 관리자만 바꾼다")
+    told = [(await run(mod.player_role, cid, STAFF, None, None))[0] for cid in (100, 300)]
+    check(all("리그 관리자만 쓸 수 있는 명령어예요" in t for t in told), "리그 관리자 역할을 정한 뒤에도 리그 운영진은 /선수역할 을 쓰지 못한다")
+    w.admin.permissions_for = Mock(return_value=Mock(view_channel=False, use_application_commands=False))
+    t, _ = await run(mod.close_now, 300, MANAGER)
+    check("운영진 채널에서만" in t, "리그 관리자는 리그 운영진 명령어도 쓸 수 있는 사람이다 (운영진 채널이 보이지 않아도 채널 안내를 받는다)")
+    mod.bot.manager_role_id = 0
+    await mod.restore_state()
+    check(mod.bot.manager_role_id == 88, "껐다 켜도 리그 관리자 역할을 기억한다")
+    real_guild = mod.get_guild
+
+    async def guild_with_roles():
+        return Mock(get_role=lambda rid: MROLE if rid == 88 else None)
+
+    mod.get_guild = guild_with_roles
+    check(await mod.manager_status() == "@리그 관리자 역할이 있는 사람과 서버 관리자 권한이 있는 사람", "켤 때 확인: 리그 관리자 역할")
+    mod.bot.manager_role_id = 99
+    check((await mod.manager_status()).startswith("[확인 필요] 정해 둔 리그 관리자 역할을 찾지 못했습니다."), "켤 때 확인: 리그 관리자 역할이 지워졌을 때")
+    mod.bot.manager_role_id = 0
+    check((await mod.manager_status()).startswith("서버 관리자 권한이 있는 사람"), "켤 때 확인: 리그 관리자 역할을 정하지 않았을 때")
+    mod.get_guild = real_guild
+    w.admin.permissions_for = Mock(side_effect=lambda who: Mock(view_channel=who is STAFF, use_application_commands=True))
     w.admin.permissions_for = Mock(side_effect=lambda who: Mock(view_channel=True, use_application_commands=who is STAFF))
     t, _ = await run(mod.close_now, 300, GUEST)
-    check("사용할 권한이 없어요" in t, "관리자 채널이 보여도 거기서 명령어를 쓸 수 없는 사람은 운영진이 아니다")
+    check("사용할 권한이 없어요" in t, "운영진 채널이 보여도 거기서 명령어를 쓸 수 없는 사람은 리그 운영진이 아니다")
     w.admin.permissions_for = Mock(return_value=Mock(view_channel=False, use_application_commands=False))
     t, _ = await run(mod.close_now, 300, ADMIN)
-    check("관리자 채널에서만" in t, "서버 관리자 권한이 있으면 언제나 운영진이다")
+    check("운영진 채널에서만" in t, "서버 관리자 권한이 있으면 언제나 리그 운영진이다")
     w.admin.permissions_for = Mock(side_effect=RuntimeError("채널 확인 실패"))
     with contextlib.redirect_stdout(io.StringIO()):
         t, _ = await run(mod.close_now, 300, STAFF)
-    check("사용할 권한이 없어요" in t, "관리자 채널의 권한을 확인하지 못하면 다른 채널에서는 받지 않는다")
+    check("사용할 권한이 없어요" in t, "운영진 채널의 권한을 확인하지 못하면 다른 채널에서는 받지 않는다")
     t, _ = await run(mod.close_now, 100, STAFF)
-    check("모집 중인 내전이 없어요" in t, "그때도 관리자 채널에서 입력하면 그대로 받는다")
-    # 운영진 역할을 정해 두었으면(admin_role_id) 그 역할로 가린다. 관리자 채널을 볼 수 있어도 역할이 없으면 운영진이 아니다
+    check("모집 중인 내전이 없어요" in t, "그때도 운영진 채널에서 입력하면 그대로 받는다")
+    # 리그 운영진 역할을 정해 두었으면(admin_role_id) 그 역할로 가린다. 운영진 채널을 볼 수 있어도 역할이 없으면 리그 운영진이 아니다
     mod.ADMIN_ROLE_ID = 77
     w.admin.permissions_for = Mock(return_value=Mock(view_channel=True, use_application_commands=True))
     STAFF.roles = [Mock(id=77)]
     told = [(await run(mod.close_now, cid, who))[0] for cid, who in ((100, GUEST), (300, GUEST), (300, STAFF), (100, STAFF))]
-    check("사용할 권한이 없어요" in told[0] and "사용할 권한이 없어요" in told[1] and "관리자 채널에서만" in told[2] and "모집 중인 내전이 없어요" in told[3]
-          and not w.admin.permissions_for.call_count, "운영진 역할을 정해 두었을 때: 역할이 없으면 어디서든 권한 없음, 있으면 관리자 채널 안내")
+    check("사용할 권한이 없어요" in told[0] and "사용할 권한이 없어요" in told[1] and "운영진 채널에서만" in told[2] and "모집 중인 내전이 없어요" in told[3]
+          and not w.admin.permissions_for.call_count, "리그 운영진 역할을 정해 두었을 때: 역할이 없으면 어디서든 권한 없음, 있으면 운영진 채널 안내")
     mod.ADMIN_ROLE_ID = 0
 
     # ── 마감 시각을 정해서 만들기 ──
@@ -666,7 +716,7 @@ async def main():
     pushed = [p for p in w.server if p["action"] == "pushLineup"]
     check(len(pushed) == 1 and [l["role"] for l in pushed[0]["lineup"]["lanes"]] == [1, 2, 3, 4, 5] and pushed[0]["lineup"]["lanes"][0] == {"role": 1, "r": "p0", "d": "p5"}
           and pushed[0]["lineup"]["bench"] == ["p10", "p11"] and pushed[0]["lineup"]["post"] == w.message.jump_url, "짠 팀을 서버에 올린다")
-    check(any("봇이 짠 팀 불러오기" in x and "⚔️ **팀 편성**" in x for x in w.texts(w.admin.send)), "관리자 채널에도 편성과 다음 할 일 안내")
+    check(any("봇이 짠 팀 불러오기" in x and "⚔️ **팀 편성**" in x for x in w.texts(w.admin.send)), "운영진 채널에도 편성과 다음 할 일 안내")
     check(rec.lineup and len(mod.bot.lineups) == 1 and len(mod.bot.lineups[0]["ids"]) == 10, "오늘 짠 팀을 기억한다")
 
     await run(mod.extend, 100, ADMIN)                        # 다시 열면 짠 팀은 없던 일
@@ -741,9 +791,9 @@ async def main():
     t, _ = await run(mod.undo_win, 100, ADMIN)
     check("되돌릴 결과가 없어요" in t, "기록한 결과가 없을 때의 /승리취소")
     t, _ = await run(mod.record_win, 300, ADMIN, "r")
-    check("관리자 채널에서만" in t, "다른 채널의 /승리 거절")
+    check("운영진 채널에서만" in t, "다른 채널의 /승리 거절")
     t, _ = await run(mod.undo_win, 300, ADMIN)
-    check("관리자 채널에서만" in t, "다른 채널의 /승리취소 거절")
+    check("운영진 채널에서만" in t, "다른 채널의 /승리취소 거절")
 
     rec = await gather(w, 10)
     await run(mod.close_now, 100, ADMIN)
@@ -917,7 +967,7 @@ async def main():
 
     async def refused(payload):
         sent.append(payload["action"])
-        raise mod.ServerError("운영진 키가 맞지 않습니다", "auth")
+        raise mod.ServerError("리그 관리자 키가 맞지 않습니다", "auth")
 
     mod.ask_server = refused
     sent.clear()
@@ -1098,11 +1148,11 @@ async def main():
                     entry(5, "승인", "ghost", "고스*트"), entry(6, "제외", "nobody")]
     admin_said = lambda: w.texts(w.admin.send)
 
-    check((await mod.role_status()).startswith("꺼짐 (디스코드 관리자 채널에서"), "역할을 정하기 전에는 꺼져 있다")
+    check((await mod.role_status()).startswith("꺼짐 (리그 관리자가 디스코드 운영진 채널에서"), "역할을 정하기 전에는 꺼져 있다")
     await mod.role_tick()
     check(not w.server and not guild.queries and not admin_said(), "꺼져 있으면 등록 명단을 읽지 않는다")
     t, _ = await run(mod.player_role, 999, ADMIN, PLAYER, None)
-    check("관리자 채널에서만" in t and mod.bot.player_role_id == 0, "다른 채널의 /선수역할 거절")
+    check("운영진 채널에서만" in t and mod.bot.player_role_id == 0, "다른 채널의 /선수역할 거절")
     t, _ = await run(mod.player_role, 100, ADMIN, None, None)
     check("꺼져 있어요" in t and not w.server, "역할을 고르지 않은 /선수역할: 켜는 법 안내")
 
@@ -1126,8 +1176,8 @@ async def main():
     w.registered[0]["status"], w.registered[2]["status"] = "제외", "승인"                # 김은 제외로, lee 는 승인으로
     await mod.role_tick()
     check(PLAYER not in kim.roles and PLAYER in lee.roles and "역할을 줬어요: <@23>" in admin_said()[-1] and "역할을 뺐어요: <@21>" in admin_said()[-1]
-          and admin_said()[-1].startswith("🎫 **참여 선수 역할**"), "상태가 바뀌면 역할도 따라 바뀌고 관리자 채널에 알린다")
-    check(w.admin.send.call_args.kwargs.get("allowed_mentions") is not None, "관리자 채널 알림도 조용히")
+          and admin_said()[-1].startswith("🎫 **참여 선수 역할**"), "상태가 바뀌면 역할도 따라 바뀌고 운영진 채널에 알린다")
+    check(w.admin.send.call_args.kwargs.get("allowed_mentions") is not None, "운영진 채널 알림도 조용히")
 
     # 승인했다가 대기로 돌려도 역할을 뺀다 (제외와 같다). 처음부터 대기인 등록은 건드리지 않는다
     w.registered[2]["status"] = "대기"                                     # 방금 승인한 lee 를 대기로
@@ -1243,7 +1293,7 @@ async def main():
     check(PLAYER not in aa.roles and PLAYER not in cc.roles and PLAYER in bb.roles and PLAYER in ee.roles,
           "시즌이 넘어가면 지난 시즌 명단에 있던 사람의 역할을 거둔다 (새 시즌에 승인된 사람과, 명단에 없던 사람은 그대로)")
     check("지난 시즌 선수의 역할을 거뒀어요: 2명 (명단 3명 확인)" in admin_said()[-1] and mod.bot.role_season_no == 1 and mod.bot.role_revoke is None and bb.remove_roles.await_count == 0,
-          "거둔 결과를 관리자 채널에 알리고, 새 시즌에 승인된 사람은 거뒀다 다시 주지 않는다")
+          "거둔 결과를 운영진 채널에 알리고, 새 시즌에 승인된 사람은 거뒀다 다시 주지 않는다")
     check({"action": "adminList", "seasonNo": 0} in w.server, "끝난 시즌의 명단을 서버에서 받아 온다")
     n = len(admin_said())
     await mod.role_tick()
@@ -1348,7 +1398,7 @@ async def main():
     w = World(mod, forum=True, league=league_of(12))
     for cmd, nm in ((mod.start_game, "시작"), (mod.end_game, "종료")):
         t, _ = await run(cmd, 300, ADMIN)
-        check("관리자 채널에서만" in t, f"다른 채널의 /{nm} 거절")
+        check("운영진 채널에서만" in t, f"다른 채널의 /{nm} 거절")
 
     # 채널을 고른 적이 없으면 이름으로 찾는다. 찾지 못하면 고르는 법을 알려 준다
     plain = use(Town(room(911, "대기실"), room(912, "1팀"), room(913, "2팀")))
