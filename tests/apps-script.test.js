@@ -328,29 +328,55 @@ assert(props.ADMIN_KEY === key, 'running setup again keeps the admin key');
   r = post({ action: 'adminList', key });
   assert(r.seasonNo === 0 && r.current === 0 && r.season === '시즌 1' && r.players.length === 11, 'the admin list tells which season it is (by number)');
   r = newSeason('시즌 2');
-  assert(r.ok && r.season === '시즌 2' && r.registered === 0 && r.pastSeasons.join() === '시즌 1', 'new season starts with an empty roster');
-  // 끝난 시즌의 명단은 시즌 번호로 다시 볼 수 있다 (봇이 지난 시즌 선수에게서 역할을 거둘 때 쓴다)
+  assert(r.ok && r.season === '시즌 2' && r.registered === 11 && r.pastSeasons.join() === '시즌 1' && r.carried.rows === 11 && r.carried.approved === 8 && r.carried.mmr === 'keep',
+    'new season: the roster is carried over (version 14)');
+  // 끝난 시즌의 명단은 시즌 번호로 다시 볼 수 있다
   r = post({ action: 'adminList', key });
-  assert(r.seasonNo === 1 && r.current === 1 && r.season === '시즌 2' && r.players.length === 0, 'the season number goes up with a new season');
+  assert(r.seasonNo === 1 && r.current === 1 && r.season === '시즌 2' && r.players.length === 11 && r.players.filter(p => p.status === '승인').length === 8
+    && r.players.filter(p => p.status === '제외').length === 1, 'the season number goes up with a new season; everyone keeps their status');
   r = post({ action: 'adminList', key, seasonNo: 0 });
   assert(r.ok && r.season === '시즌 1' && r.seasonNo === 0 && r.current === 1 && r.players.length === 11 && r.players.filter(p => p.status === '승인').length === 8
     && r.players.some(p => p.discord === '223456789012345678'), 'a past season\'s roster can be read by its number');
   assert([5, -1, 1.5, 'x'].every(no => post({ action: 'adminList', key, seasonNo: no }).code === 'season') && post({ action: 'adminList', key: 'nope', seasonNo: 0 }).code === 'auth',
     'unknown season numbers are refused; the key is still needed');
-  assert(S.tabs[0].getName() === '선수등록 (시즌 2)' && S.sheets['선수등록 (시즌 1)'].grid.length === 12 && S.sheets['선수등록 (시즌 2)'].grid.length === 1
-    && S.sheets['선수등록 (시즌 2)'].grid[0][C.peak] === '최고MMR', 'new season: a new tab in front, last season kept in its own tab');
-  assert(post({ action: 'adminList', key }).players.length === 0 && status().season === '시즌 2', 'admin list and public status follow the new season');
-  // 리그 기록: 끝난 시즌은 보관하고, 새 시즌은 빈 기록에서 시작한다
+  assert(S.tabs[0].getName() === '선수등록 (시즌 2)' && S.sheets['선수등록 (시즌 1)'].grid.length === 12 && S.sheets['선수등록 (시즌 2)'].grid.length === 12
+    && S.sheets['선수등록 (시즌 2)'].grid[0][C.peak] === '최고MMR', 'new season: a new tab in front with the same roster, last season kept in its own tab');
+  assert(status().season === '시즌 2', 'public status follows the new season');
+  // 옮겨 적은 줄: 승인된 줄의 MMR 칸은 시즌 1을 마친 인하우스 MMR이고, 나머지는 그대로다
+  const now2 = n => rowOf('선수등록 (시즌 2)', n);
+  assert(now2(1)[C.status] === '승인' && now2(1)[C.mmr] === 3350 && now2(1)[C.nick] === '선수1' && now2(1)[C.peak] === 5100 && now2(1)[C.discord] === 'user1'
+    && now2(1).slice(C.p1, C.p1 + 4).join() === '캐리,미드,오프,서폿' && typeof now2(1)[0].getTime === 'function', 'carried row: status, name, positions and dates as they were; MMR is the final in-house MMR');
+  assert(now2(2)[C.mmr] === 2990 && now2(2)[C.discord] === '223456789012345678' && typeof now2(2)[C.discord] === 'string', 'carried row: a numeric discord id stays text; an MMR that went down is carried too');
+  assert(now2(5)[C.mmr] === 3777 && now2(6)[C.mmr] === 3666 && now2(8)[C.mmr] === 4101 && now2(10)[C.mmr] === 3999,
+    'carried MMR: league entries are found by discord, by name when they have neither, with @ and capitals ignored; the value is rounded');
+  assert(now2(7)[C.status] === '승인' && now2(7)[C.mmr] === 3700 && now2(4)[C.status] === '제외' && now2(4)[C.mmr] === 3400 && now2(9)[C.status] === '대기' && now2(9)[C.mmr] === 3900,
+    'carried row: approved but not in the league, excluded and waiting rows keep their MMR');
+  assert(rowOf('선수등록 (시즌 1)', 1)[C.mmr] === 3100 && rowOf('선수등록 (시즌 1)', 1)[C.status] === '승인', 'the ended season\'s tab is left as it was');
+  // 리그 기록: 끝난 시즌은 보관하고, 새 시즌은 선수를 그대로 둔 채 전적과 경기만 비운다
   let got = post({ action: 'adminLeague', key });
-  assert(got.rev === 3 && got.league.players.length === 0 && got.league.matches.length === 0 && JSON.stringify(got.league.settings) === JSON.stringify(settings),
-    'new season: the league starts empty, settings kept, rev bumped so the manager pulls it');
-  assert(records().players.length === 0 && records().matches.length === 0, 'new season: the public ranking is empty');
+  const p2 = id => got.league.players.find(p => p.id === id);
+  assert(got.rev === 4 && got.league.players.length === 8 && got.league.matches.length === 0 && JSON.stringify(got.league.settings) === JSON.stringify(settings),
+    'new season: the league keeps its players and settings, matches are cleared, rev bumped so the manager pulls it');
+  assert(got.league.players.every(p => p.wins === 0 && p.losses === 0 && p.streak === 0 && p.roleCount.join() === '0,0,0,0,0' && p.mmr === p.baseMMR),
+    'new season: every record is clean and the carried MMR is the new starting point');
+  assert(p2('p1').mmr === 3350 && p2('p8').mmr === 4101 && p2('p10').name === '프리시즌이름' && p2('p10').discord === 'USER10' && p2('p6').discord === 'user6'
+    && got.league.players.some(p => p.name === '선수7' && p.mmr === 3700),
+    'new season: ids, names and accounts are kept as the manager had them (empty accounts are filled in); an approved player missing from the league is added');
+  assert(records().players.length === 8 && records().matches.length === 0 && records().players.every(p => p.wins === 0), 'new season: the public ranking shows the same players with no games');
+  // 아래의 재참가 확인들은 새 시즌의 명단에 줄이 없는 사람이 다시 등록하는 길이다(버전 13까지는 누구나 그랬고, 지금은 운영자가 시트에서 줄을 지운 경우에만 그렇다).
+  // 이어 온 명단과 선수단을 지워서 그 상황을 만든다
+  const wipe = () => {
+    S.tabs[0].grid.length = 1;
+    const kept = JSON.parse(S.files[S.props.LEAGUE_FILE_ID]);
+    S.files[S.props.LEAGUE_FILE_ID] = JSON.stringify(Object.assign(kept, { players: [] }));
+  };
   const kept = JSON.parse(S.files[seasons()[0].league]);
   assert(seasons()[0].endedAt && kept.players.length === 7 && kept.players[0].mmr === 3350 && kept.matches.length === 1 && !('league' in seasons()[1]) && !('leaguePending' in seasons()[1]),
     'new season: the ended season\'s league is kept whole in its own drive file');
   assert(S.sheets['순위 (시즌 1)'].grid.length === 9 && S.sheets['순위 (시즌 1)'].grid[0][0].startsWith('끝난 시즌(시즌 1)') && S.sheets['경기 기록 (시즌 1)'].grid.length === 12
-    && S.sheets['순위'].grid.length === 2 && S.sheets['경기 기록'].grid.length === 2, 'new season: ranking and match tabs of the ended season are kept under its name');
+    && S.sheets['순위'].grid.length === 10 && S.sheets['경기 기록'].grid.length === 2, 'new season: ranking and match tabs of the ended season are kept under its name');
   assert(post({ action: 'adminRoster', key }).roster === null && post({ action: 'adminLineup', key }).lineup === null, 'new season: the bot\'s roster and lineup of the old season are dropped');
+  wipe();
 
   // 지난 시즌에 승인됐던 선수가 같은 스팀·디스코드로 다시 등록: 인하우스 MMR을 이어받는다
   r = reg(1, { nickname: '새이름1', mmr: 5000, peak: 6200, prefs: [4, 3, 2, 1] });
@@ -406,7 +432,7 @@ assert(props.ADMIN_KEY === key, 'running setup again keeps the admin key');
   r = post({ action: 'adminSetStatus', key, steamKey: 's:' + steamId(1), status: '승인' });
   // 새 시즌에 승인한 재참가 선수는 이어받은 인하우스 MMR로 새 시즌의 선수단에 들어간다 (시즌 1을 3350으로 마친 선수)
   got = post({ action: 'adminLeague', key });
-  assert(r.league.ok && r.league.added.join() === '새이름1b' && got.rev === 4 && got.league.players.length === 1 && got.league.players[0].mmr === 3350 && got.league.players[0].baseMMR === 3350
+  assert(r.league.ok && r.league.added.join() === '새이름1b' && got.rev === 5 && got.league.players.length === 1 && got.league.players[0].mmr === 3350 && got.league.players[0].baseMMR === 3350
     && got.league.players[0].wins === 0 && got.league.players[0].prefs.join() === '2,1,3,4' && got.league.players[0].discord === 'user1' && JSON.stringify(got.league.settings) === JSON.stringify(settings),
     'new season: an approved returning player enters the new league with the carried in-house MMR and a clean record');
   r = reg(1, { nickname: '또바꿈' }); assert(!r.ok && r.code === 'locked' && rowOf('선수등록 (시즌 2)', 1)[C.nick] === '새이름1b', 'approved again this season: locked');
@@ -414,12 +440,15 @@ assert(props.ADMIN_KEY === key, 'running setup again keeps the admin key');
 
   // 세 번째 시즌: 가장 최근에 뛴 시즌의 인하우스 MMR을 이어받는다
   post({ action: 'adminSetStatus', key, steamKeys: [2, 5, 6, 7, 8, 10].map(n => 's:' + steamId(n)), status: '승인' });       // 3번은 시즌 2에서 대기로 남는다
-  assert(rev() === 5 && post({ action: 'adminLeague', key }).league.players.length === 7, 'season 2: the rest of the approved players join the league');
-  r = post({ action: 'saveLeague', key, league: { settings, matches: [], players: [member(1, 3500), member(7, 3650)] }, baseRev: 5 });
-  assert(r.ok && r.rev === 6, 'season 2 league saved');
+  assert(rev() === 6 && post({ action: 'adminLeague', key }).league.players.length === 7, 'season 2: the rest of the approved players join the league');
+  r = post({ action: 'saveLeague', key, league: { settings, matches: [], players: [member(1, 3500), member(7, 3650)] }, baseRev: 6 });
+  assert(r.ok && r.rev === 7, 'season 2 league saved');
   r = newSeason('시즌 3');
+  got = post({ action: 'adminLeague', key });
+  // 기록을 새로 시작하면서 한 번, 승인됐는데 그 기록에 없던 다섯 명을 넣으면서 한 번 번호가 오른다
   assert(r.ok && r.pastSeasons.join() === '시즌 1,시즌 2' && tabNames().startsWith('선수등록 (시즌 3) | 선수등록 (시즌 2) | 선수등록 (시즌 1)')
-    && S.sheets['순위 (시즌 2)'] && S.sheets['순위 (시즌 1)'] && post({ action: 'adminLeague', key }).rev === 7, 'third season');
+    && S.sheets['순위 (시즌 2)'] && S.sheets['순위 (시즌 1)'] && got.rev === 9 && got.league.players.length === 7, 'third season');
+  wipe();
   r = reg(1);
   assert(r.returning && r.from === '시즌 2' && r.mmr === 3500 && rowOf('선수등록 (시즌 3)', 1)[C.note] === '재참가 · 시즌 2 · 인하우스 MMR 이어받음', 'the latest season\'s in-house MMR wins');
   r = reg(2, { discord: '223456789012345678' });
@@ -442,7 +471,7 @@ assert(props.ADMIN_KEY === key, 'running setup again keeps the admin key');
   assert(r.ok && r.season === '시즌 2' && r.players.length === 0, 'a deleted season tab reads as an empty roster');
 
   // 새 시즌을 시작하다 리그 기록을 비우지 못한 경우(구글 드라이브가 잠깐 답하지 않을 때): 시즌은 바뀌고, 다음 요청에서 이어서 비운다
-  post({ action: 'saveLeague', key, league: { settings, matches: [], players: [member(1, 3600)] }, baseRev: 7 });
+  post({ action: 'saveLeague', key, league: { settings, matches: [], players: [member(1, 3600)] }, baseRev: 9 });
   const getFile = S.env.DriveApp.getFileById;
   S.env.DriveApp.getFileById = id => Object.assign(getFile(id), { setContent() { throw new Error('드라이브 오류'); } });
   r = newSeason('시즌 4');
@@ -451,7 +480,9 @@ assert(props.ADMIN_KEY === key, 'running setup again keeps the admin key');
   S.env.DriveApp.getFileById = getFile;
   status();
   got = post({ action: 'adminLeague', key });
-  assert(!('leaguePending' in seasons()[3]) && got.league.players.length === 0 && got.rev === 9 && S.sheets['순위 (시즌 3)'], 'the next request finishes the reset');
+  // 1번은 시즌 3에서 대기로 남아 있었으므로(승인되지 않은 등록) 새 시즌의 선수단으로 이어지지 않는다
+  assert(!('leaguePending' in seasons()[3]) && got.league.players.length === 0 && got.rev === 11 && S.sheets['순위 (시즌 3)'], 'the next request finishes the reset');
+  wipe();
   r = reg(1);
   assert(r.returning && r.from === '시즌 3' && r.mmr === 3600, 'and the archive made before the failure is used');
 
@@ -462,7 +493,7 @@ assert(props.ADMIN_KEY === key, 'running setup again keeps the admin key');
   assert(post({ action: 'adminList', key }).seasonNo === 3, 'renaming the season does not change its number (so the bot does not take it for a new season)');
   S.tabs.push(Object.assign(Object.create(S.tabs[0]), { getName: () => '선수등록 (시즌 5)', getSheetId: () => -1 }));   // 운영진이 손으로 만든 같은 이름의 탭
   r = newSeason('시즌 5');
-  assert(r.ok && S.tabs[0].getName() === '선수등록 (시즌 5) 2' && r.registered === 0 && S.sheets['순위 (2027 봄 시즌 4)'], 'tab name already taken: a number is added');
+  assert(r.ok && S.tabs[0].getName() === '선수등록 (시즌 5) 2' && r.registered === 1 && S.sheets['순위 (2027 봄 시즌 4)'], 'tab name already taken: a number is added');
   S.tabs.splice(0, 1);                                     // 지금 시즌의 탭이 지워졌다
   r = ping();
   assert(r.ok && r.registered === 0 && r.season === '시즌 5' && S.tabs[0].grid[0][C.nick] === '닉네임' && reg(40).ok && S.tabs[0].grid.length === 2, 'a deleted current tab is made again');
@@ -475,6 +506,132 @@ assert(props.ADMIN_KEY === key, 'running setup again keeps the admin key');
   status();
   assert(S.props.LAYOUT && season1[0][C.peak] === '최고MMR' && season1[0][C.note] === '비고' && S.tabs[0].grid[0][C.peak] === '최고MMR' && season1[1][C.nick] === '선수1',
     'upgrade: missing headers are filled in on every season tab, rows untouched');
+})();
+
+// ── 시즌이 바뀌어도 선수는 이어 간다 (버전 14), 포지션 순서 바꾸기 ──
+// 운영자가 2026-10-09에 정함: 한 번 등록해 승인된 선수는 제외되기 전까지 계속 선수이고, 새 시즌에는 순위(승패)만 새로 센다
+(() => {
+  const S = makeEnv({ fresh: true });
+  const post = body => JSON.parse(S.env.doPost({ postData: { contents: JSON.stringify(body) } }).text);
+  const status = () => JSON.parse(S.env.doGet({ parameter: {} }).text);
+  const records = () => { delete S.cache.records; return JSON.parse(S.env.doGet({ parameter: { action: 'records' } }).text).records; };
+  const clearRL = () => Object.keys(S.cache).filter(k => k.startsWith('rl:')).forEach(k => delete S.cache[k]);
+  const seasons = () => JSON.parse(S.props.SEASONS);
+  const C = { status: 2, nick: 3, key: 5, discord: 6, mmr: 7, p1: 8, updated: 1 };
+  const steamId = n => '7656119800000' + String(1000 + n);
+  const url = n => 'https://steamcommunity.com/profiles/' + steamId(n);
+  const reg = (n, extra = {}) => { clearRL(); return post({ action: 'register', nickname: '선수' + n, steam: url(n), discord: 'user' + n, mmr: 3000 + n * 100, prefs: [1, 2, 3, 4], ...extra }); };
+  const rowOf = n => S.tabs[0].grid.find(row => row[C.key] === 's:' + steamId(n));
+  S.env.setup();
+  const key = S.props.ADMIN_KEY;
+  const league = () => post({ action: 'adminLeague', key });
+  const setStatus = (ns, to) => post({ action: 'adminSetStatus', key, steamKeys: ns.map(n => 's:' + steamId(n)), status: to });
+  const season = (name, extra = {}) => post({ action: 'adminNewSeason', key, season: name, confirm: '시즌 변경', ...extra });
+  const named = (got, name) => got.league.players.find(p => p.name === name);
+
+  [1, 3, 4, 5, 6].forEach(n => reg(n));
+  reg(2, { discord: '223456789012345678' });
+  setStatus([1, 2, 3, 4, 5], '승인');                        // 6번은 대기로 남는다
+  // 한 시즌을 치렀다: MMR과 전적이 바뀌었고, 매니저에서 2번의 이름과 지망을 고쳤고, 등록 없이 손으로 넣은 선수가 한 명 있다
+  let got = league();
+  const played = JSON.parse(JSON.stringify(got.league));
+  const edit = (n, o) => Object.assign(played.players.find(p => p.name === '선수' + n), o);
+  edit(1, { mmr: 3288.4, wins: 3, losses: 1, streak: 2, roleCount: [4, 0, 0, 0, 0] });
+  edit(2, { mmr: 3100, wins: 1, losses: 3, streak: -2, roleCount: [0, 4, 0, 0, 0], name: '매니저가고친이름', prefs: [4, 3, 2, 1] });
+  edit(3, { mmr: 3333, wins: 2, losses: 2, roleCount: [0, 0, 4, 0, 0] });
+  edit(4, { mmr: 3466, wins: 4, losses: 0, streak: 4, roleCount: [0, 0, 0, 4, 0] });
+  played.players.push({ id: 'pmanual', name: '손으로넣은선수', baseMMR: 2500, mmr: 2610, prefs: [1, 2, 3, 4], wins: 2, losses: 1, streak: 1, roleCount: [3, 0, 0, 0, 0], discord: '', steam: '' });
+  played.matches = [{ id: 'm1', at: '2026-10-10T12:00:00.000Z', winner: 'r', rule: { k: 200 },
+    rows: played.players.slice(0, 4).map((p, i) => ({ id: p.id, name: p.name, side: i < 2 ? 'r' : 'd', role: i + 1, rank: 0, before: 3000, delta: i < 2 ? 20 : -20 })) }];
+  const ids = played.players.map(p => p.id);
+  let r = post({ action: 'saveLeague', key, league: played, baseRev: got.rev });
+  assert(r.ok, 'carry: a season has been played');
+  r = setStatus([3], '대기'); const r4 = setStatus([4], '제외');
+  assert(r.league.kept.join() === '선수3' && r4.league.kept.join() === '선수4' && league().league.players.length === 6, 'carry: un-approved players who played stay in the league until the season ends');
+
+  r = season('시즌 2');
+  got = league();
+  assert(r.ok && r.season === '시즌 2' && r.registered === 6 && r.carried.rows === 6 && r.carried.approved === 3 && r.carried.mmr === 'keep' && status().season === '시즌 2',
+    'carry: the new season starts with the same roster');
+  assert([1, 2, 3, 4, 5, 6].map(n => rowOf(n)[C.status]).join() === '승인,승인,대기,제외,승인,대기' && S.tabs[1].grid.length === 7 && S.tabs[1].grid[1][C.mmr] === 3100,
+    'carry: every registration keeps its status in the new tab; the ended season\'s tab is untouched');
+  // 선수단의 순서는 승인한 줄의 순서다: 1, 3, 4, 5, 2번, 그리고 손으로 넣은 선수
+  assert(got.league.players.map(p => p.name).join() === '선수1,선수5,매니저가고친이름,손으로넣은선수' && got.league.matches.length === 0,
+    'carry: approved players and hand-added players stay; players whose registration is no longer approved leave; matches are cleared');
+  assert(got.league.players.map(p => p.id).join() === [ids[0], ids[3], ids[4], 'pmanual'].join() && named(got, '매니저가고친이름').prefs.join() === '4,3,2,1'
+    && named(got, '매니저가고친이름').discord === '223456789012345678', 'carry: ids and what the manager edited (name, positions) are kept');
+  assert(got.league.players.map(p => p.mmr).join() === '3288,3500,3100,2610' && got.league.players.every(p => p.baseMMR === p.mmr && p.wins === 0 && p.losses === 0 && p.streak === 0
+    && p.roleCount.join() === '0,0,0,0,0'), 'carry: the in-house MMR goes on (rounded) as the new starting point; wins, losses, streak and role counts start again');
+  assert([1, 2, 3, 4, 5, 6].map(n => rowOf(n)[C.mmr]).join() === '3288,3100,3300,3400,3500,3600' && rowOf(2)[C.nick] === '선수2',
+    'carry: the MMR column of approved rows becomes the carried MMR; other rows and the registered names are left alone');
+  assert(records().players.length === 4 && records().matches.length === 0 && S.sheets['순위 (시즌 1)'] && S.sheets['경기 기록 (시즌 1)'].grid.length > 2 && S.sheets['순위'].grid.length === 6,
+    'carry: the public ranking starts again with the same players; last season\'s ranking and matches stay in the sheet');
+  assert(JSON.parse(S.files[seasons()[0].league]).players.length === 6 && JSON.parse(S.files[seasons()[0].league]).matches.length === 1 && !('leaguePending' in seasons()[1]) && !('mmrReset' in seasons()[1]),
+    'carry: the ended season is archived whole');
+  assert(S.sheets['운영 기록'].grid.some(row => row[3] === '새 시즌 시작' && String(row[5]).includes('명단 6명(승인 3명)을 이어 감')), 'carry: the log says how many were carried');
+
+  // 새 시즌 안에서: 승인을 풀었다 다시 승인해도 이어받은 MMR에서 시작한다
+  r = setStatus([1], '대기');
+  assert(r.league.removed.join() === '선수1' && league().league.players.length === 3, 'carry: un-approving a player with no games this season removes them, as before');
+  r = reg(1, { nickname: '새이름1', mmr: 9000, prefs: [2, 1, 3, 4] });
+  assert(r.ok && r.updated && r.returning && r.mmr === 3288 && rowOf(1)[C.mmr] === 3288 && rowOf(1)[C.nick] === '새이름1', 'carry: editing the form while waiting keeps the carried MMR');
+  r = setStatus([1], '승인');
+  got = league();
+  assert(r.league.added.join() === '새이름1' && named(got, '새이름1').mmr === 3288 && named(got, '새이름1').baseMMR === 3288 && named(got, '새이름1').prefs.join() === '2,1,3,4',
+    'carry: approving again starts from the carried MMR, not the one registered long ago');
+  r = reg(6, { mmr: 4000 });
+  assert(r.ok && r.updated && !r.returning && rowOf(6)[C.mmr] === 4000, 'carry: a registration that was never approved is edited as usual');
+  r = reg(5); assert(!r.ok && r.code === 'locked', 'carry: an approved player does not register again');
+  r = reg(7, { nickname: '선수4' }); assert(!r.ok && r.code === 'nickname', 'carry: an excluded player\'s nickname is still taken');
+
+  // 포지션 순서 바꾸기 (봇의 /포지션변경): 등록 탭과 선수단을 함께 고친다
+  const prefs = (discord, list, k = key) => post({ action: 'adminSetPrefs', key: k, discord, prefs: list });
+  let rev = league().rev;
+  r = prefs(['900000000000000001', 'user5'], [4, 1, 2, 3]);
+  got = league();
+  assert(r.ok && r.nickname === '선수5' && r.status === '승인' && r.inLeague === true && r.was.join() === '1,2,3,4' && r.prefs.join() === '4,1,2,3' && r.rev === rev + 1
+    && rowOf(5).slice(C.p1, C.p1 + 4).join() === '서폿,캐리,미드,오프' && typeof rowOf(5)[C.updated].getTime === 'function' && named(got, '선수5').prefs.join() === '4,1,2,3' && got.rev === rev + 1,
+    'prefs: an approved player\'s order changes in the registration tab and in the league at once');
+  r = prefs(['900000000000000001', 'user5'], [4, 1, 2, 3]);
+  assert(r.ok && league().rev === rev + 1, 'prefs: the same order again does not rewrite the league');
+  r = prefs(['223456789012345678', 'someone_else'], [3, 4, 1, 2]);
+  assert(r.ok && r.nickname === '선수2' && named(league(), '매니저가고친이름').prefs.join() === '3,4,1,2' && rowOf(2)[C.p1] === '오프', 'prefs: found by the numeric id; a player renamed in the manager is still matched');
+  rev = league().rev;
+  r = prefs('User6', [2, 3, 4, 1]);
+  assert(r.ok && r.status === '대기' && r.inLeague === false && rowOf(6).slice(C.p1, C.p1 + 4).join() === '미드,오프,서폿,캐리' && league().rev === rev, 'prefs: a waiting registration changes in the tab only');
+  r = prefs(['user4'], [2, 3, 4, 1]);
+  assert(!r.ok && r.code === 'locked' && rowOf(4)[C.p1] === '캐리', 'prefs: an excluded registration is not changed');
+  assert(prefs(['nobody'], [1, 2, 3, 4]).code === 'unknown' && prefs([], [1, 2, 3, 4]).code === 'discord' && prefs(['user5'], [1, 1, 2, 3]).code === 'prefs' && prefs(['user5'], [1, 2, 3]).code === 'prefs'
+    && prefs(['user5'], [1, 2, 3, 4], 'nope').code === 'auth', 'prefs: unknown accounts, bad orders and a wrong key are refused');
+  const getFile = S.env.DriveApp.getFileById;
+  S.env.DriveApp.getFileById = () => { throw new Error('드라이브 오류'); };
+  r = prefs(['user5'], [1, 2, 3, 4]);
+  S.env.DriveApp.getFileById = getFile;
+  assert(!r.ok && r.code === 'league' && rowOf(5)[C.p1] === '서폿' && named(league(), '선수5').prefs.join() === '4,1,2,3', 'prefs: when the league cannot be read nothing changes');
+
+  // 인하우스 MMR을 되돌리는 시작(시험 삼아 치른 시즌): 그 시즌을 시작했을 때의 값으로 돌아간다
+  got = league();
+  const again = JSON.parse(JSON.stringify(got.league));
+  Object.assign(again.players.find(p => p.name === '선수5'), { mmr: 3712, wins: 2 });
+  Object.assign(again.players.find(p => p.name === '매니저가고친이름'), { mmr: 3050, losses: 2 });
+  post({ action: 'saveLeague', key, league: again, baseRev: got.rev });
+  S.env.DriveApp.getFileById = id => Object.assign(getFile(id), { setContent() { throw new Error('드라이브 오류'); } });
+  r = season('시즌 3', { mmr: 'reset' });
+  assert(r.ok && r.season === '시즌 3' && r.carried.mmr === 'reset' && seasons()[2].leaguePending === true && seasons()[2].mmrReset === true && rowOf(5)[C.mmr] === 3500 && rowOf(2)[C.mmr] === 3100,
+    'reset: the season starts even when the league cannot be rewritten yet, and remembers how to finish');
+  S.env.DriveApp.getFileById = getFile;
+  delete S.files[seasons()[1].league];                       // 보관해 둔 사본까지 사라졌어도, 아직 지난 시즌의 기록인 지금 파일로 이어 간다
+  status();
+  got = league();
+  assert(!('leaguePending' in seasons()[2]) && !('mmrReset' in seasons()[2]) && named(got, '선수5').mmr === 3500 && named(got, '선수5').baseMMR === 3500 && named(got, '매니저가고친이름').mmr === 3100
+    && named(got, '새이름1').mmr === 3288 && named(got, '손으로넣은선수').mmr === 2610 && got.league.players.every(p => p.wins === 0 && p.losses === 0) && got.league.matches.length === 0,
+    'reset: the next request finishes it; every player is back at the MMR the ended season started from');
+  assert(named(got, '선수5').prefs.join() === '4,1,2,3' && rowOf(5)[C.p1] === '서폿' && S.sheets['운영 기록'].grid.some(row => String(row[5]).includes('되돌림')), 'reset: positions changed by the player are carried; the log says the MMR was reset');
+  // 기록을 쓰다 만 뒤에 한 번 더 해도 결과가 같다
+  const before = JSON.stringify(got.league.players);
+  const list = seasons(); list[2].leaguePending = true; S.props.SEASONS = JSON.stringify(list);
+  status();
+  assert(JSON.stringify(league().league.players) === before && !('leaguePending' in seasons()[2]), 'carry: finishing twice gives the same players');
 })();
 
 // 등록이 가득 찼을 때(3000줄): 새 등록은 받지 않지만, 이미 등록한 사람은 승인 전이면 계속 고칠 수 있다
@@ -690,7 +847,9 @@ assert(props.ADMIN_KEY === key, 'running setup again keeps the admin key');
   S.env.DriveApp.getFileById = getFile;
   post({ action: 'ping', key });
   g = got();
-  assert(!('leaguePending' in JSON.parse(S.props.SEASONS)[1]) && g.league.players.length === 1 && g.league.players[0].name === '선수21' && g.league.matches.length === 0 && g.rev === at + 2,
+  // 지난 시즌의 선수는 전적을 비운 채 이어지고(버전 14), 그사이 승인한 21번이 거기에 더해진다
+  assert(!('leaguePending' in JSON.parse(S.props.SEASONS)[1]) && g.league.players.length === 16 && g.league.players.filter(p => p.name === '선수21').length === 1
+    && g.league.players.every(p => p.wins === 0 && p.losses === 0) && g.league.matches.length === 0 && g.rev === at + 2,
     'link: when the reset finishes, the players approved meanwhile are put into the new league');
 })();
 
@@ -807,7 +966,7 @@ assert(props.ADMIN_KEY === key, 'running setup again keeps the admin key');
 
   // 새 시즌: 주인 키로 시작하고, 운영진의 키는 시즌이 바뀌어도 그대로다
   r = post({ action: 'adminNewSeason', key: owner, season: '겨울 시즌', confirm: '시즌 변경' });
-  assert(r.ok && r.season === '겨울 시즌' && r.role === 'owner' && log().some(x => x.slice(1).join('|') === '겨울 시즌|주인|새 시즌 시작|겨울 시즌|가을 시즌 → 겨울 시즌'), 'staff: the owner starts a season, and it is logged');
+  assert(r.ok && r.season === '겨울 시즌' && r.role === 'owner' && log().some(x => x.slice(1, 5).join('|') === '겨울 시즌|주인|새 시즌 시작|겨울 시즌' && String(x[5]).startsWith('가을 시즌 → 겨울 시즌 · 명단 ')), 'staff: the owner starts a season, and it is logged');
   assert(post({ action: 'ping', key: k1 }).name === '짱고' && S.tabs.filter(t => t.getName() === '운영 기록').length === 1, 'staff: staff keys and the log tab carry over to the new season');
 
   // 끊기: 그 키는 바로 쓸 수 없다
@@ -851,8 +1010,14 @@ assert(props.ADMIN_KEY === key, 'running setup again keeps the admin key');
   reg(1, '꿀듀'); reg(2, 'ZzangGo'); reg(3, '대기맨'); reg(4, '제외맨');
   set([1, 2], '승인'); set(4, '제외');
   season('시즌 2');
-
+  // 버전 14부터 명단이 새 시즌으로 이어지므로, 이어진 선수의 닉네임은 이번 시즌에 쓰고 있는 닉네임으로 막힌다
   let r = reg(5, '꿀듀');
+  assert(!r.ok && r.code === 'nickname' && /이미 쓰고 있는/.test(r.error) && tab('시즌 2').length === 5, 'nick: a carried player\'s name is simply taken this season');
+  // 아래는 지난 시즌에 쓰던 닉네임의 주인이 이번 시즌의 명단에 없을 때의 규칙이다(운영자가 시트에서 그 줄을 지운 경우). 이어진 줄을 지워서 그 상황을 만든다
+  const wipe = () => { S.tabs[0].grid.length = 1; };
+  wipe();
+
+  r = reg(5, '꿀듀');
   assert(!r.ok && r.code === 'nickname' && /지난 시즌에 다른 선수가 쓰던 닉네임/.test(r.error) && tab('시즌 2').length === 1, 'nick: a name an approved player used last season is refused to someone else (nothing written)');
   assert([' 꿀 듀 ', 'zzanggo', 'ZZANG GO', 'Zzang Go'].every(name => reg(5, name).code === 'nickname') && tab('시즌 2').length === 1, 'nick: spaces and capitals do not get around it');
   r = reg(5, '대기맨');
@@ -878,6 +1043,7 @@ assert(props.ADMIN_KEY === key, 'running setup again keeps the admin key');
   // 스팀은 같은데 디스코드를 다르게 적은 원래 주인: 닉네임이 아니라 디스코드를 다시 확인하라는 안내가 나와야 한다
   set(6, '승인');                                       // 시즌 2에서는 6번(제외맨)만 승인된다. 2번(짱고2)은 대기로 남는다
   season('시즌 3');
+  wipe();
   r = reg(2, 'ZzangGo', { discord: 'nick2_typo' });
   assert(!r.ok && r.code === 'conflict' && /디스코드 사용자명을 다시 확인/.test(r.error), 'nick: the owner with a mistyped discord is told to check the discord, not that the name is taken');
 
@@ -931,8 +1097,8 @@ assert(props.ADMIN_KEY === key, 'running setup again keeps the admin key');
   S.env.DriveApp.getFileById = getFile;
   r = post({ action: 'adminNewSeason', key, season: '시즌 2', confirm: '시즌 변경' });
   let list = JSON.parse(S.props.SEASONS), got = post({ action: 'adminLeague', key });
-  assert(r.ok && r.season === '시즌 2' && JSON.parse(S.files[list[0].league]).players[0].mmr === 3100 && got.league.players.length === 0 && got.league.settings.k === 150,
-    'new season once drive answers again: archived and reset as usual');
+  assert(r.ok && r.season === '시즌 2' && JSON.parse(S.files[list[0].league]).players[0].wins === 1 && got.league.players.length === 1 && got.league.players[0].mmr === 3100
+    && got.league.players[0].wins === 0 && got.league.settings.k === 150, 'new season once drive answers again: archived and started again as usual');
   // 비우는 일이 미뤄진 동안 지금 파일을 읽지 못해도, 설정은 보관해 둔 사본에서 이어받는다 (기본값으로 돌아가지 않는다)
   post({ action: 'saveLeague', key, league, baseRev: got.rev });
   S.env.DriveApp.getFileById = id => Object.assign(getFile(id), { setContent() { throw new Error('드라이브 오류'); } });
@@ -942,8 +1108,9 @@ assert(props.ADMIN_KEY === key, 'running setup again keeps the admin key');
   S.env.DriveApp.getFileById = id => { if (id === liveId) throw new Error('Service error: Drive'); return getFile(id); };
   post({ action: 'ping', key });
   got = JSON.parse(S.files[S.props.LEAGUE_FILE_ID]);
-  assert(r.ok && list[2].leaguePending === true && !('leaguePending' in JSON.parse(S.props.SEASONS)[2]) && got.players.length === 0 && got.settings.k === 150 && got.settings.balanceTol === 300,
-    'reset finished later while the live file cannot be read: the settings still come from the archived copy');
+  assert(r.ok && list[2].leaguePending === true && !('leaguePending' in JSON.parse(S.props.SEASONS)[2]) && got.players.length === 1 && got.players[0].wins === 0 && got.players[0].mmr === 3100
+    && got.settings.k === 150 && got.settings.balanceTol === 300,
+    'reset finished later while the live file cannot be read: the players and settings still come from the archived copy');
 })();
 
 // 버전 10으로 올린 뒤 첫 요청: 그때까지 승인돼 있던 선수를 선수단에 넣는다 (한 번만)
