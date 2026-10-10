@@ -22,7 +22,7 @@
 - 서버 주소(sync_url)와 리그 관리자 키(sync_key)를 적어 두면, 명단과 짠 팀을 리그 서버에도 올려
   매니저의 "봇이 올린 명단 불러오기", "봇이 짠 팀 불러오기"로 바로 받을 수 있음
 - 리그 관리자가 운영진 채널에서 /선수역할 로 역할을 정해 두면, 리그 관리자 페이지에서 승인한 선수에게 그 역할을 주고 승인을 푼 선수에게서는 뺌
-  (등록 명단을 1분마다 읽어 맞춘다. 봇에 역할 관리 권한이 있고, 봇의 역할이 그 역할보다 위에 있어야 한다)
+  (등록 명단을 5분마다 읽어 맞춘다. 봇에 역할 관리 권한이 있고, 봇의 역할이 그 역할보다 위에 있어야 한다)
 - 리그 선수가 대화방에서 /내전하자  → 한 시간 동안 "지금 내전을 하고 싶은 사람"으로 남고, 10명이 모이면 대화방에서 리그 운영진 역할을 멘션해 알림
   (대화방과 알릴 역할은 리그 관리자가 /내전하자설정 으로 정한다)
 - /도움말  → 입력한 사람이 쓸 수 있는 명령어만 본인에게 보여 줌
@@ -71,7 +71,7 @@ AUTO_MATCH = bool(config.get("auto_match", True))  # 마감하면 팀을 짜서 
 NODE_PATH = str(config.get("node_path", "") or "node").strip()
 # 승인한 선수에게 줄 역할. 보통은 비워 두고 디스코드에서 /선수역할 로 정한다(그 값은 state.json 에 남는다)
 PLAYER_ROLE_ID = int(config.get("player_role_id", 0) or 0)
-ROLE_POLL_SECONDS = 60  # 등록 명단의 승인·제외를 이만큼마다 확인한다
+ROLE_POLL_SECONDS = 300  # 등록 명단의 승인·제외를 이만큼마다 확인한다. 1분이었는데, 급할 것이 없어 구글 서버에 묻는 횟수를 줄였다(2026-10-11)
 ROLE_RETRY_SECONDS = 600  # 서버에서 찾지 못한 사람은 이만큼 지난 뒤에 다시 찾아본다
 ROLE_BATCH = 30  # 한 번에 찾아볼 사람 수. 디스코드에 몰아서 묻지 않게 나눠 한다
 PLAYERS_NEEDED = 10  # 5 vs 5
@@ -143,10 +143,8 @@ class InhouseBot(discord.Client):
         self.role_seen: dict[str, dict] = {}
         self.role_season = ""
         # 마지막으로 맞춘 시즌의 번호(서버가 알려 준다. 아직 모르면 None). 서버의 번호가 더 크면 시즌이 넘어간 것이라 역할을 거둔다.
-        # role_revoke 는 거두는 중인 일 {"to": 새 시즌 번호, "left": [아직 확인하지 않은 디스코드], "removed": 거둔 수, "total": 전체}
         self.role_season_no: int | None = None
-        self.role_revoke: dict | None = None
-        self.role_note = ""  # 마지막으로 운영진 채널에 알린 문제. 같은 문제를 1분마다 다시 알리지 않으려고 적어 둔다
+        self.role_note = ""  # 마지막으로 운영진 채널에 알린 문제. 같은 문제를 확인할 때마다 다시 알리지 않으려고 적어 둔다
         self.role_lock: asyncio.Lock | None = None
         self.role_task: asyncio.Task | None = None
         # /시작 에서 골라 둔 음성 채널 {"lobby": 채널 ID, "radiant": …, "dire": …}. 없는 것은 이름으로 찾는다
@@ -451,7 +449,7 @@ def save_state() -> None:
             "current": cur.to_dict() if cur is not None and cur.message is not None else None,
             "lineups": bot.lineups,
             "roles": {"role_id": bot.player_role_id, "season": bot.role_season, "season_no": bot.role_season_no,
-                      "seen": bot.role_seen, "revoke": bot.role_revoke},
+                      "seen": bot.role_seen},
             "voice": bot.voice,
             "manager_role_id": bot.manager_role_id,
             "want": {"users": {str(uid): at for uid, at in bot.wants.items()}, "joined": sorted(bot.want_joined), "alerted": bot.want_alerted,
@@ -479,7 +477,6 @@ async def restore_state() -> None:
         bot.role_season = str(roles.get("season") or "")
         bot.role_season_no = roles.get("season_no") if isinstance(roles.get("season_no"), int) else None
         bot.role_seen = {k: v for k, v in (roles.get("seen") or {}).items() if isinstance(v, dict)}
-        bot.role_revoke = roles.get("revoke") if isinstance(roles.get("revoke"), dict) else None
     voice = data.get("voice")
     if isinstance(voice, dict):  # /시작 에서 골라 둔 음성 채널
         bot.voice = {k: v for k, v in voice.items() if k in VOICE_ROOMS and isinstance(v, int)}
@@ -649,7 +646,7 @@ class ServerGlitch(RuntimeError):
 
 # 다시 보내도 결과가 같은 요청(읽기, 통째로 덮어쓰는 명단·편성). 답을 받지 못하면 조금 기다렸다가 몇 번 더 보낸다.
 # 리그 기록 올리기(saveLeague)는 넣지 않는다. 처리됐는지 모르는 채 다시 보내면 같은 경기가 두 번 기록될 수 있어서 change_league 가 따로 확인한다.
-REPEATABLE = {"adminList", "adminLeague", "adminLeagueRev", "adminRoster", "adminLineup", "pushRoster", "pushLineup", "ping"}
+REPEATABLE = {"adminList", "adminLeague", "adminLeagueRev", "adminRoster", "adminLineup", "pushRoster", "pushLineup", "ping", "adminSetPrefs"}
 SERVER_TRIES = 3  # 한 요청을 몇 번까지 보낼지
 SERVER_WAIT = 3  # 다시 보내기 전에 기다리는 시간(초). 두 번째는 그 두 배
 
@@ -1058,9 +1055,10 @@ async def find_member(guild: discord.Guild, name: str) -> discord.Member | None:
 async def sync_roles(force: bool = False) -> dict:
     """등록 명단의 상태에 맞춰 역할을 주고 뺀다. 이미 맞춘 등록은 건너뛰고, 상태나 디스코드가 바뀐 등록만 다시 본다.
     force 면 서버에서 찾지 못했던 사람도 기다리지 않고 다시 찾아본다.
-    시즌이 넘어간 것을 알면 먼저 지난 시즌 선수의 역할을 거둔다(봇이 꺼져 있는 동안 넘어갔으면 켠 뒤의 첫 차례에 한다).
-    돌려주는 값: {"added": [멤버], "removed": [멤버], "missing": [등록], "problem": 까닭, "left": 다음 차례로 미룬 수, "revoked": 거둔 결과}"""
-    out = {"added": [], "removed": [], "missing": [], "problem": "", "left": 0, "revoked": None}
+    시즌이 넘어가도 역할은 거두지 않는다: 서버 버전 14부터 선수와 승인 상태가 새 시즌으로 그대로 이어진다
+    (운영자가 2026-10-09에 "한 번 등록하면 제외되지 않고서야 계속 선수"로 정했다. 그 전에는 시즌마다 모두 거뒀다가 다시 줬다).
+    돌려주는 값: {"added": [멤버], "removed": [멤버], "missing": [등록], "problem": 까닭, "left": 다음 차례로 미룬 수}"""
+    out = {"added": [], "removed": [], "missing": [], "problem": "", "left": 0}
     if not bot.player_role_id or not (SYNC_URL and SYNC_KEY):
         return out
     async with bot.role_lock:
@@ -1075,19 +1073,16 @@ async def sync_roles(force: bool = False) -> dict:
         if not isinstance(no, int):  # 시즌 번호를 주지 않는 예전 서버: 이름이 바뀌면 명단을 처음부터 다시 맞추기만 한다
             if season != bot.role_season:
                 bot.role_seen = {}
-        elif bot.role_season_no is None:  # 처음 본 시즌. 거둘 것은 없다
+        elif bot.role_season_no is None:  # 처음 본 시즌
             bot.role_season_no = no
             save_state()
         elif no < bot.role_season_no:  # 번호가 줄었다: 다른 시트(서버)로 옮긴 경우. 처음부터 다시 맞춘다
-            bot.role_season_no, bot.role_seen, bot.role_revoke = no, {}, None
+            bot.role_season_no, bot.role_seen = no, {}
             save_state()
-        elif no > bot.role_season_no and bot.role_revoke is None:  # 시즌이 넘어갔다. 끝난 시즌의 선수에게서 역할을 거둔다
-            bot.role_revoke = await revoke_plan(bot.role_season_no, no, data)
+        elif no > bot.role_season_no:  # 시즌이 넘어갔다. 명단이 그대로 이어지므로 번호만 적어 두고, 아래에서 평소처럼 상태가 바뀐 등록만 본다
+            bot.role_season_no = no
             save_state()
         bot.role_season = season
-        if bot.role_revoke is not None:
-            if not await revoke_step(guild, role, out):
-                return out  # 다 거둔 뒤에 새 시즌의 승인 선수에게 준다
         seen, now, tried, changed = bot.role_seen, time.time(), 0, False
         for p in data.get("players") or []:
             key, status, name = str(p.get("steamKey") or p.get("discord") or ""), p.get("status"), str(p.get("discord") or "")
@@ -1134,64 +1129,9 @@ async def sync_roles(force: bool = False) -> dict:
     return out
 
 
-async def revoke_plan(old_no: int, new_no: int, current: dict) -> dict:
-    """시즌이 넘어갔을 때 역할을 거둘 사람을 모은다: 끝난 시즌들(old_no 부터 new_no 앞까지)의 등록 명단에 있는 사람과, 봇이 역할을 줬던 사람.
-    새 시즌에 이미 승인된 사람은 뺀다(거뒀다가 바로 다시 주지 않으려고).
-    누가 역할을 갖고 있는지를 디스코드에 물을 수는 없어서(특권 인텐트가 필요하다) 명단으로 찾는다.
-    그래서 등록한 적 없이 손으로 역할을 받은 사람은 여기에 들어가지 않는다."""
-    keep = {str(p.get("discord") or "") for p in current.get("players") or [] if p.get("status") == "승인"}
-    names: list[str] = []
-
-    def add(name) -> None:
-        name = str(name or "")
-        if name and name not in keep and name not in names:
-            names.append(name)
-
-    for k in range(old_no, new_no):
-        past = await call_server({"action": "adminList", "seasonNo": k})
-        for p in past.get("players") or []:
-            add(p.get("discord"))
-    for v in bot.role_seen.values():
-        add(v.get("discord"))
-    return {"to": new_no, "left": names, "removed": 0, "total": len(names), "stuck": 0}
-
-
-async def revoke_step(guild: discord.Guild, role: discord.Role, out: dict) -> bool:
-    """거둘 사람을 한 번에 ROLE_BATCH 명까지 확인해 역할을 뺀다. 다 끝났으면 True (그때 새 시즌으로 넘어간다)."""
-    plan = bot.role_revoke
-    for _ in range(ROLE_BATCH):
-        if not plan["left"]:
-            break
-        name = plan["left"][0]
-        try:
-            member = await find_member(guild, name)
-            if member is not None and role in member.roles:
-                await member.remove_roles(role, reason="인하우스 리그 시즌 종료")
-                plan["removed"] += 1
-        except discord.Forbidden:
-            out["problem"] = "시즌이 바뀌어 역할을 거두려 했지만 권한이 없어요. 봇에 **역할 관리** 권한이 있는지, 봇의 역할이 그 역할보다 위에 있는지 확인해 주세요."
-            break
-        except (discord.HTTPException, asyncio.TimeoutError) as e:  # 디스코드가 잠깐 답하지 않았다. 다음 차례에 이어서 한다
-            print(f"리그 선수 역할: {name} 의 역할을 거두지 못했습니다: {e!r}")
-            plan["stuck"] = plan.get("stuck", 0) + 1
-            if plan["stuck"] < 5:
-                break
-        plan["left"].pop(0)  # 다섯 번 내리 실패한 사람은 건너뛴다 (한 사람 때문에 멈춰 있지 않게)
-        plan["stuck"] = 0
-    if plan["left"]:
-        save_state()
-        return False
-    out["revoked"] = {"removed": plan["removed"], "total": plan["total"]}
-    bot.role_season_no, bot.role_seen, bot.role_revoke = plan["to"], {}, None
-    save_state()
-    return True
-
-
 def roles_text(out: dict) -> str:
     """역할을 맞춘 결과를 운영진 채널에 알릴 글. 알릴 것이 없으면 빈 글."""
     lines = []
-    if out.get("revoked"):
-        lines.append(f"🔄 시즌이 바뀌어 지난 시즌 선수의 역할을 거뒀어요: {out['revoked']['removed']}명 (명단 {out['revoked']['total']}명 확인)")
     if out["added"]:
         lines.append("✅ 승인 → 역할을 줬어요: " + ", ".join(m.mention for m in out["added"]))
     if out["removed"]:
@@ -1221,7 +1161,7 @@ async def role_loop() -> None:
         try:
             await role_tick()
         except Exception as e:  # 서버나 디스코드가 잠깐 답하지 않아도 다음 차례에 다시 한다
-            print(f"[{datetime.now(KST):%m-%d %H:%M}] 리그 선수 역할을 이번에는 맞추지 못했습니다. 1분 뒤에 다시 합니다. ({e})")
+            print(f"[{datetime.now(KST):%m-%d %H:%M}] 리그 선수 역할을 이번에는 맞추지 못했습니다. 다음 차례에 다시 합니다. ({e})")
         await asyncio.sleep(ROLE_POLL_SECONDS)
 
 
@@ -1657,7 +1597,7 @@ async def player_role(interaction: discord.Interaction, role: Optional[discord.R
             return
     if off:
         # 꺼 둔 동안 시즌이 넘어가도, 다시 켰을 때 역할을 거두지 않도록 시즌 번호도 잊는다
-        bot.player_role_id, bot.role_seen, bot.role_season_no, bot.role_revoke = 0, {}, None, None
+        bot.player_role_id, bot.role_seen, bot.role_season_no = 0, {}, None
         save_state()
         await answer(interaction, f"{actor}님이 리그 선수 역할 자동 부여를 껐어요. 이미 준 역할은 그대로 둡니다. 다시 켜려면 `/선수역할` 에서 역할을 골라 주세요.")
         return
@@ -1667,7 +1607,7 @@ async def player_role(interaction: discord.Interaction, role: Optional[discord.R
             await answer(interaction, f"{actor}님, {role.mention} 역할로는 켤 수 없어요. {problem}")
             return
         if role.id != bot.player_role_id:
-            bot.player_role_id, bot.role_seen, bot.role_revoke = role.id, {}, None  # 역할이 바뀌면 처음부터 다시 맞춘다
+            bot.player_role_id, bot.role_seen = role.id, {}  # 역할이 바뀌면 처음부터 다시 맞춘다
             save_state()
     if not bot.player_role_id:
         await answer(interaction, f"{actor}님, 리그 선수 역할 자동 부여가 꺼져 있어요. `/선수역할` 에서 **역할**을 고르면, 리그 관리자 페이지에서 승인한 선수에게 그 역할을 주고 승인을 푼(대기·제외) 선수에게서는 뺍니다.")
@@ -1685,11 +1625,8 @@ async def player_role(interaction: discord.Interaction, role: Optional[discord.R
     done = roles_text(out).replace("🎫 **리그 선수 역할**\n", "")  # 문제가 생기기 전에 처리한 것이 있으면 그것도 알린다
     if out["problem"]:
         text = f"{actor}님, **리그 선수 역할**을 맞추지 못했어요. " + out["problem"] + (f"\n{done}" if done else "")
-    elif bot.role_revoke is not None:  # 시즌이 넘어가 역할을 거두는 중이다. 한 번에 다 하지 못하면 다음 차례에 이어서 한다
-        text = (f"{actor}님, 시즌이 바뀌어 지난 시즌 선수의 <@&{bot.player_role_id}> 역할을 거두는 중이에요. "
-                f"(남은 사람 {len(bot.role_revoke['left'])}명) 다 거둔 뒤에 새 시즌의 승인 선수에게 줍니다.")
     else:
-        head = f"{actor}: 🎫 승인한 선수에게 <@&{bot.player_role_id}> 역할을 자동으로 줍니다. 승인을 풀면(대기·제외) 뺍니다. (1분마다 확인)"
+        head = f"{actor}: 🎫 승인한 선수에게 <@&{bot.player_role_id}> 역할을 자동으로 줍니다. 승인을 풀면(대기·제외) 뺍니다. ({minutes_text(ROLE_POLL_SECONDS)}마다 확인)"
         more = f"\n나머지 {out['left']}명은 이어서 처리합니다." if out["left"] else ""
         text = f"{head}\n{done or '지금은 새로 주거나 뺄 사람이 없어요.'}{more}"
     await answer(interaction, text)
@@ -1900,6 +1837,73 @@ async def want_setup(interaction: discord.Interaction, channel: Optional[discord
                  + (f"\n⚠️ {problem}" if problem else ""))
 
 
+# ── /포지션변경: 내 포지션 순서 바꾸기 ───────────────────────────
+# 선수가 등록할 때 정한 포지션 순서(1지망~4지망)를 디스코드에서 직접 바꾼다(운영자가 2026-10-11에 요청).
+# 전에는 승인된 뒤에는 본인이 고칠 수 없어서, 리그 관리자가 대기로 돌려 주거나 매니저에서 고쳐야 했다.
+# 누구의 등록인지는 서버가 디스코드 계정(숫자 ID나 사용자명)으로 찾고, 등록 탭과 선수단을 함께 고친다(adminSetPrefs, 서버 버전 14).
+POSITION_NAMES = ["캐리", "미드", "오프", "서폿"]  # 지망 번호 1~4 (등록 양식과 같다. 서폿은 4번과 5번을 함께 뜻한다)
+POSITION_CHOICES = [app_commands.Choice(name=n, value=i + 1) for i, n in enumerate(POSITION_NAMES)]
+
+
+def in_pending_lineup(uid: int) -> bool:
+    """팀이 짜였고 결과를 아직 기록하지 않은 판에서 뛰는 사람인지.
+    그런 사람의 지망을 바꾸면, 팀을 알릴 때 적은 이기면·지면 점수와 실제 정산이 달라진다(정산은 그때의 지망으로 계산한다)."""
+    for x in bot.lineups:
+        if not x.get("lanes") or x.get("result"):
+            continue
+        who = x.get("who") or {}
+        if any(who.get(pid) == uid for pid in x.get("ids", [])):
+            return True
+    return False
+
+
+@bot.tree.command(name="포지션변경", description="내 포지션 순서를 바꿉니다. 1지망부터 차례로 골라 주세요 (리그 선수)", guild=GUILD)
+@app_commands.rename(first="1지망", second="2지망", third="3지망", fourth="4지망")
+@app_commands.describe(first="가장 하고 싶은 포지션", second="두 번째로 하고 싶은 포지션", third="세 번째로 하고 싶은 포지션", fourth="네 번째로 하고 싶은 포지션")
+@app_commands.choices(first=POSITION_CHOICES, second=POSITION_CHOICES, third=POSITION_CHOICES, fourth=POSITION_CHOICES)
+async def change_positions(interaction: discord.Interaction, first: app_commands.Choice[int], second: app_commands.Choice[int],
+                           third: app_commands.Choice[int], fourth: app_commands.Choice[int]) -> None:
+    user = interaction.user
+    prefs = [first.value, second.value, third.value, fourth.value]
+    if sorted(prefs) != [1, 2, 3, 4]:
+        await interaction.response.send_message(
+            "포지션 네 가지를 한 번씩만 골라 주세요. 예) `/포지션변경 1지망:서폿 2지망:캐리 3지망:미드 4지망:오프`", ephemeral=True)
+        return
+    if not (SYNC_URL and SYNC_KEY):
+        await interaction.response.send_message("봇이 리그 서버에 이어져 있지 않아 바꿀 수 없어요. 리그 관리자에게 알려 주세요.", ephemeral=True)
+        return
+    if in_pending_lineup(user.id):
+        await interaction.response.send_message(
+            "지금 팀이 짜여 결과를 기다리는 내전에 들어 있어서 바꿀 수 없어요. 경기 결과가 기록된 뒤에 다시 입력해 주세요.", ephemeral=True)
+        return
+    await interaction.response.defer(ephemeral=True)  # 서버에 다녀오는 데 3초를 넘길 수 있다
+    try:
+        r = await call_server({"action": "adminSetPrefs", "discord": [str(user.id), str(user.name)], "prefs": prefs})
+    except ServerError as e:
+        if e.code == "unknown":
+            text = (f"등록한 선수를 찾지 못했어요. 선수 등록을 할 때 적은 디스코드 사용자명이 지금 계정(`{str(user.name).replace('`', '')}`)과 같은지 확인해 주세요. "
+                    "다르게 적었다면 리그 관리자에게 알려 주세요.")
+        elif e.code == "locked":
+            text = "제외된 등록이라 포지션 순서를 바꿀 수 없어요."
+        elif e.code in ("pending", "league"):
+            text = "지금은 바꾸지 못했어요. 잠시 뒤에 다시 입력해 주세요."
+        else:  # 이 요청을 모르는 예전 서버 등
+            print(f"포지션 순서 바꾸기 실패: {e!r}")
+            text = f"바꾸지 못했어요. 리그 관리자에게 알려 주세요. ({e})"
+        await interaction.followup.send(text, ephemeral=True)
+        return
+    except Exception as e:  # 서버가 답하지 않았다. 다시 입력해도 결과는 같다
+        print(f"포지션 순서 바꾸기 실패: {e!r}")
+        await interaction.followup.send("리그 서버가 답하지 않아 바꿨는지 확인하지 못했어요. 잠시 뒤에 다시 입력해 주세요.", ephemeral=True)
+        return
+    order = " · ".join(f"{k + 1}지망 **{POSITION_NAMES[n - 1]}**" for k, n in enumerate(prefs))
+    if r.get("status") == "승인":
+        tail = "다음에 짜는 팀부터 이 순서로 배정해요."
+    else:
+        tail = "아직 승인 전이라 등록 내용만 고쳤어요. 승인되면 이 순서로 선수단에 들어가요."
+    await interaction.followup.send(f"✅ 포지션 순서를 바꿨어요.\n{order}\n{tail}", ephemeral=True)
+
+
 # ── /도움말: 내가 쓸 수 있는 명령어 ─────────────────────────────
 @bot.tree.command(name="도움말", description="내가 쓸 수 있는 퍼그나봇 명령어를 보여 줍니다", guild=GUILD)
 async def show_help(interaction: discord.Interaction) -> None:
@@ -1919,6 +1923,7 @@ async def show_help(interaction: discord.Interaction) -> None:
     parts = ["**퍼그나봇 명령어**\n" + head]
     parts.append("**누구나**\n"
                  "`/참여` · `/참여취소` — 내전 모집 글에서 참여를 신청하거나 취소해요.\n"
+                 "`/포지션변경` — 등록한 포지션 순서를 바꿔요. 1지망부터 차례로 골라요. (선수 등록을 한 사람)\n"
                  "`/도움말` — 이 안내를 다시 봐요.")
     if player:
         where = f"<#{bot.want_channel_id}> 에서 써요. " if bot.want_channel_id else ""

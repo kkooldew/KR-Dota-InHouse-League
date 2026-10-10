@@ -84,6 +84,11 @@ details.by-file[open] summary{margin-bottom:10px}
 .sd-list b{display:block;margin-bottom:2px;color:var(--bone);font-weight:700;font-size:14px}
 .sd-list strong{color:var(--bone);font-weight:500}
 .sd-list code{font-family:ui-monospace,Consolas,monospace;font-size:12.5px;color:var(--bone)}
+.sd-mmr{margin:0 0 18px;padding:10px 12px 12px;border:1px solid var(--line);border-radius:4px;font-size:13.5px;color:var(--bone-dim)}
+.sd-mmr legend{padding:0 6px;color:var(--bone);font-weight:700;font-size:14px}
+.sd-mmr label{display:flex;gap:8px;align-items:baseline;padding:4px 0;cursor:pointer}
+.sd-mmr input{flex:none;accent-color:var(--gold)}
+.sd-mmr b{color:var(--bone);margin-right:6px}
 .sd-ask{display:block;margin:0 0 8px;font-size:14px}
 .sd-ask b{color:var(--gold)}
 .season-dialog input[type=text]{width:100%;font-size:16px;padding:10px 12px}
@@ -136,9 +141,9 @@ details.by-file[open] summary{margin-bottom:10px}
         <button class="btn sm" type="button" id="btnNewSeason">새 시즌 시작</button>
         <span class="dim" id="ownerOnlySeason" style="font-size:12.5px" hidden>새 시즌 시작은 주인 키로만 할 수 있습니다.</span>
       </div>
-      <p class="season-note">새 시즌을 시작하면 구글 시트에 그 시즌의 등록 탭이 새로 생기고, 등록을 빈 명단에서 다시 받습니다. 순위와 경기 기록도 새로 시작합니다.
+      <p class="season-note">새 시즌을 시작하면 <b>순위(승·패)와 경기 기록만 새로 시작합니다.</b> 등록 명단과 선수는 그대로 이어지고, 선수는 다시 등록하지 않습니다.
         끝난 시즌의 명단·순위·경기 기록은 시트에 그 시즌 이름이 붙은 탭으로 남습니다.
-        지난 시즌에 승인됐던 선수가 <b>같은 스팀 프로필과 디스코드</b>로 다시 등록하면, 그 시즌이 끝났을 때의 인하우스 MMR을 이어받습니다. <span id="pastSeasons"></span></p>
+        등록을 받을지는 시즌과 상관없이 위의 <b>등록 열기·닫기</b>로 정합니다. <span id="pastSeasons"></span></p>
     </section>
 
     <section class="panel">
@@ -250,6 +255,11 @@ details.by-file[open] summary{margin-bottom:10px}
       <p class="sd-move"><span>지금 시즌</span> <b id="sdOld"></b> <span class="arrow" aria-hidden="true">→</span> <span>새 시즌</span> <b class="new" id="sdNew"></b></p>
       <p class="sd-warn">새 시즌을 시작하면 아래 내용이 한꺼번에 바뀝니다. <b>시작한 뒤에는 되돌릴 수 없습니다.</b></p>
       <ul class="sd-list" id="sdList"></ul>
+      <fieldset class="sd-mmr">
+        <legend>인하우스 MMR</legend>
+        <label><input type="radio" name="sdMmr" value="keep" checked> <span><b>이어 가기</b> 지금의 인하우스 MMR에서 새 시즌을 시작합니다.</span></label>
+        <label><input type="radio" name="sdMmr" value="reset"> <span><b>되돌리기</b> 이번 시즌을 시작했을 때의 MMR로 되돌립니다. 시험 삼아 치른 시즌의 변동을 버릴 때 고릅니다.</span></label>
+      </fieldset>
       <label class="sd-ask" for="sdWord">계속하려면 아래 칸에 <b>시즌 변경</b>이라고 입력하세요.</label>
       <input type="text" id="sdWord" autocomplete="off" spellcheck="false">
       <div class="sd-actions">
@@ -373,25 +383,30 @@ details.by-file[open] summary{margin-bottom:10px}
   /* ---------- 새 시즌 시작: 바뀌는 것들을 보여 주고 "시즌 변경"을 입력받는다 ---------- */
   const SEASON_WORD = '시즌 변경';        // 서버도 이 문구가 함께 와야 새 시즌을 시작한다
   let pendingSeason = '';
-  // 새 시즌을 시작하면 바뀌는 것들. 지금 명단과 기록의 크기를 함께 적어, 무엇이 끝나는지 눈에 보이게 한다
+  // 새 시즌을 시작하면 바뀌는 것과 그대로인 것. 지금 명단과 기록의 크기를 함께 적어, 무엇이 끝나고 무엇이 이어지는지 눈에 보이게 한다.
+  // 서버 버전 14부터 선수는 이어 가고 순위만 새로 센다(그 전에는 명단을 비우고 모두 다시 등록했다)
   function seasonEffects(old, league){
     const n = s => players.filter(p => p.status === s).length;
     const record = league ? '지금 기록(선수 ' + league.players + '명, 경기 ' + league.matches + '판)' : '지금 기록';
     return [
-      ['등록 명단', '지금 명단 ' + players.length + '명(승인 ' + n('승인') + ' · 대기 ' + n('대기') + ' · 제외 ' + n('제외') + ')은 구글 시트의 "선수등록 (' + esc(old) + ')" 탭에 남고, ' +
-        '새 시즌은 빈 명단에서 등록을 다시 받습니다.' + (n('대기') ? ' 대기 중인 ' + n('대기') + '명은 승인되지 않은 채 시즌이 끝납니다.' : '')],
-      ['순위와 경기 기록', record + '은 시트의 "순위 (' + esc(old) + ')"·"경기 기록 (' + esc(old) + ')" 탭과 구글 드라이브 파일로 보관합니다. ' +
-        '공개 순위 페이지는 빈 상태에서 다시 시작합니다.'],
-      ['인하우스 MMR', '이번 시즌에 승인된 선수는 같은 스팀 프로필과 디스코드로 다시 등록하면 MMR을 이어받습니다. 다시 등록해 승인받기 전에는 내전의 팀에 들어가지 못합니다.'],
-      ['디스코드 봇', '리그 선수 역할을 모두 거둡니다(봇이 꺼져 있으면 다음에 켤 때). 봇이 올려 둔 참가 명단과 짠 팀도 지워지니, ' +
+      ['순위와 경기 기록 — 새로 시작', record + '은 시트의 "순위 (' + esc(old) + ')"·"경기 기록 (' + esc(old) + ')" 탭과 구글 드라이브 파일로 보관합니다. ' +
+        '공개 순위 페이지는 같은 선수들이 0승 0패인 상태에서 다시 시작합니다.'],
+      ['등록 명단 — 그대로', '지금 명단 ' + players.length + '명(승인 ' + n('승인') + ' · 대기 ' + n('대기') + ' · 제외 ' + n('제외') + ')이 상태 그대로 새 시즌으로 이어집니다. ' +
+        '선수는 다시 등록하지 않습니다. 지금 명단은 시트의 "선수등록 (' + esc(old) + ')" 탭에도 남습니다.'],
+      ['선수단 — 그대로', '승인된 선수 ' + n('승인') + '명은 계속 선수입니다. 승인을 풀었거나 제외했는데 이번 시즌에 경기를 치러 선수단에 남아 있던 선수는 이때 빠집니다.'],
+      ['디스코드 봇', '리그 선수 역할은 그대로 둡니다. 봇이 올려 둔 참가 명단과 짠 팀은 지워지니, ' +
         '결과를 아직 기록하지 않은 판이 있으면 먼저 <code>/승리</code>로 기록해 주세요.'],
-      ['리그 매니저', '열면 빈 기록을 받아 옵니다. ' + (autoLink() ? '새 시즌의 선수단은 비어 있다가, 새 시즌에 승인하는 선수부터 다시 채워집니다.'
-        : '새 시즌에 승인한 선수는 <strong>매니저용 명단 받기</strong>로 다시 불러와야 합니다.')]
+      ['리그 매니저', '열면 새 시즌의 기록(같은 선수, 0승 0패, 경기 없음)을 받아 옵니다.']
     ].map(([title, text]) => '<li><b>' + title + '</b>' + text + '</li>').join('');
   }
   $('#btnNewSeason').addEventListener('click', async () => {
     const name = $('#newSeason').value.replace(/\s+/g, ' ').trim().slice(0, 30);      // 서버가 이름을 다듬는 방식과 같게
     if(!name){ toast('새 시즌의 이름을 넣어 주세요'); $('#newSeason').focus(); return; }
+    // 예전 서버(버전 13까지)는 새 시즌을 시작하면 명단을 비운다. 이 창의 설명과 다르게 움직이므로 막는다
+    if(!(status.version >= 14)){
+      toast('서버가 아직 새 버전이 아닙니다. 지금 시작하면 선수들이 모두 다시 등록해야 합니다. Code.gs를 새 버전으로 배포한 뒤에 시작해 주세요.');
+      return;
+    }
     // 이미 쓴 이름이면 확인 창을 띄우기 전에 알려 준다 (서버도 같은 기준으로 거절한다: 공백과 대소문자는 무시)
     const same = s => String(s).toLowerCase().replace(/\s+/g, '') === name.toLowerCase().replace(/\s+/g, '');
     if([status.season].concat(status.pastSeasons || []).some(same)){ toast('이미 있는 시즌 이름입니다. 다른 이름을 넣어 주세요.'); $('#newSeason').focus(); return; }
@@ -400,10 +415,11 @@ details.by-file[open] summary{margin-bottom:10px}
     $('#sdOld').textContent = old; $('#sdNew').textContent = name;
     $('#sdList').innerHTML = seasonEffects(old, null);
     $('#sdWord').value = ''; $('#sdGo').disabled = true;
+    $('#seasonForm').elements.sdMmr.value = 'keep';
     const dialog = $('#seasonDialog');
-    if(!dialog.showModal){                 // 확인 창을 띄우지 못하는 오래된 브라우저
-      const typed = prompt('"' + old + '" 시즌을 끝내고 "' + name + '" 시즌을 시작합니다. 등록 명단, 순위와 경기 기록, 리그 선수 역할이 모두 새로 시작하고 되돌릴 수 없습니다.\n\n계속하려면 "' + SEASON_WORD + '"이라고 입력하세요.');
-      if(typed !== null && typed.trim() === SEASON_WORD) startSeason(name);
+    if(!dialog.showModal){                 // 확인 창을 띄우지 못하는 오래된 브라우저 (인하우스 MMR은 이어 간다)
+      const typed = prompt('"' + old + '" 시즌을 끝내고 "' + name + '" 시즌을 시작합니다. 순위와 경기 기록이 새로 시작하고 되돌릴 수 없습니다. 선수와 인하우스 MMR은 그대로 이어집니다.\n\n계속하려면 "' + SEASON_WORD + '"이라고 입력하세요.');
+      if(typed !== null && typed.trim() === SEASON_WORD) startSeason(name, 'keep');
       else if(typed !== null) toast('"' + SEASON_WORD + '"이라고 입력해야 시작합니다');
       return;
     }
@@ -422,13 +438,13 @@ details.by-file[open] summary{margin-bottom:10px}
     e.preventDefault();
     if($('#sdWord').value.trim() !== SEASON_WORD) return;
     $('#seasonDialog').close();
-    startSeason(pendingSeason);
+    startSeason(pendingSeason, $('#seasonForm').elements.sdMmr.value === 'reset' ? 'reset' : 'keep');
   });
-  async function startSeason(name){
+  async function startSeason(name, mmr){
     $('#btnNewSeason').disabled = true;
     try{
       // 새 탭을 만들고 기록을 보관하느라 다른 요청보다 오래 걸릴 수 있다
-      try{ status = await adminPost({action: 'adminNewSeason', season: name, confirm: SEASON_WORD}, 90000); }
+      try{ status = await adminPost({action: 'adminNewSeason', season: name, confirm: SEASON_WORD, mmr}, 90000); }
       catch(err){
         // 답을 받지 못했어도 서버에서는 끝났을 수 있다. 시즌이 바뀌었는지 한 번 물어본다
         if(err.code) throw err;
@@ -438,7 +454,9 @@ details.by-file[open] summary{margin-bottom:10px}
       $('#newSeason').value = '';
       renderStatus();
       await reload();
-      toast('"' + name + '" 시즌을 시작했습니다');
+      const c = status.carried;        // 답을 받지 못해 다시 물어본 경우에는 없다
+      toast('"' + name + '" 시즌을 시작했습니다.' + (c ? ' 명단 ' + c.rows + '명(승인 ' + c.approved + '명)이 그대로 이어지고, ' +
+        (c.mmr === 'reset' ? '인하우스 MMR은 시즌을 시작했을 때의 값으로 되돌렸습니다.' : '인하우스 MMR도 이어집니다.') : ''));
     }catch(err){ toast(err.message); }
     finally{ $('#btnNewSeason').disabled = false; }
   }
