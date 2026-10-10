@@ -70,8 +70,15 @@ function makeEnv(opt = {}){
   });
   // 가짜 스팀: vanity 는 사용자 지정 주소 → 고유 번호, missing 은 없는 번호, down 이면 답하지 않는다, flaky 는 그 횟수만큼만 거절한다
   const steam = { vanity: {}, missing: new Set(), down: false, flaky: 0, calls: 0 };
+  // 가짜 디스코드 웹후크: sent 에 올라온 글이 쌓인다. code 는 디스코드가 돌려주는 상태(글을 받으면 204), down 이면 답하지 않는다
+  const hook = { sent: [], code: 204, down: false };
   const env = {
-    UrlFetchApp: { fetch: url => {
+    UrlFetchApp: { fetch: (url, options) => {
+      if (/^https:\/\/([a-z]+\.)?discord(app)?\.com\/api\/webhooks\//.test(url)) {
+        if (hook.down) throw new Error('timeout');
+        hook.sent.push({ url, options, body: JSON.parse(options.payload) });
+        return { getResponseCode: () => hook.code, getContentText: () => '' };
+      }
       steam.calls++;
       if (steam.down) throw new Error('timeout');
       if (steam.flaky > 0) { steam.flaky--; return { getResponseCode: () => 429, getContentText: () => 'Too Many Requests' }; }
@@ -105,6 +112,6 @@ function makeEnv(opt = {}){
   vm.createContext(env);
   vm.runInContext(code, env);
   // tabs: 탭 목록(왼쪽부터). 탭을 지우는 시험은 이 배열에서 빼면 된다
-  return { env, grid, props, cache, files, trashed, steam, sheets, tabs };
+  return { env, grid, props, cache, files, trashed, steam, sheets, tabs, hook };
 }
 module.exports = makeEnv;

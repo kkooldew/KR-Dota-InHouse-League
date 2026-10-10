@@ -634,6 +634,62 @@ assert(props.ADMIN_KEY === key, 'running setup again keeps the admin key');
   assert(JSON.stringify(league().league.players) === before && !('leaguePending' in seasons()[2]), 'carry: finishing twice gives the same players');
 })();
 
+// ── 새 등록 알림: 등록이 들어오면 디스코드 웹후크로 바로 알린다 (버전 14) ──
+(() => {
+  const S = makeEnv({ fresh: true });
+  const post = body => JSON.parse(S.env.doPost({ postData: { contents: JSON.stringify(body) } }).text);
+  const clearRL = () => Object.keys(S.cache).filter(k => k.startsWith('rl:')).forEach(k => delete S.cache[k]);
+  S.env.setup();
+  const key = S.props.ADMIN_KEY;
+  const form = (n, extra = {}) => { clearRL(); return post({ action: 'register', nickname: '선수' + n, steam: 'https://steamcommunity.com/profiles/7656119800000' + (4000 + n), discord: 'user' + n,
+    mmr: 3000 + n, peak: 5000 + n, prefs: [4, 1, 2, 3], ...extra }); };
+  const hookUrl = 'https://discord.com/api/webhooks/123456789012345678/' + 'A'.repeat(68);
+  const set = (webhook, k = key) => post({ action: 'adminConfig', key: k, webhook });
+  const log = () => (S.sheets['운영 기록'] ? S.sheets['운영 기록'].grid.map(row => row[3]) : []);
+
+  let r = form(1);
+  assert(r.ok && S.hook.sent.length === 0 && post({ action: 'ping', key }).alert === false, 'alert: off until a webhook is set; nothing is sent');
+  const staffKey = post({ action: 'adminStaffAdd', key, name: '도우미' }).key;
+  r = set(hookUrl, staffKey);
+  assert(!r.ok && r.code === 'owner' && !('ALERT_WEBHOOK' in S.props), 'alert: only the owner key may set the webhook');
+  assert(['http://discord.com/api/webhooks/123456789012345678/' + 'A'.repeat(68), 'https://evil.example/api/webhooks/123456789012345678/' + 'A'.repeat(68),
+    'https://discord.com.evil.example/api/webhooks/123456789012345678/' + 'A'.repeat(68), hookUrl + '/slack', hookUrl + '?wait=true', 'webhook'].every(u => set(u).code === 'webhook')
+    && S.hook.sent.length === 0 && !('ALERT_WEBHOOK' in S.props), 'alert: only a discord webhook address is accepted (nothing is fetched otherwise)');
+  S.hook.code = 404;
+  r = set(hookUrl);
+  assert(!r.ok && r.code === 'webhook' && /올리지 못했습니다/.test(r.error) && !('ALERT_WEBHOOK' in S.props) && S.hook.sent.length === 1, 'alert: a webhook that does not take the test message is not saved');
+  S.hook.code = 204; S.hook.sent.length = 0;
+  r = set('  ' + hookUrl + ' ');
+  assert(r.ok && r.alert === true && S.props.ALERT_WEBHOOK === hookUrl && S.hook.sent.length === 1 && S.hook.sent[0].url === hookUrl && /알림을 켰습니다/.test(S.hook.sent[0].body.content)
+    && S.hook.sent[0].options.method === 'post' && S.hook.sent[0].options.contentType === 'application/json' && log().includes('새 등록 알림 켜기'),
+    'alert: setting the webhook posts a test message there, and it is logged');
+  assert(!JSON.stringify(r).includes('webhooks') && !JSON.stringify(post({ action: 'ping', key: staffKey })).includes('webhooks') && post({ action: 'ping', key: staffKey }).alert === true
+    && !('alert' in JSON.parse(S.env.doGet({ parameter: {} }).text)), 'alert: the address is never sent back; the public status does not mention it');
+
+  S.hook.sent.length = 0;
+  r = form(2, { nickname: '**굵** `코` @everyone' });
+  let sent = (S.hook.sent[0] || { body: { content: '' } }).body;
+  assert(r.ok && S.hook.sent.length === 1 && sent.content.includes("`**굵** '코' @everyone`") && sent.content.includes('디스코드 `user2` · MMR 3002 (최고 5002) · 서폿 > 캐리 > 미드 > 오프')
+    && sent.content.includes('스팀 <https://steamcommunity.com/profiles/76561198000004002>') && sent.content.includes('승인해 주세요') && JSON.stringify(sent.allowed_mentions) === '{"parse":[]}',
+    'alert: a new registration is announced with its details; the nickname cannot format the message or ping anyone');
+  r = form(2, { nickname: '고친이름', mmr: 3500 });
+  assert(r.ok && r.updated === true && S.hook.sent.length === 1, 'alert: editing a registration is not announced again');
+  clearRL();
+  r = post({ action: 'register', nickname: '봇', steam: 'https://steamcommunity.com/profiles/76561198000004009', discord: 'user9', mmr: 3000, prefs: [1, 2, 3, 4], website: 'spam' });
+  const refused = form(3, { nickname: '고친이름' });
+  assert(r.ok && !refused.ok && S.hook.sent.length === 1, 'alert: the honeypot and refused registrations are not announced');
+  S.hook.down = true;
+  r = form(4);
+  assert(r.ok && r.updated === false && S.tabs[0].grid.length === 4, 'alert: when discord cannot be reached the registration still goes through');
+  S.hook.down = false; S.hook.code = 500;
+  r = form(5, { peak: undefined });
+  assert(r.ok && S.hook.sent.length === 2 && !S.hook.sent[1].body.content.includes('최고'), 'alert: a failed post is ignored too; an empty peak MMR is left out');
+  S.hook.code = 204;
+  r = set('');
+  assert(r.ok && r.alert === false && !('ALERT_WEBHOOK' in S.props) && log().includes('새 등록 알림 끄기') && form(6).ok && S.hook.sent.length === 2, 'alert: turned off again, nothing more is sent');
+  assert(set('', staffKey).code === 'owner', 'alert: turning it off also needs the owner key');
+})();
+
 // 등록이 가득 찼을 때(3000줄): 새 등록은 받지 않지만, 이미 등록한 사람은 승인 전이면 계속 고칠 수 있다
 (() => {
   const S = makeEnv({ fresh: true });

@@ -196,6 +196,7 @@ function adminStatus_() {
   return Object.assign(statusInfo_(), {
     registered: Math.max(0, getSheet_().getLastRow() - 1),
     pastSeasons: seasons_().slice(0, -1).map(s => s.name),
+    alert: !!PropertiesService.getScriptProperties().getProperty('ALERT_WEBHOOK'),   // 새 등록 알림이 켜져 있는지만. 웹후크 주소는 돌려주지 않는다
     role: ACTOR && !ACTOR.owner ? 'staff' : 'owner',
     name: ACTOR ? ACTOR.name : OWNER_NAME
   });
@@ -214,7 +215,63 @@ function setConfig_(body) {
     const now = seasons_().slice(-1)[0].name;
     if (old !== now) logAlone_('시즌 이름 고침', now, old + ' → ' + now);
   }
+  if (typeof body.webhook === 'string') setAlert_(body.webhook.trim());
   return adminStatus_();
+}
+
+/* =========================================================
+   새 등록 알림 (버전 14)
+   ========================================================= */
+// 새 선수 등록이 들어오면 디스코드 채널에 바로 알린다(운영자가 2026-10-09에 요청). 서버가 등록을 받는 그 자리에서 디스코드 웹후크로 글을 올리므로
+// 봇이 꺼져 있어도 되고, 봇이 명단을 읽으러 올 때까지 기다리지 않는다. 어느 채널에 알릴지는 운영자가 그 채널에서 웹후크를 만들어 정한다.
+//  - 웹후크 주소는 그 채널에 글을 올릴 수 있는 비밀 값이다. 스크립트 속성 ALERT_WEBHOOK 에만 두고 어떤 답에도 싣지 않는다. 주인 키로만 바꾼다.
+//  - 알림을 보내지 못해도 등록은 끝낸다.
+const WEBHOOK_RE = /^https:\/\/(?:(?:ptb|canary)\.)?discord(?:app)?\.com\/api\/webhooks\/\d{5,25}\/[A-Za-z0-9_-]{20,200}$/;
+
+function setAlert_(url) {
+  if (!ACTOR || !ACTOR.owner) fail_('새 등록 알림은 주인 키로만 바꿀 수 있습니다. 주인 키를 가진 리그 관리자에게 부탁해 주세요.', 'owner');
+  const props = PropertiesService.getScriptProperties();
+  const had = !!props.getProperty('ALERT_WEBHOOK');
+  if (!url) {
+    props.deleteProperty('ALERT_WEBHOOK');
+    if (had) logAlone_('새 등록 알림 끄기', '', '');
+    return;
+  }
+  if (!WEBHOOK_RE.test(url))
+    fail_('디스코드 웹후크 주소가 아닙니다. 디스코드에서 복사한 주소(https://discord.com/api/webhooks/…)를 그대로 넣어 주세요.', 'webhook');
+  // 그 주소로 글이 올라가는지 먼저 본다. 올라가지 않으면 켜지 않는다
+  if (!sendAlert_(url, '✅ 새 선수 등록 알림을 켰습니다. 새 등록이 들어오면 이 채널에 알립니다.'))
+    fail_('그 웹후크로 글을 올리지 못했습니다. 주소를 다시 확인해 주세요. 웹후크를 지웠다면 새로 만들어야 합니다.', 'webhook');
+  props.setProperty('ALERT_WEBHOOK', url);
+  logAlone_('새 등록 알림 켜기', '', had ? '웹후크 주소를 바꿈' : '');
+}
+
+// 디스코드 웹후크로 글 하나를 올린다. 올렸으면 true. 실패해도 오류를 내지 않는다.
+// 닉네임 같은 남의 글이 섞이므로 멘션 알림은 모두 끈다(@everyone 이나 역할을 적어 내도 울리지 않는다)
+function sendAlert_(url, content) {
+  try {
+    const res = UrlFetchApp.fetch(url, { method: 'post', contentType: 'application/json', muteHttpExceptions: true,
+      payload: JSON.stringify({ content: String(content).slice(0, 1900), allowed_mentions: { parse: [] } }) });
+    const code = res.getResponseCode();
+    if (code >= 200 && code < 300) return true;
+    console.warn('디스코드 웹후크가 글을 받지 않았습니다 (HTTP ' + code + ')');
+  } catch (err) {
+    console.warn('디스코드 웹후크에 닿지 못했습니다: ' + err);
+  }
+  return false;
+}
+
+// 방금 들어온 새 등록을 알린다. 알림이 꺼져 있으면 아무것도 하지 않는다. 잠금 밖에서 부른다(디스코드를 기다리는 동안 다른 등록을 막지 않게).
+// 닉네임은 글 모양을 바꾸거나 링크가 되지 않게 코드 글씨(`…`) 안에 넣는다
+function notifyNew_(p) {
+  const url = PropertiesService.getScriptProperties().getProperty('ALERT_WEBHOOK');
+  if (!url) return;
+  const code = v => '`' + (String(v == null ? '' : v).replace(/`/g, "'").replace(/\s+/g, ' ').trim() || '?') + '`';
+  sendAlert_(url, '🆕 새 선수 등록: ' + code(p.nickname) +
+    '\n디스코드 ' + code(p.discord) + ' · MMR ' + p.mmr + (p.peak === null ? '' : ' (최고 ' + p.peak + ')') + ' · ' + p.prefs.map(n => PREF_LABELS[n - 1]).join(' > ') +
+    '\n스팀 <' + p.steam + '>' +
+    (p.returning ? '\n지난 시즌에 승인됐던 선수입니다' + (p.from ? ' (' + code(p.from) + ')' : '') + '. 그때의 MMR을 이어받았습니다.' : '') +
+    '\n리그 관리자 페이지에서 확인하고 승인해 주세요.');
 }
 
 /* =========================================================
@@ -714,6 +771,8 @@ function register_(body) {
   });
 
   cache.put(rlKey, '1', 30);
+  // 새로 들어온 등록만 알린다(이미 낸 등록을 고친 것은 알리지 않는다)
+  if (!result.updated) notifyNew_({ nickname, discord, steam: steam.url, mmr: result.mmr, peak, prefs, returning: result.returning, from: result.from });
   return result;
 }
 

@@ -144,6 +144,15 @@ details.by-file[open] summary{margin-bottom:10px}
       <p class="season-note">새 시즌을 시작하면 <b>순위(승·패)와 경기 기록만 새로 시작합니다.</b> 등록 명단과 선수는 그대로 이어지고, 선수는 다시 등록하지 않습니다.
         끝난 시즌의 명단·순위·경기 기록은 시트에 그 시즌 이름이 붙은 탭으로 남습니다.
         등록을 받을지는 시즌과 상관없이 위의 <b>등록 열기·닫기</b>로 정합니다. <span id="pastSeasons"></span></p>
+      <div class="season-row" id="alertRow" hidden>
+        <label for="webhook" class="dim" style="font-size:13.5px">새 등록 알림</label>
+        <input type="password" id="webhook" autocomplete="off" placeholder="디스코드 웹후크 주소" aria-describedby="alertNote">
+        <button class="btn sm" type="button" id="btnAlert">알림 켜기</button>
+        <button class="btn sm ghost" type="button" id="btnAlertOff" hidden>끄기</button>
+        <span class="dim" id="alertState" style="font-size:12.5px"></span>
+      </div>
+      <p class="season-note" id="alertNote" hidden>새 선수 등록이 들어오면 디스코드 채널에 바로 알립니다. 알림을 받을 채널에서 <b>채널 편집 → 연동 → 웹후크 → 새 웹후크</b>를 만들고 <b>웹후크 URL 복사</b>로 받은 주소를 넣어 주세요.
+        이 주소를 아는 사람은 그 채널에 글을 올릴 수 있으니 다른 사람에게 보여 주지 마세요. 주인 키로만 바꿀 수 있습니다.</p>
     </section>
 
     <section class="panel">
@@ -354,6 +363,12 @@ details.by-file[open] summary{margin-bottom:10px}
     $('#whoami').hidden = !hasStaff();
     $('#newSeason').disabled = !owner; $('#btnNewSeason').disabled = !owner; $('#ownerOnlySeason').hidden = owner;
     $('#staffPanel').hidden = !(hasStaff() && owner);
+    // 새 등록 알림(서버 버전 14): 주인 키로만 바꾼다. 서버는 켜져 있는지만 알려 주고 웹후크 주소는 돌려주지 않는다
+    const canAlert = owner && (status.version || 0) >= 14;
+    $('#alertRow').hidden = !canAlert; $('#alertNote').hidden = !canAlert;
+    $('#alertState').textContent = status.alert ? '켜져 있습니다.' : '꺼져 있습니다.';
+    $('#btnAlert').textContent = status.alert ? '주소 바꾸기' : '알림 켜기';
+    $('#btnAlertOff').hidden = !status.alert;
     if(hasStaff() && owner && !staffSeen){ staffSeen = true; loadStaff(); }
     const auto = autoLink(), box = $('#byFile');
     $('#autoLink').hidden = !auto; $('#linkHint').hidden = !auto; $('#fileWhen').hidden = !auto;
@@ -378,6 +393,24 @@ details.by-file[open] summary{margin-bottom:10px}
   });
   $('#btnSeason').addEventListener('click', async () => {
     try{ status = await adminPost({action: 'adminConfig', season: $('#season').value}); renderStatus(); toast('시즌 이름을 고쳤습니다'); }
+    catch(err){ toast(err.message); }
+  });
+  /* ---------- 새 등록 알림: 디스코드 웹후크 주소를 서버에 맡긴다 (이 페이지에는 남기지 않는다) ---------- */
+  $('#btnAlert').addEventListener('click', async () => {
+    const url = $('#webhook').value.trim();
+    if(!url){ toast('디스코드 웹후크 주소를 넣어 주세요'); $('#webhook').focus(); return; }
+    $('#btnAlert').disabled = true;
+    try{
+      status = await adminPost({action: 'adminConfig', webhook: url});
+      $('#webhook').value = '';
+      renderStatus();
+      toast('새 등록 알림을 켰습니다. 그 채널에 확인 글을 올렸습니다.');
+    }catch(err){ toast(err.message); }
+    finally{ $('#btnAlert').disabled = false; }
+  });
+  $('#btnAlertOff').addEventListener('click', async () => {
+    if(!confirm('새 등록 알림을 끌까요? 다시 켜려면 웹후크 주소를 다시 넣어야 합니다.')) return;
+    try{ status = await adminPost({action: 'adminConfig', webhook: ''}); renderStatus(); toast('새 등록 알림을 껐습니다'); }
     catch(err){ toast(err.message); }
   });
   /* ---------- 새 시즌 시작: 바뀌는 것들을 보여 주고 "시즌 변경"을 입력받는다 ---------- */
