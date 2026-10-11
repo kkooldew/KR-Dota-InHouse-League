@@ -672,6 +672,10 @@ assert(props.ADMIN_KEY === key, 'running setup again keeps the admin key');
   assert(r.ok && S.hook.sent.length === 1 && sent.content.includes("`**굵** '코' @everyone`") && sent.content.includes('디스코드 `user2` · MMR 3002 (최고 5002) · 서폿 > 캐리 > 미드 > 오프')
     && sent.content.includes('스팀 <https://steamcommunity.com/profiles/76561198000004002>') && sent.content.includes('승인해 주세요') && JSON.stringify(sent.allowed_mentions) === '{"parse":[]}',
     'alert: a new registration is announced with its details; the nickname cannot format the message or ping anyone');
+  // 도타 2 친구 번호(steamID3 의 번호) = 스팀 고유 번호 − 76561197960265728. steamid.io 가 보여 주는 값과 같다
+  assert(sent.content.includes('도타 2 친구 번호 `39738274` · steamID3 `[U:1:39738274]`') && S.env.friendId_('76561197960265729') === '1' && S.env.friendId_('76561197990650432') === '30384704'
+    && S.env.friendId_('76561202255233023') === '4294967295' && S.env.friendId_('76561197960265728') === '' && S.env.friendId_('id:custom') === '' && S.env.friendId_('') === '',
+    'alert: the dota 2 friend id (the number in steamID3) is worked out from the steam id, also past the 7656119… range');
   r = form(2, { nickname: '고친이름', mmr: 3500 });
   assert(r.ok && r.updated === true && S.hook.sent.length === 1, 'alert: editing a registration is not announced again');
   clearRL();

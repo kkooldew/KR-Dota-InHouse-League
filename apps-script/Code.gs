@@ -17,7 +17,7 @@
  * 코드를 고친 뒤에는 배포 → 배포 관리 → 수정(연필) → 버전: 새 버전 → 배포 를 눌러야 반영됩니다.
  */
 
-const SERVER_VERSION = 14;                          // 서버를 고칠 때마다 올린다. 상태 응답에 실려서 새 버전이 배포됐는지 밖에서 확인할 수 있다
+const SERVER_VERSION = 15;                         // 서버를 고칠 때마다 올린다. 상태 응답에 실려서 새 버전이 배포됐는지 밖에서 확인할 수 있다
 const SHEET_NAME = '선수등록';                             // 등록 탭 이름의 앞부분. 시즌마다 '선수등록 (시즌 이름)' 탭을 따로 쓴다
 // 칸을 더할 때는 맨 뒤에 붙이고 LAYOUT 을 올린다. 이미 있는 탭에는 ready_ 가 새 머리글을 채워 넣는다
 // 처리자·처리시각: 그 등록의 상태(승인·제외·대기)를 마지막으로 바꾼 리그 관리자와 그 시각 (버전 11)
@@ -261,14 +261,27 @@ function sendAlert_(url, content) {
   return false;
 }
 
+// 스팀 고유 번호(steamID64)에서 계정 번호를 낸다. 도타 2에서 친구를 찾을 때 쓰는 친구 번호이고, steamID3 `[U:1:번호]`의 그 번호다
+// (steamid.io 가 보여 주는 값과 같다). 고유 번호는 76561197960265728 + 계정 번호인데, 17자리 수는 자바스크립트 숫자로 정확히 다룰 수 없어서
+// 앞 7자리와 뒤 10자리로 나눠 뺀다. 고유 번호 모양이 아니면 ''
+function friendId_(id64) {
+  const m = String(id64 == null ? '' : id64).match(/^(\d{7})(\d{10})$/);
+  if (!m) return '';
+  const n = (Number(m[1]) - 7656119) * 1e10 + Number(m[2]) - 7960265728;
+  return Number.isInteger(n) && n > 0 && n <= 4294967295 ? String(n) : '';
+}
+
 // 방금 들어온 새 등록을 알린다. 알림이 꺼져 있으면 아무것도 하지 않는다. 잠금 밖에서 부른다(디스코드를 기다리는 동안 다른 등록을 막지 않게).
 // 닉네임은 글 모양을 바꾸거나 링크가 되지 않게 코드 글씨(`…`) 안에 넣는다
 function notifyNew_(p) {
   const url = PropertiesService.getScriptProperties().getProperty('ALERT_WEBHOOK');
   if (!url) return;
   const code = v => '`' + (String(v == null ? '' : v).replace(/`/g, "'").replace(/\s+/g, ' ').trim() || '?') + '`';
+  const friend = friendId_(String(p.steamKey || '').replace(/^s:/, ''));
   sendAlert_(url, '🆕 새 선수 등록: ' + code(p.nickname) +
     '\n디스코드 ' + code(p.discord) + ' · MMR ' + p.mmr + (p.peak === null ? '' : ' (최고 ' + p.peak + ')') + ' · ' + p.prefs.map(n => PREF_LABELS[n - 1]).join(' > ') +
+    // 도타 2 안에서 프로필을 찾을 때 넣는 번호. 검토하는 사람이 바로 찾아볼 수 있게 적는다(운영자가 2026-10-11에 요청)
+    (friend ? '\n도타 2 친구 번호 ' + code(friend) + ' · steamID3 ' + code('[U:1:' + friend + ']') : '') +
     '\n스팀 <' + p.steam + '>' +
     (p.returning ? '\n지난 시즌에 승인됐던 선수입니다' + (p.from ? ' (' + code(p.from) + ')' : '') + '. 그때의 MMR을 이어받았습니다.' : '') +
     '\n리그 관리자 페이지에서 확인하고 승인해 주세요.');
@@ -772,7 +785,7 @@ function register_(body) {
 
   cache.put(rlKey, '1', 30);
   // 새로 들어온 등록만 알린다(이미 낸 등록을 고친 것은 알리지 않는다)
-  if (!result.updated) notifyNew_({ nickname, discord, steam: steam.url, mmr: result.mmr, peak, prefs, returning: result.returning, from: result.from });
+  if (!result.updated) notifyNew_({ nickname, discord, steam: steam.url, steamKey: steam.key, mmr: result.mmr, peak, prefs, returning: result.returning, from: result.from });
   return result;
 }
 
