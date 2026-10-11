@@ -2575,7 +2575,11 @@ async def change_positions(interaction: discord.Interaction, first: app_commands
 # ── /도움말: 내가 쓸 수 있는 명령어 ─────────────────────────────
 @bot.tree.command(name="도움말", description="내가 쓸 수 있는 퍼그나봇 명령어를 보여 줍니다", guild=GUILD)
 async def show_help(interaction: discord.Interaction) -> None:
-    """입력한 사람의 자리(리그 관리자, 리그 운영진, 리그 선수, 그 밖)에 맞춰, 쓸 수 있는 명령어만 본인에게 보여 준다."""
+    """입력한 사람의 자리(리그 관리자, 리그 운영진, 리그 선수, 그 밖)에 맞춰, 쓸 수 있는 명령어만 본인에게 보여 준다.
+    선수가 쓰는 명령어(/참여·/참여취소·/내전하자·/포지션변경·/도움말)는 모두 '리그 선수' 칸에 모은다
+    (운영자가 2026-10-12에 정함. 전에는 /참여·/참여취소·/포지션변경·/도움말 이 '누구나' 칸에 있었다).
+    리그 선수가 아닌 사람에게도 그 칸을 보여 준다: 등록하고 승인을 받으면 무엇을 쓰게 되는지 알 수 있게.
+    목록만 그렇게 묶은 것이고, 명령어를 실제로 받는 조건은 그대로다(/참여 는 누구나 입력할 수 있고, 등록이 확인되지 않은 사람은 팀을 짤 때 빠진다)."""
     user = interaction.user
     manager = is_manager(user)
     staff = manager or await is_admin(user, interaction.channel_id == ADMIN_CHANNEL_ID)
@@ -2587,17 +2591,15 @@ async def show_help(interaction: discord.Interaction) -> None:
     elif player:
         head = "**리그 선수**가 쓸 수 있는 명령어예요."
     else:
-        head = "지금 쓸 수 있는 명령어예요. 선수 등록을 하고 승인을 받으면 `/내전하자` 도 쓸 수 있어요."
+        head = "**리그 선수**가 쓰는 명령어예요. 선수 등록을 하고 승인을 받으면 쓸 수 있어요."
     parts = ["**퍼그나봇 명령어**\n" + head]
-    parts.append("**누구나**\n"
+    where = f"<#{bot.want_channel_id}> 에서 써요. " if bot.want_channel_id else ""
+    parts.append("**리그 선수**\n"
                  "`/참여` · `/참여취소` — 내전 모집 글에서 참여를 신청하거나 취소해요.\n"
-                 "`/포지션변경` — 등록한 포지션 순서를 바꿔요. 1지망부터 차례로 골라요. (선수 등록을 한 사람)\n"
+                 f"`/내전하자` — {where}지금 내전을 하고 싶다고 알려요. 대화방의 모집판에 이름이 올라가고 한 시간 동안 유지돼요. "
+                 f"모집판의 **참여 희망** 버튼을 눌러도 돼요. {PLAYERS_NEEDED}명이 모이면 리그 운영진에게 알려요.\n"
+                 "`/포지션변경` — 등록한 포지션 순서를 바꿔요. 1지망부터 차례로 골라요.\n"
                  "`/도움말` — 이 안내를 다시 봐요.")
-    if player:
-        where = f"<#{bot.want_channel_id}> 에서 써요. " if bot.want_channel_id else ""
-        parts.append("**리그 선수**\n"
-                     f"`/내전하자` — {where}지금 내전을 하고 싶다고 알려요. 대화방의 모집판에 이름이 올라가고 한 시간 동안 유지돼요. "
-                     f"모집판의 **참여 희망** 버튼을 눌러도 돼요. {PLAYERS_NEEDED}명이 모이면 리그 운영진에게 알려요.")
     if staff:
         parts.append("**리그 운영진**\n"
                      f"`/내전생성` — <#{ADMIN_CHANNEL_ID}> 에서 써요. 내전 모집을 열어요. **마감** 칸에 마감 시각을 적을 수 있어요. 동시에 {MAX_GAMES}개까지 진행할 수 있어요.\n"
