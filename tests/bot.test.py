@@ -2135,7 +2135,7 @@ async def main():
     check("**리그 운영진**이 쓸 수 있는 명령어예요." in t, "/도움말: 운영진 채널에서 입력한 사람은 리그 운영진이다 (리그 운영진 역할을 따로 정하지 않았을 때)")
     mod.bot.player_role_id = 0
 
-    # ── 시즌 종료 (서버 버전 16, 운영자가 2026-10-12에 정함): 시즌 종료 시각 전에 시작한 경기까지만 기록한다. 끝난 시각이 그 뒤여도 그 경기는 기록한다 ──
+    # ── 시즌 종료 (서버 버전 16, 운영자가 2026-10-11에 정함): 시즌 종료 시각 전에 시작한 경기까지만 기록한다. 끝난 시각이 그 뒤여도 그 경기는 기록한다 ──
     mod.run_matchmaker = fake_matchmaker
     mod.SYNC_URL, mod.SYNC_KEY = "https://example.invalid/exec", "k"
     ms = lambda at: int(at * 1000)
