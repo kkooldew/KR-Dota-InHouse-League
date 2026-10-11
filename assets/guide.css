@@ -88,6 +88,11 @@ table.g-table{width:100%;border-collapse:collapse;font-size:14px}
 .dc-sep span{position:relative;top:-10px;background:#313338;color:#949ba4;font-size:12px;padding:0 8px}
 .dc-sep.first{margin-top:22px}
 .dc-pre{margin:4px 0 0;background:#1e1f22;border:1px solid #26272b;border-radius:4px;padding:7px 9px;font:12.5px/1.5 Consolas,'D2Coding',monospace;white-space:pre-wrap;overflow-wrap:anywhere}
+/* 글에 달린 버튼 */
+.dc-btns{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px}
+.dc-btn{border-radius:8px;padding:6px 16px;font-size:14px;font-weight:500;color:#fff;white-space:nowrap}
+.dc-btn.ok{background:#248046}
+.dc-btn.gray{background:#4e5058}
 /* 입력 칸: 명령어를 어떻게 넣는지 */
 .dc-input{display:flex;flex-wrap:wrap;align-items:center;gap:5px 6px;margin:12px 16px 0;background:#383a40;border-radius:8px;padding:8px 12px;font-size:14.5px}
 .dc-input .lab{font-size:11px;font-weight:700;color:#949ba4;border:1px solid #4e5058;border-radius:3px;padding:0 5px;line-height:17px;margin-right:2px}

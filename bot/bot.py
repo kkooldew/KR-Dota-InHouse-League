@@ -30,6 +30,7 @@
   (등록 명단을 5분마다 읽어 맞춘다. 봇에 역할 관리 권한이 있고, 봇의 역할이 그 역할보다 위에 있어야 한다)
 - 리그 선수가 대화방에서 /내전하자  → 한 시간 동안 "지금 내전을 하고 싶은 사람"으로 남고, 10명이 모이면 대화방에서 리그 운영진 역할을 멘션해 알림
   (대화방과 알릴 역할은 리그 관리자가 /내전하자설정 으로 정한다)
+  · 대화방에 모집판(기다리는 사람들과 '참여 희망' 버튼이 있는 글)을 하나 둔다. 버튼을 누르면 /내전하자 와 같고, 누른 사람에게만 '참여 취소' 버튼이 보인다
 - /도움말  → 입력한 사람이 쓸 수 있는 명령어만 본인에게 보여 줌
 - 진행 중인 모집과 역할 설정은 state.json 에 적어 두어, 봇을 껐다 켜도 이어짐
 
@@ -87,7 +88,10 @@ MAX_GAMES = max(1, int(config.get("max_games", 3) or 3))
 # 리그 운영진이 마감 뒤의 명령어(/시작·/승리 등)를 그 글에서 써야 하므로 기본은 잠그지 않는다. 리그 운영진 역할에 그 권한을 준 뒤에 true 로 바꾼다
 LOCK_CLOSED = bool(config.get("lock_closed_threads", False))
 RESTART_SECONDS = 300  # /재모집: 참여 신청을 모두 비우고 이만큼 뒤에 다시 마감한다
-WANT_SECONDS = 3600  # /내전하자 로 알린 상태가 유지되는 시간. 이 시간이 지나야 다시 쓸 수 있다
+WANT_SECONDS = 3600  # /내전하자 로 알린 상태가 유지되는 시간
+WANT_TICK_SECONDS = 30  # 모집판을 이만큼마다 확인해, 한 시간이 지나 빠진 사람과 그사이 모집에 /참여 한 사람을 반영한다
+WANT_ALERT_GAP = 600  # 10명이 모였다고 리그 운영진을 부른 뒤 이만큼은 다시 부르지 않는다 (참여 희망·취소를 되풀이해 알림이 거듭 울리지 않게)
+WANT_NAMES = 50  # 모집판에 적는 이름 수. 메시지 하나(2000자)에 들어가게 그 뒤는 '외 N명'으로 줄인다
 KST = timezone(timedelta(hours=9))  # 마감 시각 입력과 모집 글 제목에 쓰는 한국 시간
 DAY_STARTS_AT = 6  # 하루는 한국 시간 오전 6시에 바뀐다 (매니저의 팀 편성과 같은 기준)
 ROLE_NAMES = ["캐리", "미드", "오프", "서폿", "서폿"]
@@ -179,6 +183,13 @@ class InhouseBot(discord.Client):
         self.want_alerted = False  # 10명이 모였다고 이미 알렸는지. 10명 아래로 내려가면 다시 알릴 수 있다
         self.want_channel_id = 0   # /내전하자 를 쓰는 대화방. 0이면 어느 채널에서나 받고, 알림은 입력한 채널에 올린다
         self.want_role_id = 0      # 10명이 모였을 때 멘션할 리그 운영진 역할 (/내전하자설정 으로 정한다)
+        # 모집판: 대화방에 올려 둔, 기다리는 사람들과 참여 희망 버튼이 있는 글 {"channel_id", "message_id", "who": 적어 둔 사람들}. 없으면 None
+        self.want_board: dict | None = None
+        self.want_alert_at = 0.0   # 마지막으로 리그 운영진을 부른 시각
+        self.want_lock = asyncio.Lock()  # 모집판을 올리고 지우는 일이 겹치지 않게 한다
+        self.want_seq = 0          # 모집판을 맞춰 달라는 요청의 번호. 기다리던 요청은 가장 나중 것만 한다
+        self.want_fresh = False    # 기다리는 요청 가운데 새로 올려 달라는 것이 있는지
+        self.want_task: asyncio.Task | None = None
 
     @property
     def current(self) -> Recruitment | None:
@@ -197,6 +208,10 @@ class InhouseBot(discord.Client):
         self.league_lock = asyncio.Lock()
         self.voice_lock = asyncio.Lock()
         self.role_lock = asyncio.Lock()
+        self.want_lock = asyncio.Lock()
+        # 모집판의 버튼은 봇을 껐다 켠 뒤에도 눌려야 한다. 켤 때마다 다시 등록해 둔다
+        self.add_view(WantBoard())
+        self.add_view(WantLeave())
         # 서버 단위로 등록하면 슬래시 명령어가 즉시 반영됨
         await self.tree.sync(guild=GUILD)
 
@@ -215,6 +230,7 @@ class InhouseBot(discord.Client):
             print(f"내전하자(/내전하자): {await want_status()}")
             print(f"음성 채널 이동(/시작·/종료): {await voice_status()}")
             self.role_task = asyncio.create_task(role_loop())
+            self.want_task = asyncio.create_task(want_loop())
 
 
 bot = InhouseBot()
@@ -543,7 +559,7 @@ def save_state() -> None:
             "voice": bot.voice,
             "manager_role_id": bot.manager_role_id,
             "want": {"users": {str(uid): at for uid, at in bot.wants.items()}, "joined": sorted(bot.want_joined), "alerted": bot.want_alerted,
-                     "channel_id": bot.want_channel_id, "role_id": bot.want_role_id},
+                     "channel_id": bot.want_channel_id, "role_id": bot.want_role_id, "board": bot.want_board, "alert_at": bot.want_alert_at},
         }
         tmp = STATE_PATH.with_suffix(".tmp")
         tmp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
@@ -587,6 +603,11 @@ async def restore_state() -> None:
         bot.want_alerted = bool(want.get("alerted"))
         bot.want_channel_id = int(want.get("channel_id") or 0)
         bot.want_role_id = int(want.get("role_id") or 0)
+        board = want.get("board")  # 대화방에 올려 둔 모집판. 켠 뒤에도 그 글을 고치고 지울 수 있게 이어받는다
+        if isinstance(board, dict) and isinstance(board.get("channel_id"), int) and isinstance(board.get("message_id"), int):
+            bot.want_board = {"channel_id": board["channel_id"], "message_id": board["message_id"],
+                              "who": [x for x in board.get("who") or [] if isinstance(x, int)]}
+        bot.want_alert_at = float(want["alert_at"]) if isinstance(want.get("alert_at"), (int, float)) else 0.0
     # 내전들. 예전 상태 파일(내전이 하나뿐이던 때)에는 current 하나가 적혀 있다
     saved = data.get("games") if isinstance(data.get("games"), list) else [data.get("current")]
     bot.games, bot.unrestored, dropped = [], [], False
@@ -2094,9 +2115,14 @@ async def leave(interaction: discord.Interaction) -> None:
 
 
 # ── /내전하자: 지금 내전을 하고 싶다고 알리기 ───────────────────────
-# 리그 선수가 대화방에서 /내전하자 를 입력하면 한 시간 동안 "지금 내전을 하고 싶은 사람"으로 남고, 그 시간이 지나야 다시 쓸 수 있다.
+# 리그 선수가 대화방에서 /내전하자 를 입력하면(또는 모집판의 참여 희망 버튼을 누르면) 한 시간 동안 "지금 내전을 하고 싶은 사람"으로 남는다.
 # 그런 사람이 10명이 되면 대화방에서 리그 운영진 역할을 멘션해 로비(모집)를 만들어 달라고 알린다 (운영자가 2026-10-09에 정한 기능).
-# 따로 도는 타이머는 없다. 명령어가 들어올 때마다 한 시간이 지난 사람을 빼고 센다.
+# 한 시간이 지난 사람은 명령어가 들어올 때와 모집판을 확인할 때(want_loop) 빼고 센다.
+# 모집판(2026-10-11, 운영자가 정함: 본인에게만 답하면 서로 하고 싶은지 몰라 10명이 모이지 않는다):
+#  - 대화방에 기다리는 사람들과 '참여 희망' 버튼이 있는 글을 하나 둔다. 버튼을 누르면 /내전하자 를 입력한 것과 같다.
+#  - 등록한 사람에게만 보이는 답에 '참여 취소' 버튼을 단다. 이미 등록한 사람이 참여 희망을 다시 눌러도 그 버튼이 보인다.
+#  - 사람이 늘 때마다 앞의 글을 지우고 새로 올려 대화방 맨 아래에 오게 한다. 줄 때(참여 취소, 한 시간이 지남, 모집에 /참여)는 그 자리에서 고치고,
+#    아무도 없으면 지운다. 이름은 멘션으로 적되 알림은 울리지 않는다. 알림은 지금처럼 10명이 모였을 때 리그 운영진에게만 간다.
 def wanting(now: float | None = None) -> list[int]:
     """지금 내전을 기다리는 사람들. 한 시간이 지난 사람은 지우고, 그사이 모집에 /참여 한 사람은 세지 않는다."""
     now = time.time() if now is None else now
@@ -2182,9 +2208,116 @@ async def announce_want(channel_id: int, count: int) -> None:
                           "리그 관리자가 `/내전하자설정` 의 **운영진역할** 칸에서 정해 주세요.")
 
 
-@bot.tree.command(name="내전하자", description="지금 내전을 하고 싶다고 알립니다. 한 시간 동안 유지되고, 10명이 모이면 리그 운영진에게 알려요 (리그 선수)", guild=GUILD)
-async def want_game(interaction: discord.Interaction) -> None:
-    if bot.want_channel_id and interaction.channel_id != bot.want_channel_id:
+def board_text(who: list[int]) -> str:
+    """모집판의 글. 기다리는 사람은 멘션으로 적는다(알림이 울리지 않게 보낸다). 아주 많으면 앞에서부터 WANT_NAMES 명만 적는다"""
+    names = " · ".join(f"<@{uid}>" for uid in who[:WANT_NAMES]) + (f" 외 {len(who) - WANT_NAMES}명" if len(who) > WANT_NAMES else "")
+    goal = f"{PLAYERS_NEEDED}명이 모이면 리그 운영진을 부릅니다" if len(who) < PLAYERS_NEEDED else f"{PLAYERS_NEEDED}명이 모였습니다"
+    return (f"🙋 지금 내전을 하고 싶어 하는 사람이 **{len(who)}명** 있습니다. ({goal})\n{names}\n"
+            "함께하려면 아래 **참여 희망** 버튼을 누르거나 `/내전하자` 를 입력하세요. 한 시간 동안 유지됩니다.")
+
+
+class WantView(discord.ui.View):
+    """모집판에 쓰는 버튼 묶음. 봇을 껐다 켜도 눌리게 시간 제한을 두지 않고 버튼마다 custom_id 를 정해 둔다(켤 때 setup_hook 이 다시 등록한다)."""
+
+    def __init__(self) -> None:
+        super().__init__(timeout=None)
+
+    async def on_error(self, interaction: discord.Interaction, error: Exception, item) -> None:
+        print(f"버튼 처리 오류: {error!r}")
+        msg = "처리 중 오류가 발생했어요. 리그 운영진에게 알려 주세요."
+        try:
+            if interaction.response.is_done():
+                await interaction.followup.send(msg, ephemeral=True)
+            else:
+                await interaction.response.send_message(msg, ephemeral=True)
+        except discord.HTTPException:
+            pass
+
+
+class WantBoard(WantView):
+    """모집판에 다는 버튼: 참여 희망 (/내전하자 를 입력한 것과 같다)"""
+
+    @discord.ui.button(label="참여 희망", style=discord.ButtonStyle.success, custom_id="want:join")
+    async def join(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        await want_join(interaction)
+
+
+class WantLeave(WantView):
+    """등록한 사람에게만 보이는 답에 다는 버튼: 참여 취소"""
+
+    @discord.ui.button(label="참여 취소", style=discord.ButtonStyle.secondary, custom_id="want:leave")
+    async def leave(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        await want_leave(interaction)
+
+
+async def erase_board(board: dict) -> None:
+    """모집판 글을 지운다. 이미 지워져 있으면 넘어간다"""
+    try:
+        channel = await get_channel(board["channel_id"])
+        await channel.get_partial_message(board["message_id"]).delete()
+    except discord.NotFound:
+        pass
+    except discord.HTTPException as e:
+        print(f"앞의 내전하자 모집판을 지우지 못했습니다: {e}")
+
+
+async def show_board(channel_id: int = 0, fresh: bool = False) -> None:
+    """모집판을 지금 기다리는 사람들에 맞춘다. 실패해도 넘어간다(등록과 취소는 이미 끝났다).
+    fresh 면 앞의 글을 지우고 새로 올려 대화방 맨 아래에 오게 한다(사람이 늘었을 때). 아니면 그 자리에서 고친다. 기다리는 사람이 없으면 지운다.
+    여러 사람이 한꺼번에 누르면 요청이 겹치는데, 기다리던 요청은 가장 나중 것만 한다(그것이 지금 상태를 그대로 올린다)."""
+    bot.want_fresh = bot.want_fresh or fresh
+    bot.want_seq += 1
+    seq = bot.want_seq
+    async with bot.want_lock:
+        if seq != bot.want_seq:
+            return
+        fresh, bot.want_fresh = bot.want_fresh, False
+        who, old = wanting(), bot.want_board
+        place = channel_id or bot.want_channel_id or (old or {}).get("channel_id") or 0
+        quiet = discord.AllowedMentions.none()
+        try:
+            if not who:
+                bot.want_board = None
+            elif old and not fresh and old.get("channel_id") == place:
+                try:
+                    channel = await get_channel(place)
+                    await channel.get_partial_message(old["message_id"]).edit(content=board_text(who), view=WantBoard(), allowed_mentions=quiet)
+                    old["who"] = who
+                    return
+                except discord.NotFound:  # 누가 모집판을 지웠다. 새로 올린다
+                    old = None
+            if who and place:
+                channel = await get_channel(place)
+                msg = await channel.send(board_text(who), view=WantBoard(), allowed_mentions=quiet)
+                bot.want_board = {"channel_id": place, "message_id": int(msg.id), "who": who}
+            if old:  # 새 글을 올린 뒤에 앞의 것을 지운다. 올리지 못했으면 앞의 것이 남는다
+                await erase_board(old)
+        except discord.HTTPException as e:
+            print(f"내전하자 모집판을 맞추지 못했습니다: {e}")
+        finally:
+            save_state()
+
+
+async def board_tick() -> None:
+    """모집판이 지금 기다리는 사람들과 다르면 맞춘다: 한 시간이 지나 빠진 사람, 그사이 모집에 /참여 한 사람"""
+    if bot.want_board and wanting() != bot.want_board.get("who"):
+        await show_board()
+
+
+async def want_loop() -> None:
+    """모집판을 지금 상태로 맞춰 둔다. 오류가 나도 멈추지 않는다."""
+    while True:
+        await asyncio.sleep(WANT_TICK_SECONDS)
+        try:
+            await board_tick()
+        except Exception as e:
+            print(f"내전하자 모집판 확인 실패: {e!r}")
+
+
+async def want_join(interaction: discord.Interaction, typed: bool = False) -> None:
+    """내전하자에 등록한다. /내전하자 와 모집판의 참여 희망 버튼이 함께 쓴다.
+    typed 는 명령어로 입력한 경우다: 대화방에서 입력했는지 본다(버튼은 모집판이 있는 곳에서 누르니 보지 않는다)."""
+    if typed and bot.want_channel_id and interaction.channel_id != bot.want_channel_id:
         await interaction.response.send_message(f"이 명령어는 <#{bot.want_channel_id}> 에서 써 주세요.", ephemeral=True)
         return
     if not await can_want(interaction.user):
@@ -2196,30 +2329,56 @@ async def want_game(interaction: discord.Interaction) -> None:
     opened = [g for g in bot.games if not g.closed]  # 지금 모집 중인 내전들
     rec = opened[-1] if opened else None
     hint = f"\n👉 지금 모집 중인 내전이 있습니다. {links(g.place_id for g in opened)} 에서 `/참여` 를 입력하세요." if opened else ""
-    if uid in bot.wants:  # 한 시간 안에 이미 썼다. 그 시간이 지나야 다시 쓸 수 있다
-        again = int(bot.wants[uid] + WANT_SECONDS)
+    if uid in bot.wants:  # 이미 등록했다. 등록한 시각은 그대로 두고, 빠질 수 있게 참여 취소 버튼을 보여 준다
+        until = int(bot.wants[uid] + WANT_SECONDS)
         await interaction.response.send_message(
-            f"이미 내전하자에 등록했습니다. <t:{again}:t>(<t:{again}:R>)부터 다시 쓸 수 있습니다.\n"
-            f"지금 내전을 하고 싶어 하는 사람이 **{len(who)}명** 있습니다.{hint}", ephemeral=True)
+            f"이미 내전하자에 등록했습니다. <t:{until}:t>(<t:{until}:R>)까지 유지됩니다.\n"
+            f"지금 내전을 하고 싶어 하는 사람이 **{len(who)}명** 있습니다. 빠지려면 아래 **참여 취소** 버튼을 누르세요.{hint}",
+            ephemeral=True, view=WantLeave())
         return
 
     bot.wants[uid] = now
     if any(uid in g.participants for g in opened):  # 이미 모집에 참여해 있는 사람은 기다리는 사람으로 세지 않는다
         bot.want_joined.add(uid)
     who = wanting(now)
-    # 모집이 열려 있는 동안에는 알리지 않는다(이미 로비가 만들어졌다). 그 모집이 끝난 뒤에도 10명이 기다리면 다음 입력 때 알린다
-    alert = len(who) >= PLAYERS_NEEDED and not bot.want_alerted and rec is None
+    # 모집이 열려 있는 동안에는 알리지 않는다(이미 로비가 만들어졌다). 그 모집이 끝난 뒤에도 10명이 기다리면 다음 입력 때 알린다.
+    # 방금 알렸으면 잠깐은 다시 알리지 않는다: 참여 희망과 취소를 되풀이해 10명을 오르내리면 리그 운영진의 알림이 거듭 울린다
+    alert = len(who) >= PLAYERS_NEEDED and not bot.want_alerted and rec is None and now - bot.want_alert_at >= WANT_ALERT_GAP
     if alert:
         bot.want_alerted = True
+        bot.want_alert_at = now
     save_state()
     until = int(now + WANT_SECONDS)
     text = (f"✅ 내전하자에 등록했습니다. 지금 내전을 하고 싶어 하는 사람이 **{len(who)}명** 있습니다.\n"
-            f"<t:{until}:t>까지 한 시간 동안 유지되고, {PLAYERS_NEEDED}명이 모이면 리그 운영진에게 알립니다.")
+            f"<t:{until}:t>까지 한 시간 동안 유지되고, {PLAYERS_NEEDED}명이 모이면 리그 운영진에게 알립니다. 빠지려면 아래 **참여 취소** 버튼을 누르세요.")
     if alert:
         text += f"\n📣 {len(who)}명이 모여 리그 운영진에게 알렸습니다."
-    await interaction.response.send_message(text + hint, ephemeral=True)
-    if alert:
-        await announce_want(interaction.channel_id, len(who))
+    await interaction.response.send_message(text + hint, ephemeral=True, view=WantLeave())
+    place = bot.want_channel_id or interaction.channel_id
+    if uid in who:  # 기다리는 사람이 늘었다. 모집판을 새로 올려 대화방 맨 아래에 오게 한다
+        await show_board(place, fresh=True)
+    if alert:  # 모집판 아래에 글을 하나 더 올려 리그 운영진을 부른다
+        await announce_want(place, len(who))
+
+
+async def want_leave(interaction: discord.Interaction) -> None:
+    """참여 취소 버튼: 내전하자 등록을 지운다. 버튼이 달려 있던(본인에게만 보이는) 글을 결과로 바꾼다. 취소한 뒤에는 바로 다시 등록할 수 있다."""
+    uid = interaction.user.id
+    wanting()
+    if bot.wants.pop(uid, None) is None:
+        await interaction.response.edit_message(content="내전하자에 등록되어 있지 않습니다. 이미 취소했거나 한 시간이 지났습니다.", view=None)
+        return
+    bot.want_joined.discard(uid)
+    who = wanting()
+    save_state()
+    await interaction.response.edit_message(
+        content=f"내전하자 등록을 취소했습니다. 지금 내전을 하고 싶어 하는 사람이 **{len(who)}명** 있습니다.", view=None)
+    await show_board()
+
+
+@bot.tree.command(name="내전하자", description="지금 내전을 하고 싶다고 알립니다. 한 시간 동안 유지되고, 10명이 모이면 리그 운영진에게 알려요 (리그 선수)", guild=GUILD)
+async def want_game(interaction: discord.Interaction) -> None:
+    await want_join(interaction, typed=True)
 
 
 @bot.tree.command(name="내전하자설정", description="/내전하자 를 쓰는 대화방과, 10명이 모였을 때 알릴 리그 운영진 역할을 정합니다 (리그 관리자 전용)", guild=GUILD)
@@ -2346,7 +2505,8 @@ async def show_help(interaction: discord.Interaction) -> None:
     if player:
         where = f"<#{bot.want_channel_id}> 에서 써요. " if bot.want_channel_id else ""
         parts.append("**리그 선수**\n"
-                     f"`/내전하자` — {where}지금 내전을 하고 싶다고 알려요. 한 시간 동안 유지되고, {PLAYERS_NEEDED}명이 모이면 리그 운영진에게 알려요.")
+                     f"`/내전하자` — {where}지금 내전을 하고 싶다고 알려요. 대화방의 모집판에 이름이 올라가고 한 시간 동안 유지돼요. "
+                     f"모집판의 **참여 희망** 버튼을 눌러도 돼요. {PLAYERS_NEEDED}명이 모이면 리그 운영진에게 알려요.")
     if staff:
         parts.append("**리그 운영진**\n"
                      f"`/내전생성` — <#{ADMIN_CHANNEL_ID}> 에서 써요. 내전 모집을 열어요. **마감** 칸에 마감 시각을 적을 수 있어요. 동시에 {MAX_GAMES}개까지 진행할 수 있어요.\n"

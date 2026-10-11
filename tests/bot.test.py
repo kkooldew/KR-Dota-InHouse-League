@@ -67,7 +67,10 @@ class World:
         self.admin.send = AsyncMock()
         self.chat = Mock()            # 대화방 (/내전하자 를 쓰는 채널)
         self.chat.id = 400
-        self.chat.send = AsyncMock()
+        self.posts = {}               # 대화방에 올린 글 {메시지 ID: 가짜 메시지}. 모집판을 고치고 지우는 것을 본다
+        self.post_no = 9000           # 마지막으로 올린 글의 번호
+        self.chat.get_partial_message = Mock(side_effect=lambda mid: self.posts[mid])
+        self.fresh_chat()
         # 내전마다 글이 따로 생기게 하려면 many 를 켠다(둘째 글부터 301, 302, …). 꺼 두면 언제나 같은 글(300)이다.
         # 예전 확인들은 내전을 하나씩 차례로 열면서 같은 글을 쓴다
         self.many = False
@@ -181,10 +184,24 @@ class World:
         mod.bot.voice = {}
         mod.bot.manager_role_id = 0
         mod.bot.wants, mod.bot.want_joined, mod.bot.want_alerted, mod.bot.want_channel_id, mod.bot.want_role_id = {}, set(), False, 0, 0
+        mod.bot.want_board, mod.bot.want_alert_at, mod.bot.want_seq, mod.bot.want_fresh, mod.bot.want_lock = None, 0.0, 0, False, asyncio.Lock()
         mod.STATE_PATH.unlink(missing_ok=True)
 
     def texts(self, mock):
         return [c.args[0] for c in mock.call_args_list]
+
+    def fresh_chat(self):
+        """대화방에 글을 올리는 가짜 함수를 새로 단다(지금까지 올린 횟수를 0으로). 올린 글은 posts 에 남는다"""
+        async def post(*args, **kwargs):
+            await asyncio.sleep(0)    # 진짜처럼 잠깐 자리를 내준다 (여러 사람이 한꺼번에 버튼을 누르는 경우를 보려고)
+            m = Mock()
+            self.post_no += 1
+            m.id = self.post_no
+            m.edit, m.delete = AsyncMock(), AsyncMock()
+            self.posts[m.id] = m
+            return m
+
+        self.chat.send = AsyncMock(side_effect=post)
 
 
 def user(uid, name, admin=False):
@@ -1885,6 +1902,9 @@ async def main():
     w.admin.permissions_for = Mock(side_effect=lambda who: Mock(view_channel=who is STAFF, use_application_commands=True))   # 운영진 채널은 리그 운영진만 본다
     waiting = lambda: len(mod.wanting())
     private = lambda i: i.response.send_message.call_args.kwargs.get("ephemeral") is True
+    alerts = lambda: [c for c in w.chat.send.call_args_list if "준비가 되어 있습니다" in c.args[0]]   # 리그 운영진을 부르는 글
+    boards = lambda: [c for c in w.chat.send.call_args_list if c.args[0].startswith("🙋")]            # 모집판
+    button = lambda i: i.response.send_message.call_args.kwargs.get("view")                           # 답에 단 버튼
 
     t, i = await run(mod.want_game, 400, GUEST)
     check("리그 선수만 쓸 수 있는 명령어예요" in t and private(i) and not mod.bot.wants, "/내전하자: 리그 선수가 아니면 쓰지 못한다")
@@ -1892,11 +1912,21 @@ async def main():
     first = mod.bot.wants[201]
     until = int(first + 3600)
     check(t.startswith("✅ 내전하자에 등록했습니다. 지금 내전을 하고 싶어 하는 사람이 **1명** 있습니다.")
-          and f"<t:{until}:t>까지 한 시간 동안 유지되고, 10명이 모이면 리그 운영진에게 알립니다." in t and private(i) and not w.chat.send.await_count,
+          and f"<t:{until}:t>까지 한 시간 동안 유지되고, 10명이 모이면 리그 운영진에게 알립니다." in t and private(i) and not alerts(),
           "/내전하자: 등록하면 본인에게만 지금 몇 명인지 알려 준다")
+    check(t.endswith("빠지려면 아래 **참여 취소** 버튼을 누르세요.") and isinstance(button(i), mod.WantLeave) and button(i).is_persistent()
+          and [b.label for b in button(i).children] == ["참여 취소"], "등록한 사람에게만 보이는 답에 참여 취소 버튼을 단다")
+    sent = w.chat.send.call_args
+    check(len(boards()) == 1 and sent.args[0] == "🙋 지금 내전을 하고 싶어 하는 사람이 **1명** 있습니다. (10명이 모이면 리그 운영진을 부릅니다)\n<@201>\n"
+          "함께하려면 아래 **참여 희망** 버튼을 누르거나 `/내전하자` 를 입력하세요. 한 시간 동안 유지됩니다."
+          and isinstance(sent.kwargs["view"], mod.WantBoard) and sent.kwargs["view"].is_persistent() and [b.label for b in sent.kwargs["view"].children] == ["참여 희망"]
+          and sent.kwargs["allowed_mentions"].users is False and sent.kwargs["allowed_mentions"].roles is False
+          and mod.bot.want_board == {"channel_id": 400, "message_id": 9001, "who": [201]},
+          "대화방에 모집판을 올린다: 기다리는 사람과 참여 희망 버튼 (알림은 울리지 않는다)")
     t, i = await run(mod.want_game, 400, player(201))
-    check(t.startswith(f"이미 내전하자에 등록했습니다. <t:{until}:t>(<t:{until}:R>)부터 다시 쓸 수 있습니다.") and "**1명** 있습니다" in t and private(i)
-          and mod.bot.wants[201] == first, "한 시간 안에는 다시 쓸 수 없다 (등록한 시각은 그대로)")
+    check(t.startswith(f"이미 내전하자에 등록했습니다. <t:{until}:t>(<t:{until}:R>)까지 유지됩니다.") and "**1명** 있습니다" in t and private(i)
+          and mod.bot.wants[201] == first and isinstance(button(i), mod.WantLeave) and len(boards()) == 1,
+          "이미 등록한 사람이 다시 쓰면 등록한 시각은 그대로 두고 참여 취소 버튼을 보여 준다 (모집판은 그대로)")
     await run(mod.want_game, 400, STAFF)
     await run(mod.want_game, 400, ADMIN)
     check(waiting() == 3, "리그 운영진과 리그 관리자도 쓸 수 있다 (리그 선수 이상)")
@@ -1912,64 +1942,149 @@ async def main():
     # 10명이 모이면 대화방에서 리그 운영진 역할을 멘션한다. 한 번 알린 뒤에는 10명 아래로 내려갔다 다시 찰 때까지 알리지 않는다
     mod.bot.want_role_id = 66
     await want(202, 203, 204, 205, 206, 207)
-    check(waiting() == 9 and not w.chat.send.await_count and not mod.bot.want_alerted, "9명까지는 알리지 않는다")
+    check(waiting() == 9 and not alerts() and not mod.bot.want_alerted, "9명까지는 알리지 않는다")
     t = await want(208)
     sent = w.chat.send.call_args
-    check(w.chat.send.await_count == 1 and sent.args[0] == "<@&66> 지금 **10명**이 내전에 참여할 준비가 되어 있습니다. 내전 생성이 가능한 리그 운영진은 로비를 만들어 주세요."
+    check(len(alerts()) == 1 and sent.args[0] == "<@&66> 지금 **10명**이 내전에 참여할 준비가 되어 있습니다. 내전 생성이 가능한 리그 운영진은 로비를 만들어 주세요."
           and [r.id for r in sent.kwargs["allowed_mentions"].roles] == [66] and sent.kwargs["allowed_mentions"].everyone is False and sent.kwargs["allowed_mentions"].users is False,
           "10명이 모이면 대화방에서 리그 운영진 역할을 멘션해 알린다 (그 역할의 알림만 울린다)")
     check("**10명** 있습니다" in t and "10명이 모여 리그 운영진에게 알렸습니다" in t and not w.admin.send.await_count, "열 번째 사람에게는 알렸다는 것도 함께 알려 준다")
+    before = w.chat.send.call_args_list[-2]
+    check(before.args[0].startswith("🙋 지금 내전을 하고 싶어 하는 사람이 **10명** 있습니다. (10명이 모였습니다)\n") and "<@208>" in before.args[0],
+          "10명이 되면 모집판을 올린 뒤에 글을 하나 더 올려 리그 운영진을 부른다")
     await want(209)
-    check(waiting() == 11 and w.chat.send.await_count == 1, "그 뒤에 더 모여도 다시 알리지 않는다")
+    check(waiting() == 11 and len(alerts()) == 1, "그 뒤에 더 모여도 다시 알리지 않는다")
     for uid in (201, 202, 203):
         mod.bot.wants[uid] -= 3601                            # 세 사람은 한 시간이 지났다
     check(waiting() == 8 and 201 not in mod.bot.wants and not mod.bot.want_alerted, "한 시간이 지나면 저절로 풀린다 (10명 아래로 내려가면 다시 알릴 수 있게 된다)")
     t = await want(201)
-    check(t.startswith("✅ 내전하자에 등록했습니다.") and "**9명**" in t and w.chat.send.await_count == 1, "한 시간이 지난 사람은 다시 쓸 수 있다")
+    check(t.startswith("✅ 내전하자에 등록했습니다.") and "**9명**" in t and len(alerts()) == 1, "한 시간이 지난 사람은 다시 쓸 수 있다")
     await want(210)
-    check(waiting() == 10 and w.chat.send.await_count == 2 and "**10명**" in w.chat.send.call_args.args[0], "다시 10명이 되면 또 알린다")
+    check(waiting() == 10 and len(alerts()) == 1 and not mod.bot.want_alerted, "방금 리그 운영진을 불렀으면 10분 동안은 다시 10명이 돼도 부르지 않는다")
+    mod.bot.want_alert_at -= 601
+    await want(211)
+    check(waiting() == 11 and len(alerts()) == 2 and "**11명**" in w.chat.send.call_args.args[0] and mod.bot.want_alerted, "10분이 지난 뒤에 10명 이상이면 다음 등록 때 또 알린다")
     saved = json.loads(mod.STATE_PATH.read_text(encoding="utf-8"))["want"]
-    check(len(saved["users"]) == 10 and saved["alerted"] is True and saved["channel_id"] == 400 and saved["role_id"] == 66, "등록한 사람들과 설정을 상태 파일에 적어 둔다")
-    keep = dict(mod.bot.wants)
-    mod.bot.wants, mod.bot.want_alerted, mod.bot.want_channel_id, mod.bot.want_role_id = {}, False, 0, 0
+    check(len(saved["users"]) == 11 and saved["alerted"] is True and saved["channel_id"] == 400 and saved["role_id"] == 66, "등록한 사람들과 설정을 상태 파일에 적어 둔다")
+    keep, board, at = dict(mod.bot.wants), dict(mod.bot.want_board), mod.bot.want_alert_at
+    check(saved["board"] == board and board["who"] == mod.wanting() and saved["alert_at"] == at, "모집판과 마지막으로 알린 시각도 상태 파일에 적어 둔다")
+    mod.bot.wants, mod.bot.want_alerted, mod.bot.want_channel_id, mod.bot.want_role_id, mod.bot.want_board, mod.bot.want_alert_at = {}, False, 0, 0, None, 0.0
     await mod.restore_state()
-    check(mod.bot.wants == keep and mod.bot.want_alerted and mod.bot.want_channel_id == 400 and mod.bot.want_role_id == 66, "봇을 껐다 켜도 이어진다")
+    check(mod.bot.wants == keep and mod.bot.want_alerted and mod.bot.want_channel_id == 400 and mod.bot.want_role_id == 66
+          and mod.bot.want_board == board and mod.bot.want_alert_at == at, "봇을 껐다 켜도 이어진다 (모집판도 이어받아 그 글을 고치고 지운다)")
 
     # 모집이 열려 있는 동안에는 알리지 않고 모집 글을 알려 준다. 모집에 /참여 한 사람은 기다리는 사람으로 세지 않는다
-    mod.bot.wants, mod.bot.want_joined, mod.bot.want_alerted = {}, set(), False
-    n = w.chat.send.await_count
+    mod.bot.wants, mod.bot.want_joined, mod.bot.want_alerted, mod.bot.want_alert_at = {}, set(), False, 0.0
+    n = len(alerts())
     await run(mod.create_inhouse, 100, ADMIN)
     t = await want(*range(301, 311))
-    check(waiting() == 10 and w.chat.send.await_count == n and not mod.bot.want_alerted and "지금 모집 중인 내전이 있습니다. <#300> 에서 `/참여` 를 입력하세요." in t,
+    check(waiting() == 10 and len(alerts()) == n and not mod.bot.want_alerted and "지금 모집 중인 내전이 있습니다. <#300> 에서 `/참여` 를 입력하세요." in t,
           "모집이 열려 있으면 10명이 돼도 알리지 않고, 모집 글에서 /참여 하라고 알려 준다")
     for uid in (301, 302, 303):
         await run(mod.join, 300, player(uid))
     check(waiting() == 7 and 301 in mod.bot.wants, "모집에 /참여 한 사람은 기다리는 사람으로 세지 않는다 (다시 쓰려면 한 시간이 지나야 하는 것은 그대로)")
+    await mod.board_tick()
+    check(mod.bot.want_board["who"] == list(range(304, 311)) and "**7명**" in w.posts[mod.bot.want_board["message_id"]].edit.call_args.kwargs["content"],
+          "모집에 /참여 한 사람은 모집판에서도 빠진다 (30초마다 확인해 그 자리에서 고친다)")
     await run(mod.join, 300, player(320))
+    k = len(boards())
     await want(320)
-    check(waiting() == 7 and 320 in mod.bot.wants, "이미 모집에 참여해 있는 사람이 입력해도 기다리는 사람으로 세지 않는다")
+    check(waiting() == 7 and 320 in mod.bot.wants and len(boards()) == k, "이미 모집에 참여해 있는 사람이 입력해도 기다리는 사람으로 세지 않는다 (모집판도 그대로)")
     await run(mod.cancel, 100, ADMIN)
     await want(311, 312)
-    check(waiting() == 9 and w.chat.send.await_count == n, "모집이 끝난 뒤에도 9명이면 알리지 않는다")
+    check(waiting() == 9 and len(alerts()) == n, "모집이 끝난 뒤에도 9명이면 알리지 않는다")
     await want(313)
-    check(waiting() == 10 and w.chat.send.await_count == n + 1, "모집이 끝난 뒤 10명이 되면 알린다")
+    check(waiting() == 10 and len(alerts()) == n + 1, "모집이 끝난 뒤 10명이 되면 알린다")
 
     # 리그 운영진 역할을 정해 두지 않았을 때와, 대화방에 글을 올리지 못할 때
-    mod.bot.wants, mod.bot.want_joined, mod.bot.want_alerted, mod.bot.want_role_id = {}, set(), False, 0
+    mod.bot.wants, mod.bot.want_joined, mod.bot.want_alerted, mod.bot.want_alert_at, mod.bot.want_role_id = {}, set(), False, 0.0, 0
     w.admin.send.reset_mock()
     await want(*range(401, 411))
-    check(w.chat.send.await_count == n + 2 and w.chat.send.call_args.args[0].startswith("지금 **10명**이 내전에 참여할 준비가 되어 있습니다.")
+    check(len(alerts()) == n + 2 and w.chat.send.call_args.args[0].startswith("지금 **10명**이 내전에 참여할 준비가 되어 있습니다.")
           and w.chat.send.call_args.kwargs["allowed_mentions"].roles is False and "`/내전하자설정`" in w.texts(w.admin.send)[-1],
           "리그 운영진 역할을 정해 두지 않았으면 멘션 없이 알리고, 운영진 채널에 정하는 법을 알린다")
-    mod.bot.wants, mod.bot.want_alerted, mod.bot.want_role_id = {}, False, 66
+    mod.bot.wants, mod.bot.want_alerted, mod.bot.want_alert_at, mod.bot.want_role_id = {}, False, 0.0, 66
+    kept = mod.bot.want_board["message_id"]
     w.chat.send = AsyncMock(side_effect=discord.Forbidden(Mock(status=403, reason="Forbidden"), "Missing Permissions"))
-    with contextlib.redirect_stdout(io.StringIO()):
+    with contextlib.redirect_stdout(io.StringIO()) as out:
         t = await want(*range(501, 511))
     check("<#400> 에 알리지 못했어요" in w.texts(w.admin.send)[-1] and t.startswith("✅ 내전하자에 등록했습니다."), "대화방에 글을 올리지 못하면 운영진 채널에 알린다 (등록은 그대로 된다)")
-    w.chat.send = AsyncMock()
+    check(mod.bot.want_board["message_id"] == kept and not w.posts[kept].delete.await_count and "모집판을 맞추지 못했습니다" in out.getvalue(),
+          "모집판을 새로 올리지 못하면 앞의 모집판을 지우지 않고 둔다")
+    w.fresh_chat()
+
+    # ── 모집판의 버튼: 참여 희망을 누르면 /내전하자 와 같고, 누른 사람에게만 참여 취소 버튼이 보인다 ──
+    def press(u, channel_id=400):   # 버튼을 누른 사람의 요청. 버튼이 달린 글을 고칠 수 있다
+        i = inter(channel_id, u)
+        i.response.edit_message = AsyncMock()
+        return i
+
+    edited = lambda i: i.response.edit_message.call_args.kwargs
+    live = lambda: [mid for mid, m in w.posts.items() if not m.delete.await_count]   # 지워지지 않은 대화방 글
+    mod.bot.wants, mod.bot.want_joined, mod.bot.want_alerted, mod.bot.want_alert_at = {}, set(), False, 0.0
+    await mod.show_board()
+    check(mod.bot.want_board is None and w.posts[kept].delete.await_count == 1, "기다리는 사람이 없으면 모집판을 지운다")
+    w.posts.clear()
+    i = press(player(701))
+    await mod.want_join(i)
+    b1 = dict(mod.bot.want_board)
+    check(said(i).startswith("✅ 내전하자에 등록했습니다.") and private(i) and isinstance(button(i), mod.WantLeave) and b1["who"] == [701] and live() == [b1["message_id"]],
+          "참여 희망 버튼: /내전하자 를 입력한 것처럼 등록하고, 누른 사람에게만 참여 취소 버튼을 보여 준다")
+    i = press(player(702), channel_id=999)
+    await mod.want_join(i)
+    b2 = dict(mod.bot.want_board)
+    check(b2["message_id"] != b1["message_id"] and b2["channel_id"] == 400 and live() == [b2["message_id"]] and "**2명**" in w.chat.send.call_args.args[0]
+          and "\n<@701> · <@702>\n" in w.chat.send.call_args.args[0], "사람이 늘면 앞의 모집판을 지우고 새로 올린다 (글은 늘 하나, 대화방 맨 아래)")
+    i = press(player(701))
+    await mod.want_join(i)
+    check(said(i).startswith("이미 내전하자에 등록했습니다.") and isinstance(button(i), mod.WantLeave) and mod.bot.want_board == b2 and live() == [b2["message_id"]],
+          "이미 등록한 사람이 참여 희망을 다시 누르면 참여 취소 버튼을 보여 준다 (모집판은 그대로)")
+    i = press(GUEST)
+    await mod.want_join(i)
+    check("리그 선수만 쓸 수 있는 명령어예요" in said(i) and private(i) and 22 not in mod.bot.wants, "리그 선수가 아닌 사람이 참여 희망을 눌러도 등록되지 않는다")
+    i = press(player(701))
+    await mod.want_leave(i)
+    post = w.posts[b2["message_id"]]
+    check(edited(i) == {"content": "내전하자 등록을 취소했습니다. 지금 내전을 하고 싶어 하는 사람이 **1명** 있습니다.", "view": None} and 701 not in mod.bot.wants,
+          "참여 취소 버튼: 등록을 지우고, 버튼이 있던 글을 결과로 바꾼다")
+    check(mod.bot.want_board["message_id"] == b2["message_id"] and mod.bot.want_board["who"] == [702] and post.edit.await_count == 1 and not post.delete.await_count
+          and "**1명**" in post.edit.call_args.kwargs["content"] and "<@701>" not in post.edit.call_args.kwargs["content"]
+          and isinstance(post.edit.call_args.kwargs["view"], mod.WantBoard), "사람이 줄면 모집판을 새로 올리지 않고 그 자리에서 고친다")
+    i = press(player(701))
+    await mod.want_leave(i)
+    check(edited(i)["content"].startswith("내전하자에 등록되어 있지 않습니다.") and edited(i)["view"] is None and post.edit.await_count == 1, "등록하지 않은 사람이 참여 취소를 누르면 알려 주기만 한다")
+    i = press(player(701))
+    await mod.want_join(i)
+    check(701 in mod.bot.wants and "**2명**" in said(i) and mod.bot.want_board["who"] == [702, 701], "취소한 뒤에는 바로 다시 등록할 수 있다")
+    for uid in (701, 702):
+        await mod.want_leave(press(player(uid)))
+    check(mod.bot.want_board is None and not live() and not mod.bot.wants, "마지막 사람이 취소하면 모집판을 지운다")
+
+    # 한 시간이 지난 사람은 30초마다 하는 확인에서 모집판에서 빠진다. 바뀐 것이 없으면 건드리지 않는다
+    await want(711, 712, 713)
+    post = w.posts[mod.bot.want_board["message_id"]]
+    await mod.board_tick()
+    check(not post.edit.await_count, "모집판이 지금 상태와 같으면 건드리지 않는다")
+    mod.bot.wants[711] -= 3601
+    await mod.board_tick()
+    check(mod.bot.want_board["who"] == [712, 713] and post.edit.await_count == 1 and "**2명**" in post.edit.call_args.kwargs["content"], "한 시간이 지난 사람은 모집판에서 빠진다")
+    # 누가 모집판 글을 지웠으면 새로 올린다
+    post.edit = AsyncMock(side_effect=discord.NotFound(Mock(status=404, reason="Not Found"), "Unknown Message"))
+    await mod.want_leave(press(player(712)))
+    check(mod.bot.want_board["who"] == [713] and mod.bot.want_board["message_id"] != post.id and "**1명**" in w.chat.send.call_args.args[0], "누가 모집판 글을 지웠으면 새로 올린다")
+    del w.posts[post.id]
+    # 여러 사람이 한꺼번에 눌러도 모집판은 하나만 남고, 마지막 상태를 보여 준다
+    k = len(boards())
+    await asyncio.gather(*(mod.want_join(press(player(uid))) for uid in range(721, 726)))
+    check(mod.bot.want_board["who"] == [713, 721, 722, 723, 724, 725] and live() == [mod.bot.want_board["message_id"]] and len(boards()) - k == 2
+          and "**6명**" in w.chat.send.call_args.args[0], "여러 사람이 한꺼번에 눌러도 모집판은 하나만 남는다 (기다리던 요청은 마지막 것만 올린다)")
+    # 이름이 아주 많으면 줄여 적는다
+    many = mod.board_text(list(range(1, 81)))
+    check(len(many) < 2000 and many.count("<@") == 50 and " 외 30명\n" in many, "기다리는 사람이 아주 많으면 이름은 50명까지만 적는다")
 
     # /내전하자설정: 리그 관리자가 대화방과 알릴 역할을 정한다
     mod.bot.wants, mod.bot.want_joined, mod.bot.want_alerted, mod.bot.want_channel_id, mod.bot.want_role_id = {}, set(), False, 0, 0
+    await mod.show_board()
     t, _ = await run(mod.want_setup, 100, STAFF, None, None)
     check("리그 관리자만 쓸 수 있는 명령어예요" in t, "/내전하자설정 은 리그 관리자만 쓴다")
     t, _ = await run(mod.want_setup, 100, ADMIN, None, None)
