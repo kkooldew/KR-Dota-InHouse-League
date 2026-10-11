@@ -127,7 +127,7 @@ assert(r.ok && r.open === false && r.season === '시즌 2', 'close registration'
 clearRL();
 r = post({ ...base }); assert(!r.ok && r.code === 'closed', 'registration closed rejects');
 r = get('status'); assert(r.ok && r.open === false && r.version >= 7 && r.season === '시즌 2', 'public status');
-assert(!('registered' in r) && !('pastSeasons' in r) && Object.keys(r).sort().join() === 'ok,open,recordsAt,season,version', 'public status does not tell how many registered');
+assert(!('registered' in r) && !('pastSeasons' in r) && Object.keys(r).sort().join() === 'ok,open,recordsAt,regClose,season,seasonEnd,seasonEnded,version', 'public status does not tell how many registered');
 r = post({ action:'ping', key });
 assert(sheets['선수등록 (시즌 2)'] && sheets['선수등록 (시즌 2)'].grid === grid && r.season === '시즌 2' && r.registered === 2 && r.pastSeasons.length === 0,
   'renaming the season keeps the roster and renames its tab');
@@ -1194,4 +1194,95 @@ assert(props.ADMIN_KEY === key, 'running setup again keeps the admin key');
   status();
   g = post({ action: 'adminLeague', key });
   assert(g.rev === 2 && g.league.players.length === 1, 'upgrade: this happens once; later requests do not rewrite the league by themselves');
+})();
+
+// 날짜로 닫기 (버전 16): 모집 종료 날짜와 시즌 종료 날짜. 기준은 그 날짜의 0시(한국 시간)다
+(() => {
+  const S = makeEnv({ fresh: true });
+  const post = body => JSON.parse(S.env.doPost({ postData: { contents: JSON.stringify(body) } }).text);
+  const status = () => JSON.parse(S.env.doGet({ parameter: {} }).text);
+  const clearRL = () => Object.keys(S.cache).filter(k => k.startsWith('rl:')).forEach(k => delete S.cache[k]);
+  const day = n => new Date(Date.now() + 9 * 3600e3 + n * 86400e3).toISOString().slice(0, 10);   // 한국 날짜로 오늘에서 n일 뒤
+  const reg = n => { clearRL(); return post({ action: 'register', nickname: '날짜선수' + n, steam: 'https://steamcommunity.com/profiles/7656119800000700' + n, discord: 'day' + n, mmr: 4000, prefs: [1, 2, 3, 4] }); };
+  const logs = () => (S.sheets['운영 기록'] ? S.sheets['운영 기록'].grid.slice(1).map(r => r[3] + '|' + r[4] + '|' + r[5]) : []);
+  S.env.setup();
+  const key = S.props.ADMIN_KEY;
+  const staffKey = post({ action: 'adminStaffAdd', key, name: '짱고' }).key;
+
+  assert(S.env.dayStart_('2026-11-01') === Date.UTC(2026, 9, 31, 15) && isNaN(S.env.dayStart_('2026-02-30')) && isNaN(S.env.dayStart_('2026-13-01'))
+    && isNaN(S.env.dayStart_('2026-1-1')) && isNaN(S.env.dayStart_('')) && isNaN(S.env.dayStart_(null)) && S.env.dayStart_('2028-02-29') === Date.UTC(2028, 1, 28, 15),
+    'dates: a day starts at 0:00 Korean time; days that do not exist are not dates');
+
+  let st = status();
+  assert(st.open === true && st.regClose === '' && st.seasonEnd === '' && st.seasonEnded === false && st.version === 16 && !('registered' in st),
+    'dates: nothing set at first (the public status carries both dates)');
+
+  // 모집 종료 날짜
+  let r = post({ action: 'adminConfig', key: staffKey, regClose: day(1) });
+  assert(r.ok && r.regClose === day(1) && r.open === true && status().regClose === day(1) && reg(1).ok, 'registration close date: set by any league manager; still open before that day');
+  assert(logs().some(l => l === '모집 종료 날짜|' + day(1) + '|없음 → ' + day(1) + ' · ' + day(1) + ' 0시에 등록을 닫음'), 'registration close date: setting it is logged');
+  const n = logs().length;
+  post({ action: 'adminConfig', key, regClose: day(1) });
+  assert(logs().length === n, 'registration close date: saving the same date again logs nothing');
+  r = post({ action: 'adminConfig', key, regClose: '2026-02-30' });
+  assert(!r.ok && r.code === 'date' && S.props.REG_CLOSE === day(1), 'registration close date: a day that does not exist is refused and nothing changes');
+  r = post({ action: 'adminConfig', key, regClose: 'tomorrow', open: false });
+  assert(!r.ok && r.code === 'date' && S.props.REG_OPEN === 'true', 'registration close date: a bad date changes nothing else in the same request either');
+
+  S.props.REG_CLOSE = day(0);          // 그날 0시가 됐다
+  st = status();
+  r = reg(2);
+  assert(st.open === false && st.regClose === day(0) && !r.ok && r.code === 'closed' && S.props.REG_OPEN === 'true', 'registration close date: closed by itself from 0:00 of that day');
+  r = post({ action: 'ping', key });
+  assert(r.ok && r.open === false && r.regClose === day(0) && r.registered === 1, 'registration close date: the league manager status says the same');
+  // 다시 열면 지난 날짜는 지운다 (남겨 두면 열어도 닫힌 채다)
+  r = post({ action: 'adminConfig', key, open: true });
+  assert(r.ok && r.open === true && r.regClose === '' && !('REG_CLOSE' in S.props) && reg(2).ok && logs().some(l => l === '등록 열기||지난 모집 종료 날짜(' + day(0) + ')를 지움'),
+    'registration close date: reopening after the date clears the stale date');
+  r = post({ action: 'adminConfig', key, open: false, regClose: day(3) });
+  assert(r.ok && r.open === false && r.regClose === day(3), 'registration close date: closed by hand stays closed whatever the date');
+  r = post({ action: 'adminConfig', key, open: true });
+  assert(r.ok && r.open === true && r.regClose === day(3), 'registration close date: opening keeps a date that is still ahead');
+  r = post({ action: 'adminConfig', key, regClose: '' });
+  assert(r.ok && r.regClose === '' && !('REG_CLOSE' in S.props) && logs().some(l => l === '모집 종료 날짜|없음|' + day(3) + ' → 없음'), 'registration close date: an empty value clears it');
+
+  // 시즌 종료 날짜: 주인 키로만 정한다
+  r = post({ action: 'adminConfig', key: staffKey, seasonEnd: day(2) });
+  assert(!r.ok && r.code === 'owner' && status().seasonEnd === '', 'season end date: only the owner key can set it');
+  r = post({ action: 'adminConfig', key: staffKey, seasonEnd: day(2), open: false });
+  assert(!r.ok && r.code === 'owner' && S.props.REG_OPEN === 'true', 'season end date: a refused request changes nothing else');
+  r = post({ action: 'adminConfig', key, seasonEnd: day(2) });
+  st = status();
+  assert(r.ok && r.seasonEnd === day(2) && r.seasonEnded === false && st.seasonEnd === day(2) && st.seasonEnded === false
+    && JSON.parse(S.props.SEASONS)[0].end === day(2), 'season end date: stored with the season, not ended before that day');
+  assert(logs().some(l => l === '시즌 종료 날짜|' + day(2) + '|없음 → ' + day(2) + ' · ' + day(2) + ' 0시 전에 시작한 경기까지 이 시즌의 경기'), 'season end date: setting it is logged');
+  r = post({ action: 'adminConfig', key, seasonEnd: 'soon' });
+  assert(!r.ok && r.code === 'date' && status().seasonEnd === day(2), 'season end date: a bad date is refused');
+
+  // 봇이 받는 값: 리그 기록과 등록 명단에 시즌 번호와 종료 시각(밀리초)이 실린다
+  post({ action: 'adminSetStatus', key, steamKeys: ['s:76561198000007001'], status: '승인' });
+  let g = post({ action: 'adminLeague', key }), l = post({ action: 'adminList', key });
+  assert(g.ok && g.seasonNo === 0 && g.seasonEnd === day(2) && g.seasonEndAt === S.env.dayStart_(day(2)) && g.league.players.length === 1 && !('version' in g)
+    && l.seasonEnd === day(2) && l.seasonEndAt === g.seasonEndAt, 'season end date: the league and the roster carry the season number and the end time for the bot');
+
+  let list = JSON.parse(S.props.SEASONS);
+  list[0].end = day(0);
+  S.props.SEASONS = JSON.stringify(list);                       // 그날 0시가 됐다
+  st = status(); g = post({ action: 'adminLeague', key });
+  assert(st.seasonEnded === true && st.seasonEnd === day(0) && g.seasonEndAt === S.env.dayStart_(day(0)) && g.seasonEndAt <= Date.now(), 'season end date: ended by itself from 0:00 of that day');
+  // 끝난 뒤에도 서버는 기록을 받는다: 그 시각 전에 시작한 경기의 결과는 그 뒤에 기록되고(봇이 가린다), 리그 관리자는 지난 경기를 고칠 수 있어야 한다
+  const league = g.league;
+  league.players[0].wins = 1;
+  r = post({ action: 'saveLeague', key, league, baseRev: g.rev });
+  assert(r.ok && r.rev === g.rev + 1, 'season end date: the server still takes records after the end (which match counts is decided where the start time is known)');
+  r = post({ action: 'adminConfig', key, seasonEnd: '' });
+  assert(r.ok && r.seasonEnd === '' && r.seasonEnded === false && !('end' in JSON.parse(S.props.SEASONS)[0]), 'season end date: clearing it puts the season back in play');
+
+  // 새 시즌으로 넘어가면 종료 날짜는 끝난 시즌에 남고, 새 시즌에는 따라가지 않는다. 모집 종료 날짜는 시즌과 상관없다
+  post({ action: 'adminConfig', key, seasonEnd: day(0), regClose: day(5) });
+  r = post({ action: 'adminNewSeason', key, season: '시즌 2', confirm: '시즌 변경' });
+  list = JSON.parse(S.props.SEASONS);
+  g = post({ action: 'adminLeague', key });
+  assert(r.ok && r.season === '시즌 2' && r.seasonEnd === '' && r.seasonEnded === false && list[0].end === day(0) && !('end' in list[1]) && r.regClose === day(5)
+    && g.seasonNo === 1 && g.seasonEndAt === 0 && g.seasonEnd === '', 'new season: the end date stays with the season that ended, the new season has none');
 })();

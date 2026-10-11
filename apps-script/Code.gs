@@ -17,7 +17,7 @@
  * 코드를 고친 뒤에는 배포 → 배포 관리 → 수정(연필) → 버전: 새 버전 → 배포 를 눌러야 반영됩니다.
  */
 
-const SERVER_VERSION = 15;                         // 서버를 고칠 때마다 올린다. 상태 응답에 실려서 새 버전이 배포됐는지 밖에서 확인할 수 있다
+const SERVER_VERSION = 16;                         // 서버를 고칠 때마다 올린다. 상태 응답에 실려서 새 버전이 배포됐는지 밖에서 확인할 수 있다
 const SHEET_NAME = '선수등록';                             // 등록 탭 이름의 앞부분. 시즌마다 '선수등록 (시즌 이름)' 탭을 따로 쓴다
 // 칸을 더할 때는 맨 뒤에 붙이고 LAYOUT 을 올린다. 이미 있는 탭에는 ready_ 가 새 머리글을 채워 넣는다
 // 처리자·처리시각: 그 등록의 상태(승인·제외·대기)를 마지막으로 바꾼 리그 관리자와 그 시각 (버전 11)
@@ -182,12 +182,76 @@ function withLock_(fn) {
 function statusInfo_() {
   const props = PropertiesService.getScriptProperties();
   const list = seasons_();
+  const end = seasonEnd_(list);
+  const close = props.getProperty('REG_CLOSE');
   return {
-    open: props.getProperty('REG_OPEN') !== 'false',
+    open: regOpen_(props),
     season: list[list.length - 1].name,
     recordsAt: props.getProperty('RECORDS_AT') || '',
+    // 모집 종료 날짜와 시즌 종료 날짜(한국 날짜, 그날 0시가 기준). 정해 두지 않았으면 빈 값이다 (버전 16)
+    regClose: Number.isFinite(dayStart_(close)) ? close : '',
+    seasonEnd: end.date,
+    seasonEnded: end.ended,
     version: SERVER_VERSION
   };
+}
+
+/* ---- 날짜로 닫기 (버전 16) ----
+   리그 관리자 페이지에서 모집 종료 날짜와 시즌 종료 날짜를 정해 두면 그날이 됐을 때 저절로 닫힌다(운영자가 2026-10-12에 요청).
+   날짜는 한국 날짜(YYYY-MM-DD)로 적고, 기준은 그날 0시(한국 시간)다. 11월 1일로 정하면 10월 31일 밤까지가 기간이다.
+    - 모집 종료: 그 순간부터 등록을 받지 않는다. 따로 닫아 두는 값은 없고, 물어볼 때마다 날짜를 본다(regOpen_).
+      지난 날짜가 남아 있는 채로 등록을 다시 열면 그 날짜는 지운다(setConfig_).
+    - 시즌 종료: 그 순간 전에 시작한 경기까지가 이 시즌의 경기다. 끝난 시각이 그 뒤여도 그 경기는 유효하다.
+      서버는 날짜를 보관하고 알려 주기만 한다. 어느 경기가 언제 시작했는지는 봇이 알고 있어서, 결과를 기록할지는 봇이 정한다
+      (리그 매니저로 직접 기록하는 경기는 리그 관리자가 판단한다. 시즌이 끝난 뒤에도 지난 경기를 고칠 수 있어야 해서 서버는 막지 않는다).
+      날짜는 그 시즌의 SEASONS 항목(end)에 적어서, 새 시즌에는 따라가지 않고 끝난 시즌에는 기록으로 남는다. */
+const DAY_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
+const KST_MS = 9 * 3600000;
+
+// 한국 날짜가 시작하는 순간(그날 0시)을 밀리초로. 날짜 모양이 아니거나 없는 날짜면 NaN
+function dayStart_(day) {
+  const m = DAY_RE.exec(String(day == null ? '' : day));
+  if (!m) return NaN;
+  const t = Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3])) - KST_MS;
+  // 2월 30일 같은 날짜는 다음 달로 넘어가므로, 되짚어 같은 날짜가 나올 때만 받는다
+  return new Date(t + KST_MS).toISOString().slice(0, 10) === m[0] ? t : NaN;
+}
+
+// 그 날짜의 0시가 됐는가. 날짜가 없으면 false
+function dayPassed_(day) {
+  const t = dayStart_(day);
+  return Number.isFinite(t) && Date.now() >= t;
+}
+
+// 리그 관리자가 넣은 날짜를 확인한다. 빈 값은 날짜를 지우라는 뜻이다
+function parseDay_(v, what) {
+  const day = String(v == null ? '' : v).trim();
+  if (day && !Number.isFinite(dayStart_(day))) fail_(what + ' 날짜를 2026-11-01 처럼 넣어 주세요', 'date');
+  return day;
+}
+
+// 지금 등록을 받는 중인가: 닫아 두지 않았고, 모집 종료 날짜가 지나지 않았다
+function regOpen_(props) {
+  return props.getProperty('REG_OPEN') !== 'false' && !dayPassed_(props.getProperty('REG_CLOSE'));
+}
+
+// 지금 시즌의 종료 날짜. 정해 두지 않았으면 date 는 빈 값이고 at 은 0이다
+function seasonEnd_(list) {
+  const cur = (list || seasons_()).slice(-1)[0];
+  const t = dayStart_(cur.end);
+  return Number.isFinite(t) ? { date: cur.end, at: t, ended: Date.now() >= t } : { date: '', at: 0, ended: false };
+}
+
+function setSeasonEnd_(day) {
+  withLock_(() => {
+    const list = seasons_();
+    const cur = list[list.length - 1];
+    const old = Number.isFinite(dayStart_(cur.end)) ? cur.end : '';
+    if (old === day) return;
+    if (day) cur.end = day; else delete cur.end;
+    saveSeasons_(list);
+    log_('시즌 종료 날짜', day || '없음', (old || '없음') + ' → ' + (day || '없음') + (day ? ' · ' + day + ' 0시 전에 시작한 경기까지 이 시즌의 경기' : ''));
+  });
 }
 
 // 리그 관리자에게는 등록 인원 수와 지난 시즌 이름도 함께 준다 (오래된 시즌이 앞).
@@ -204,11 +268,30 @@ function adminStatus_() {
 
 function setConfig_(body) {
   const props = PropertiesService.getScriptProperties();
+  // 날짜는 먼저 확인한다. 틀린 값이 섞여 있으면 아무것도 바꾸지 않는다
+  const regClose = body.regClose === undefined ? null : parseDay_(body.regClose, '모집 종료');
+  const seasonEnd = body.seasonEnd === undefined ? null : parseDay_(body.seasonEnd, '시즌 종료');
+  // 시즌 종료 날짜는 어느 경기까지 순위에 넣을지를 정하는 일이라, 새 시즌 시작처럼 주인 키로만 바꾼다
+  if (seasonEnd !== null && !(ACTOR && ACTOR.owner))
+    fail_('시즌 종료 날짜는 주인 키로만 바꿀 수 있습니다. 주인 키를 가진 리그 관리자에게 부탁해 주세요.', 'owner');
   if (typeof body.open === 'boolean') {
-    const was = props.getProperty('REG_OPEN') !== 'false';
+    const was = regOpen_(props);
     props.setProperty('REG_OPEN', String(body.open));
-    if (was !== body.open) logAlone_(body.open ? '등록 열기' : '등록 닫기', '', '');
+    let note = '';
+    // 모집 종료 날짜가 지나 닫혀 있던 등록을 다시 열면 그 날짜는 지운다 (남겨 두면 열어도 닫힌 채다)
+    const stale = props.getProperty('REG_CLOSE');
+    if (body.open && regClose === null && dayPassed_(stale)) {
+      props.deleteProperty('REG_CLOSE');
+      note = '지난 모집 종료 날짜(' + stale + ')를 지움';
+    }
+    if (was !== body.open) logAlone_(body.open ? '등록 열기' : '등록 닫기', '', note);
   }
+  if (regClose !== null) {
+    const old = Number.isFinite(dayStart_(props.getProperty('REG_CLOSE'))) ? props.getProperty('REG_CLOSE') : '';
+    if (regClose) props.setProperty('REG_CLOSE', regClose); else props.deleteProperty('REG_CLOSE');
+    if (old !== regClose) logAlone_('모집 종료 날짜', regClose || '없음', (old || '없음') + ' → ' + (regClose || '없음') + (regClose ? ' · ' + regClose + ' 0시에 등록을 닫음' : ''));
+  }
+  if (seasonEnd !== null) setSeasonEnd_(seasonEnd);
   if (typeof body.season === 'string') {
     const old = seasons_().slice(-1)[0].name;
     renameSeason_(body.season);
@@ -692,7 +775,7 @@ function archivedLeague_(season) {
 function register_(body) {
   // 사람 눈에 보이지 않는 칸이 채워져 있으면 자동 입력 프로그램으로 보고, 성공한 척만 한다
   if (body.website) return { updated: false };
-  if (PropertiesService.getScriptProperties().getProperty('REG_OPEN') === 'false') fail_('지금은 선수 등록 기간이 아닙니다', 'closed');
+  if (!regOpen_(PropertiesService.getScriptProperties())) fail_('지금은 선수 등록 기간이 아닙니다', 'closed');
 
   const nickname = cleanNickname_(body.nickname);
   const discord = normDiscord_(body.discord);
@@ -1057,7 +1140,8 @@ function listSeason_(body) {
   const no = body.seasonNo === undefined || body.seasonNo === null ? last : Number(body.seasonNo);
   if (!Number.isInteger(no) || no < 0 || no > last) fail_('그런 시즌이 없습니다', 'season');
   const sheet = no === last ? getSheet_() : sheetById_(SpreadsheetApp.getActiveSpreadsheet(), list[no].id);
-  return { players: sheet ? listRegistrations_(sheet) : [], season: list[no].name, seasonNo: no, current: last };
+  const end = seasonEnd_(list);                                  // 지금 시즌의 종료 날짜 (봇이 5분마다 받아 두고, 시즌이 끝난 뒤의 내전에 미리 알린다)
+  return { players: sheet ? listRegistrations_(sheet) : [], season: list[no].name, seasonNo: no, current: last, seasonEnd: end.date, seasonEndAt: end.at };
 }
 
 function listRegistrations_(sheet) {
@@ -1411,7 +1495,10 @@ function getLeague_() {
     // 드라이브가 잠깐 답하지 않은 것을 "없다"로 돌려주면 매니저가 뒤처진 기록으로 서버를 덮어쓸 수 있어서, readFile_ 이 먼저 몇 번 다시 읽어 본다
     try { text = readFile_(id); } catch (err) { console.warn('리그 기록 파일을 읽지 못해 없는 것으로 돌려줍니다: ' + err); }
   }
-  return { league: text ? JSON.parse(text) : null, rev, leagueAt: text ? (props.getProperty('LEAGUE_AT') || '') : '' };
+  // 시즌 번호와 시즌 종료 시각(밀리초, 없으면 0)은 봇이 본다: 그 시각 전에 시작한 경기만 이 시즌에 기록한다 (버전 16)
+  const list = seasons_(), end = seasonEnd_(list);
+  return { league: text ? JSON.parse(text) : null, rev, leagueAt: text ? (props.getProperty('LEAGUE_AT') || '') : '',
+    seasonNo: list.length - 1, seasonEnd: end.date, seasonEndAt: end.at };
 }
 
 // 서버가 직접 고치려고 읽는 리그 기록. 한 번도 올라온 적이 없으면 null 이다.

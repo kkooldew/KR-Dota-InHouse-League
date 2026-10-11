@@ -90,6 +90,17 @@
     tag.hidden = !season;
   }
 
+  // 리그 관리자가 정한 날짜(모집 종료, 시즌 종료)는 한국 날짜(YYYY-MM-DD)이고, 기준은 그날 0시(한국 시간)다
+  const KST_MS = 9 * 3600000;
+  const dayStart = day => { const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(day || ''); return m ? Date.UTC(+m[1], +m[2] - 1, +m[3]) - KST_MS : NaN; };
+  // 한국 날짜로 "11월 1일". 올해가 아니면 해도 적는다
+  const dayText = t => {
+    const d = new Date(t + KST_MS), now = new Date(Date.now() + KST_MS);
+    return (d.getUTCFullYear() !== now.getUTCFullYear() ? d.getUTCFullYear() + '년 ' : '') + (d.getUTCMonth() + 1) + '월 ' + d.getUTCDate() + '일';
+  };
+  const dayAt = day => dayText(dayStart(day)) + ' 0시';            // 기준이 되는 순간: "11월 1일 0시"
+  const dayBefore = day => dayText(dayStart(day) - 86400000);      // 그 전날(기간의 마지막 날): "10월 31일"
+
   let toastTimer;
   // ms: 보여 주는 시간. 읽을 내용이 긴 알림은 더 길게 준다
   function toast(msg, ms){
@@ -104,5 +115,5 @@
     toastTimer = setTimeout(() => { t.hidden = true; }, ms || 3200);
   }
 
-  window.Site = {L, esc, api, mountChrome, setSeason, toast, PREF_LABEL};
+  window.Site = {L, esc, api, mountChrome, setSeason, toast, PREF_LABEL, dayStart, dayAt, dayBefore};
 })();

@@ -116,6 +116,7 @@
 
     <h3>열 때 봇이 덧붙이는 경고</h3>
     <p>결과를 기록하지 않은 판이 남아 있으면 <code>/내전생성</code>의 답 아래에 <strong>⚠️ 결과를 아직 기록하지 않은 판이 있어요: # …</strong>가 붙습니다. 그 판에서 뛴 선수는 새 내전에 참여할 수 없으니, 끝난 판이면 그 글에서 <code>/승리</code>로 기록하고 열리지 않은 판이면 <code>/승리</code>의 <strong>경기 안 함</strong>으로 정리합니다(<a href="#win">7번</a>).</p>
+    <p>시즌 종료 시각이 지난 뒤에 열면 <strong>⚠️ 시즌이 종료됐어요(…). 이 내전의 결과는 순위에 기록되지 않아요.</strong>가 붙고, 모집 글에도 같은 안내가 적힙니다. 내전은 그대로 진행할 수 있습니다(<a href="#win">7번</a>의 "시즌 종료 날짜와 결과 기록").</p>
   </section>
 
   <!-- 3 -->
@@ -307,6 +308,25 @@
         <div class="dc-title">10월 10일(토) 20:54 내전 모집</div>
         <div class="dc-input"><span class="lab">입력</span><span class="dc-cmd">/승리</span><span class="opt"><b>팀</b>경기 안 함 (이 판을 기록 없이 정리)</span></div>
         <div class="dc-msg"><div class="dc-av">퍼</div><div class="dc-body"><div class="dc-head"><b>퍼그나봇</b><i>앱</i><time>오후 9:30</time></div><div class="dc-text"><span class="at">@운영진1</span>님이 이 판을 경기 없이 정리했어요. 결과는 기록되지 않습니다.</div></div></div>
+      </div>
+    </figure>
+
+    <h3>시즌 종료 날짜와 결과 기록</h3>
+    <p>리그 관리자가 시즌 종료 날짜를 정해 두면 시즌은 <strong>그 날짜의 0시(한국 시간)</strong>에 끝납니다. 봇은 경기를 <strong>시작한 시각</strong>으로 그 시즌의 경기인지 가립니다.</p>
+    <ul>
+      <li><strong>종료 시각 전에 시작한 경기</strong>는 결과를 언제 입력하든 기록됩니다. 경기가 종료 시각을 넘겨 끝나도 그 경기까지는 유효합니다.</li>
+      <li><strong>종료 시각 뒤에 시작한 경기</strong>는 <code>/승리</code>를 입력해도 기록되지 않고, 그 판은 정리됩니다. 순위와 MMR은 바뀌지 않습니다.</li>
+      <li><strong>경기를 시작한 시각</strong>은 <code>/시작</code>으로 선수를 처음 옮긴 때입니다. <code>/시작</code>을 쓰지 않았으면 팀 편성이 올라온 때로 봅니다. 종료 시각 무렵의 경기는 <code>/시작</code>을 종료 시각 전에 입력해야 그 시즌의 경기가 됩니다.</li>
+      <li>시즌이 끝난 뒤에도 내전은 열 수 있습니다. 봇이 <code>/내전생성</code>의 답과 모집 글, 팀 편성 아래에 결과가 기록되지 않는다고 알립니다. 경기가 끝나면 <code>/승리</code>를 입력해 그 판을 정리만 해 주세요.</li>
+      <li><strong>새 시즌이 시작된 뒤</strong>에는 지난 시즌에 짠 팀의 결과를 봇으로 기록하거나 되돌릴 수 없습니다. 끝난 경기의 결과는 새 시즌이 시작되기 전에 입력해 주세요.</li>
+    </ul>
+    <figure class="g-fig">
+      <figcaption><b>예시</b>시즌 종료 시각 뒤에 시작한 경기에 <code>/승리</code>를 입력했을 때</figcaption>
+      <div class="dc">
+        <div class="dc-title">11월 1일(일) 00:20 내전 모집</div>
+        <div class="dc-msg"><div class="dc-av">퍼</div><div class="dc-body"><div class="dc-head"><b>퍼그나봇</b><i>앱</i><time>오전 1:10</time></div><div class="dc-text"><span class="at">@운영진1</span>님이 결과를 입력했지만, 이 경기는 시즌 종료(<span class="ts">2026년 11월 1일 오전 12:00</span>) 뒤에 시작해서 기록하지 않았어요. 순위와 MMR은 바뀌지 않습니다.</div></div></div>
+        <div class="dc-used"><span class="dc-mini">운</span><b>운영진1</b> 님이 <span class="dc-cmd">/승리</span> 사용함</div>
+        <div class="dc-msg me"><div class="dc-av">퍼</div><div class="dc-body"><div class="dc-head"><b>퍼그나봇</b><i>앱</i><time>오전 1:10</time></div><div class="dc-text"><span class="at">@운영진1</span>님, 이 경기는 시즌 종료(<span class="ts">2026년 11월 1일 오전 12:00</span>) 뒤에 시작한 경기라 결과를 기록하지 않았어요. 순위와 MMR은 바뀌지 않고, 이 판은 정리했어요. 시즌 종료 날짜가 잘못돼 있다면 리그 관리자에게 알려 주세요.</div><div class="dc-only">👁 이 메시지는 나만 볼 수 있어요</div></div></div>
       </div>
     </figure>
 

@@ -32,6 +32,8 @@
   (대화방과 알릴 역할은 리그 관리자가 /내전하자설정 으로 정한다)
   · 대화방에 모집판(기다리는 사람들과 '참여 희망' 버튼이 있는 글)을 하나 둔다. 버튼을 누르면 /내전하자 와 같고, 누른 사람에게만 '참여 취소' 버튼이 보인다
 - /도움말  → 입력한 사람이 쓸 수 있는 명령어만 본인에게 보여 줌
+- 리그 관리자 페이지에서 시즌 종료 날짜를 정해 두면, 그날 0시 전에 시작한 경기까지만 결과를 기록한다 (끝난 시각이 그 뒤여도 그 경기는 기록한다)
+  · 경기를 시작한 시각은 /시작 을 처음 쓴 때이고, 쓰지 않았으면 팀을 짠 때다. 시즌이 끝난 뒤의 내전은 열 수 있지만 결과는 기록하지 않는다
 - 진행 중인 모집과 역할 설정은 state.json 에 적어 두어, 봇을 껐다 켜도 이어짐
 
 설정은 같은 폴더의 config.json 에서 바꿉니다. (config.example.json 을 복사해 만드세요)
@@ -101,6 +103,7 @@ DEADLINE_FORMAT = re.compile(r"(\d{4})-(\d{2})-(\d{2})-(\d{2})-(\d{2})")
 DEADLINE_EXAMPLE = "`2026-10-07-21-30` (연-월-일-시-분, 한국 시간, 24시간제)"
 MESSAGE_LIMIT = 1900  # 디스코드 메시지는 2000자까지라 조금 남겨 두고 나눈다
 THREAD_ARCHIVED = 50083  # 디스코드 오류 번호: 보관된(접힌) 스레드에는 글을 올리거나 고칠 수 없다
+OFFSEASON_NOTE = "ℹ️ 시즌이 종료되어 이 내전의 결과는 순위에 기록되지 않습니다."  # 시즌이 끝난 뒤의 내전에 붙이는 안내
 
 
 # ── 모집 상태 ────────────────────────────────────────────────
@@ -124,6 +127,7 @@ class Recruitment:
         self.extended = False
         self.synced = False  # 리그 서버에 명단이 올라가 있는지
         self.lineup = False  # 팀을 짜서 알렸는지
+        self.offseason = False  # 시즌이 끝난 뒤에 만든 내전. 결과를 기록하지 않는다고 모집 글에 적는다
         self.edit_lock = asyncio.Lock()
 
     @property
@@ -143,6 +147,7 @@ class Recruitment:
             "extended": self.extended,
             "synced": self.synced,
             "lineup": self.lineup,
+            "offseason": self.offseason,
         }
 
 
@@ -190,6 +195,10 @@ class InhouseBot(discord.Client):
         self.want_seq = 0          # 모집판을 맞춰 달라는 요청의 번호. 기다리던 요청은 가장 나중 것만 한다
         self.want_fresh = False    # 기다리는 요청 가운데 새로 올려 달라는 것이 있는지
         self.want_task: asyncio.Task | None = None
+        # 지금 시즌의 번호와 시즌 종료 시각(1970년부터의 초, 정해 두지 않았으면 0). 서버의 답에서 받아 적어 둔다(note_season, 서버 버전 16).
+        # 결과를 기록할 때는 그 자리에서 다시 받아 확인하고, 여기 적어 둔 값은 내전을 열 때와 팀을 알릴 때의 안내에 쓴다
+        self.season_no: int | None = None
+        self.season_end = 0.0
 
     @property
     def current(self) -> Recruitment | None:
@@ -452,7 +461,8 @@ def announcement_text(rec: Recruitment) -> str:
             f"(<t:{rec.end_ts}:R> 마감{', 연장됨' if rec.extended else ''})\n"
             f"👉 여기에서 `/참여` 를 입력하세요. 취소는 `/참여취소`"
         )
-    return f"<@{rec.host_id}>님이 내전 모집을 열었어요.\n{ANNOUNCEMENT}\n\n{status}\n👥 참여자 ({count}명): {names}"
+    off = f"\n{OFFSEASON_NOTE}" if rec.offseason and not rec.cancelled else ""
+    return f"<@{rec.host_id}>님이 내전 모집을 열었어요.\n{ANNOUNCEMENT}{off}\n\n{status}\n👥 참여자 ({count}명): {names}"
 
 
 async def awake(thread, action):
@@ -618,6 +628,7 @@ async def restore_state() -> None:
         rec.participants = {int(uid): {"name": name, "username": username} for uid, name, username in cur.get("participants", [])}
         rec.closed, rec.cancelled, rec.extended = bool(cur.get("closed")), bool(cur.get("cancelled")), bool(cur.get("extended"))
         rec.synced, rec.lineup = bool(cur.get("synced")), bool(cur.get("lineup"))
+        rec.offseason = bool(cur.get("offseason"))
         try:
             place = await get_channel(int(cur.get("thread_id") or SIGNUP_CHANNEL_ID))
         except discord.NotFound:
@@ -971,7 +982,9 @@ async def auto_match(rec: Recruitment) -> None:
     try:
         # sync: 승인돼 있는데 선수단에 빠진 선수가 있으면 서버가 먼저 채워 넣고 기록을 준다(서버 버전 10부터. 예전 서버는 이 값을 모른 채 기록만 준다).
         # 승인한 선수는 승인할 때 선수단에 들어가지만, 그때 드라이브가 답하지 않았거나 매니저가 예전 기록으로 덮어쓴 경우가 여기서 메워진다
-        league = (await call_server({"action": "adminLeague", "sync": True})).get("league")
+        got = await call_server({"action": "adminLeague", "sync": True})
+        note_season(got)
+        league = got.get("league")
     except Exception as e:
         print(f"리그 기록을 받지 못했습니다: {e!r}")
         await tell_admins(where + "리그 서버에서 기록을 받지 못해 팀을 자동으로 짜지 못했습니다. 잠시 뒤 그 글에서 `/연장` → `/마감` 하면 다시 짭니다. "
@@ -1015,11 +1028,16 @@ async def auto_match(rec: Recruitment) -> None:
         "place_id": rec.place_id,  # 결과를 알릴 곳 (모집 글)
         "lanes": lanes,
         "who": who,
+        "season": bot.season_no,  # 팀을 짠 때의 시즌 번호. 그 뒤에 새 시즌이 시작되면 이 판의 결과는 새 시즌에 기록하지 않는다
         "result": None,  # /승리 로 기록하면 {"winner", "match_id"}
     })
     note = (f"경기가 끝나면 {where}에서 `/승리` 로 이긴 팀을 골라 결과를 기록하세요. MMR이 정산되고 순위 페이지에 반영됩니다.\n"
             "대타가 뛰었거나 자리를 바꿔 뛰었다면 `/승리` 로 기록하지 말고 리그 관리자에게 알려 주세요. "
             "리그 관리자가 리그 매니저의 **봇이 짠 팀 불러오기**로 편성을 올린 뒤 고쳐서 기록합니다.")
+    if season_over():  # 시즌이 끝난 뒤에 짠 팀이다. 위의 이기면·지면 점수는 적용되지 않는다고 그 글에 바로 알린다
+        await post(rec, f"{OFFSEASON_NOTE} (시즌 종료: <t:{int(bot.season_end)}:f>)", quiet=True)
+        note = (f"시즌이 종료돼서(<t:{int(bot.season_end)}:f>) 이 경기의 결과는 기록되지 않습니다. "
+                f"경기가 끝나면 {where}에서 `/승리` 를 입력해 이 판을 정리해 주세요(기록하지 않고 정리만 합니다).")
     try:
         await call_server({"action": "pushLineup", "lineup": {
             "post": getattr(rec.message, "jump_url", ""), "lanes": lanes, "bench": [p["id"] for p in result["bench"]],
@@ -1060,6 +1078,58 @@ def settled(rec: Recruitment) -> bool:
     return bool(entry and entry.get("result"))
 
 
+# ── 시즌 종료 (서버 버전 16) ──
+# 리그 관리자 페이지에서 시즌 종료 날짜를 정해 두면 그날 0시(한국 시간)에 시즌이 끝난다(운영자가 2026-10-12에 정함):
+# "시즌 내의 경기인가는 시즌 종료 날짜 0시 이전에 시작했는가로 판단한다. 종료 시간이 시즌 종료 시간을 넘어가도 해당 매치까지는 유효하다."
+#  - 경기를 시작한 시각은 /시작 으로 선수를 처음 옮긴 때다. /시작 을 쓰지 않았으면 팀을 짜서 알린 때로 본다(match_start. 내가 정한 기준이다:
+#    봇은 도타 2 안에서 경기가 언제 시작했는지 모른다).
+#  - 그 시각이 시즌 종료 시각보다 앞이면 결과를 언제 입력하든 기록한다. 뒤면 /승리 가 기록하지 않고 그 판을 치운다(SeasonOver).
+#  - 시즌이 끝난 뒤에도 내전은 열 수 있다. 결과가 기록되지 않는다고 리그 운영진과 모집 글에 알린다.
+#  - 팀을 짠 뒤에 새 시즌이 시작됐으면(시즌 번호가 달라졌으면) 그 판의 결과를 새 시즌에 기록하지 않는다. 지난 시즌의 경기가 새 시즌의 순위에 들어가지 않게.
+# 시즌 종료 시각은 서버가 알려 준다(adminLeague, adminList 의 답). 예전 서버의 답에는 없고, 그러면 아무것도 막지 않는다.
+class SeasonOver(RuntimeError):
+    """이 경기는 지금 시즌의 경기가 아니다. why 는 "ended"(시즌 종료 시각 뒤에 시작했다. end 가 그 시각) 또는 "changed"(팀을 짠 뒤에 새 시즌이 시작됐다)"""
+
+    def __init__(self, why: str, end: float = 0) -> None:
+        super().__init__(why)
+        self.why = why
+        self.end = end
+
+
+def note_season(data: dict) -> None:
+    """서버의 답에 실린 지금 시즌의 번호와 종료 시각을 적어 둔다"""
+    if isinstance(data.get("seasonNo"), int):
+        bot.season_no = data["seasonNo"]
+    at = data.get("seasonEndAt")
+    if isinstance(at, (int, float)) and not isinstance(at, bool):
+        bot.season_end = at / 1000 if at > 0 else 0.0
+
+
+def season_over(at: float | None = None) -> bool:
+    """그 시각(기본: 지금)이 시즌 종료 시각을 지났는가. 종료 날짜를 정해 두지 않았으면 False"""
+    return bool(bot.season_end) and (time.time() if at is None else at) >= bot.season_end
+
+
+def match_start(entry: dict) -> float:
+    """그 판의 경기를 시작한 시각: /시작 으로 선수를 처음 옮긴 때, 쓰지 않았으면 팀을 짜서 알린 때"""
+    return float(entry.get("began") or entry.get("at") or 0)
+
+
+async def clear_entry(entry: dict) -> None:
+    """짠 팀을 결과 없이 치운다(경기 안 함, 시즌이 끝난 뒤의 경기). 그대로 두면 그 열 명이 오늘 뛴 사람으로 남고 다른 내전에 참여하지 못한다"""
+    newest = entry is bot.lineups[-1]
+    bot.lineups.remove(entry)
+    for g in bot.games:
+        if g.message is not None and g.message.id == entry.get("message_id"):
+            g.lineup = False
+    save_state()
+    if newest:  # 서버에 올려 둔 편성이 이 판의 것이다. 매니저가 열리지 않은 판을 불러오지 않게 비운다
+        try:
+            await call_server({"action": "pushLineup", "lineup": None})
+        except Exception as e:
+            print(f"리그 서버의 팀 편성을 비우지 못했습니다: {e!r}")
+
+
 class LaterMatches(RuntimeError):
     """되돌리려는 경기 뒤에, 그 경기에 뛴 선수가 다시 뛴 경기가 기록돼 있다. matches 는 그 경기들의 id(나중 경기가 앞).
     뒤 경기의 점수는 이 경기의 결과 위에서 계산됐으므로, 그 경기부터 차례로 되돌려야 한다."""
@@ -1075,13 +1145,16 @@ def match_changes(match: dict) -> list[dict]:
              "after": r["before"] + r["delta"]} for r in match.get("rows") or []]
 
 
-async def change_league(payload: dict, tried: list | None = None) -> dict:
+async def change_league(payload: dict, tried: list | None = None, entry: dict | None = None) -> dict:
     """서버의 리그 기록을 받아 matchmaker.js 로 고친 뒤 다시 올린다.
     받아 온 사이에 매니저가 기록을 바꿨으면 서버가 받지 않으므로(conflict), 새 기록으로 다시 한다.
 
     올린 뒤 답을 받지 못하면(ServerGlitch) 서버가 그 기록을 받았는지 알 수 없다. 받았는데 모르고 다시 올리면 같은 경기가 두 번 기록된다.
     그래서 올리기 전에 새 경기의 id 를 tried 에 적어 두고(편성에 붙어 state.json 에 남는다), 다시 할 때는 먼저 서버의 기록에 그 경기가 있는지 본다.
-    있으면 다시 계산하지 않고 그 경기를 결과로 삼는다. 되돌리기도 같다: 되돌릴 경기가 서버에 이미 없으면 되돌린 것으로 본다."""
+    있으면 다시 계산하지 않고 그 경기를 결과로 삼는다. 되돌리기도 같다: 되돌릴 경기가 서버에 이미 없으면 되돌린 것으로 본다.
+
+    entry 는 그 판의 편성이다. 주면 이 시즌의 경기인지 본다(SeasonOver): 팀을 짠 뒤에 새 시즌이 시작됐거나,
+    결과를 기록하려는데 경기를 시작한 시각이 시즌 종료 시각보다 뒤면 기록하지 않는다."""
     tried = tried if tried is not None else []
     for attempt in range(1, SERVER_TRIES + 1):
         last = attempt == SERVER_TRIES
@@ -1091,15 +1164,20 @@ async def change_league(payload: dict, tried: list | None = None) -> dict:
             if last:
                 raise
             continue  # call_server 가 이미 기다려 가며 몇 번 물어봤다
+        note_season(got)
         league = got.get("league")
         if not league:
             raise RuntimeError("서버에 리그 기록이 없습니다")
         matches = league.get("matches") or []
+        if entry is not None and isinstance(entry.get("season"), int) and isinstance(got.get("seasonNo"), int) and got["seasonNo"] != entry["season"]:
+            raise SeasonOver("changed")  # 팀을 짠 뒤에 새 시즌이 시작됐다. 지금 받은 것은 새 시즌의 기록이다
         if payload.get("mode") == "result":
             done = next((m for m in matches if m.get("id") in tried), None)
             if done is not None:  # 앞서 올리고 답을 받지 못한 기록이 서버에 들어가 있다
                 return {"ok": True, "league": league, "match": {"id": done["id"], "at": done.get("at"), "winner": done.get("winner")},
                         "changes": match_changes(done)}
+            if entry is not None and bot.season_end and match_start(entry) >= bot.season_end:
+                raise SeasonOver("ended", bot.season_end)  # 시즌 종료 시각 뒤에 시작한 경기다
         elif payload.get("mode") == "undo" and payload.get("matchId") and all(m.get("id") != payload["matchId"] for m in matches):
             # 되돌릴 경기가 서버에 없다: 앞서 올린 되돌리기가 들어갔거나, 매니저에서 그 경기를 지웠다
             return {"ok": True, "league": league, "match": {"id": payload["matchId"]}, "changes": []}
@@ -1243,6 +1321,7 @@ async def sync_roles(force: bool = False) -> dict:
         return out
     async with bot.role_lock:
         data = await call_server({"action": "adminList"})
+        note_season(data)  # 지금 시즌의 종료 시각. 시즌이 끝난 뒤에 여는 내전에 미리 알리려고 5분마다 받아 둔다
         guild = await get_guild()
         role = guild.get_role(bot.player_role_id)
         out["problem"] = role_problem(guild, role)
@@ -1622,6 +1701,7 @@ async def create_inhouse(interaction: discord.Interaction, deadline: Optional[st
             await answer(interaction, f"{actor}님, {full}")
             return
         rec = Recruitment(host_id=interaction.user.id, end_ts=end_ts or deadline_after(SIGNUP_SECONDS))
+        rec.offseason = season_over()  # 시즌이 끝난 뒤의 내전은 열 수 있지만 결과를 기록하지 않는다. 모집 글에 그렇게 적는다
         try:
             await open_signup(rec, title_ts=end_ts)
         except discord.HTTPException as e:
@@ -1636,6 +1716,7 @@ async def create_inhouse(interaction: discord.Interaction, deadline: Optional[st
         interaction,
         f"{actor}님이 모집을 시작했어요! {rec.message.jump_url}\n마감: {when(rec.end_ts)} (<t:{rec.end_ts}:R>)\n"
         "마감·연장·취소·재모집과 경기 시작·종료·결과 기록은 그 글에서 입력해 주세요."
+        + (f"\n⚠️ 시즌이 종료됐어요(<t:{int(bot.season_end)}:f>). 이 내전의 결과는 순위에 기록되지 않아요. 모집 글에도 그렇게 적었어요." if rec.offseason else "")
         + (f"\n⚠️ 결과를 아직 기록하지 않은 판이 있어요: {links(waiting)}. 끝났다면 그 글에서 `/승리` 로 기록하고, "
            "팀만 짜고 열리지 않은 판이면 `/승리` 에서 **경기 안 함**을 골라 주세요. 그 판에서 뛰는 선수는 다른 내전에 참여할 수 없어요."
            if waiting else ""),
@@ -1792,6 +1873,7 @@ async def start_game(interaction: discord.Interaction, lobby: Optional[discord.V
                                        else f"{actor}님, {rooms['lobby'].mention} 에 배정된 선수가 없어서 아무도 옮기지 않았어요.{where}") + note)
             return
         entry["started"] = time.time()  # /종료 가 끝났다는 안내를 이 판의 모집 글에 올린다
+        entry.setdefault("began", entry["started"])  # 이 판의 경기를 시작한 시각(처음 옮긴 때). 시즌 종료 시각 전에 시작했는지를 이것으로 본다
         entry.pop("ended", None)
         entry["rooms"] = {side: team[side].id for side, _ in sides}  # /종료 는 이 벌만 비운다
         save_state()
@@ -1809,6 +1891,8 @@ async def start_game(interaction: discord.Interaction, lobby: Optional[discord.V
     if failed:
         lines.append(("⚠️ 봇에 **멤버 이동** 권한이 없어 옮기지 못한 선수: " if denied else "⚠️ 옮기지 못한 선수(그사이 음성 채널에서 나갔을 수 있어요): ")
                      + ", ".join(f"<@{uid}>" for uid in failed))
+    if season_over(match_start(entry)):
+        lines.append(f"⚠️ 시즌 종료(<t:{int(bot.season_end)}:f>) 뒤에 시작한 경기라, 결과는 순위에 기록되지 않아요.")
     await answer(interaction, "\n".join(lines) + note)
 
 
@@ -1890,22 +1974,26 @@ async def record_win(interaction: discord.Interaction, team: str) -> None:
         more = f"\n결과를 기다리는 판이 {len(others)}개 더 있어요. 그 내전의 글에서 `/승리` 로 정리해 주세요: {links(others)}" if others else ""
         if team == "x":
             # 팀만 짜고 열리지 않은 판은 기록 없이 치운다. 그대로 두면 이 판의 열 명이 오늘 뛴 사람으로 남고, 다른 내전에 참여하지 못한다
-            newest = entry is bot.lineups[-1]
-            bot.lineups.remove(entry)
-            for g in bot.games:
-                if g.message is not None and g.message.id == entry.get("message_id"):
-                    g.lineup = False
-            save_state()
-            if newest:  # 서버에 올려 둔 편성이 이 판의 것이다. 매니저가 열리지 않은 판을 불러오지 않게 비운다
-                try:
-                    await call_server({"action": "pushLineup", "lineup": None})
-                except Exception as e:
-                    print(f"리그 서버의 팀 편성을 비우지 못했습니다: {e!r}")
+            await clear_entry(entry)
             await send_to(entry["place_id"], f"{actor}님이 이 판을 경기 없이 정리했어요. 결과는 기록되지 않습니다.")
             await answer(interaction, f"{actor}님이 <#{entry['place_id']}> 의 판을 경기 없이 정리했어요. 결과와 MMR은 바뀌지 않습니다.{more}")
             return
         try:
-            result = await change_league({"mode": "result", "lanes": entry["lanes"], "winner": team}, entry.setdefault("tried", []))
+            result = await change_league({"mode": "result", "lanes": entry["lanes"], "winner": team}, entry.setdefault("tried", []), entry)
+        except SeasonOver as e:  # 이 시즌의 경기가 아니다. 기록하지 않고 이 판을 치운다
+            await clear_entry(entry)
+            if e.why == "changed":
+                public = f"{actor}님이 결과를 입력했지만, 이 경기의 팀을 짠 뒤에 새 시즌이 시작돼서 기록하지 않았어요. 순위와 MMR은 바뀌지 않습니다."
+                mine = (f"{actor}님, 이 경기의 팀을 짠 뒤에 새 시즌이 시작돼서 결과를 기록하지 않았어요. 순위와 MMR은 바뀌지 않고, 이 판은 정리했어요. "
+                        "지난 시즌의 기록에 넣어야 하는 경기라면 리그 관리자에게 알려 주세요.")
+            else:
+                end = f"<t:{int(e.end)}:f>"
+                public = f"{actor}님이 결과를 입력했지만, 이 경기는 시즌 종료({end}) 뒤에 시작해서 기록하지 않았어요. 순위와 MMR은 바뀌지 않습니다."
+                mine = (f"{actor}님, 이 경기는 시즌 종료({end}) 뒤에 시작한 경기라 결과를 기록하지 않았어요. 순위와 MMR은 바뀌지 않고, 이 판은 정리했어요. "
+                        "시즌 종료 날짜가 잘못돼 있다면 리그 관리자에게 알려 주세요.")
+            await send_to(entry["place_id"], public)
+            await answer(interaction, mine + more)
+            return
         except ServerGlitch as e:  # 서버가 답하지 않았다. 올린 기록이 들어갔는지 모른다
             print(f"결과 기록 실패: {e!r}")
             await answer(interaction, f"{actor}님, 리그 서버가 답하지 않아 결과가 기록됐는지 확인하지 못했어요. ({e})\n"
@@ -1961,7 +2049,10 @@ async def undo_win(interaction: discord.Interaction) -> None:
             await answer(interaction, f"{actor}님, 되돌릴 결과가 없어요. `/승리` 로 기록한 결과만 되돌릴 수 있어요.")
             return
         try:
-            await change_league({"mode": "undo", "matchId": entry["result"]["match_id"]})
+            await change_league({"mode": "undo", "matchId": entry["result"]["match_id"]}, entry=entry)
+        except SeasonOver:  # 팀을 짠 뒤에 새 시즌이 시작됐다. 이 결과는 보관된 지난 시즌의 기록에 있어서 봇이 되돌릴 수 없다
+            await answer(interaction, f"{actor}님, 이 결과는 지난 시즌의 기록이라 봇으로는 되돌릴 수 없어요. 고쳐야 한다면 리그 관리자에게 알려 주세요.")
+            return
         except LaterMatches as e:  # 이 경기 뒤에 같은 선수가 뛴 경기가 기록돼 있다. 그 경기부터 되돌려야 한다
             await undo_blocked(interaction, actor, e.matches)
             return

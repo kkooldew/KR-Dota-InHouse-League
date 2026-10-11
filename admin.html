@@ -25,6 +25,10 @@
 .season-row{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:14px}
 .season-row input{width:160px}
 .season-row label{min-width:58px}
+.season-row input[type=date]{background:var(--ink);border:1px solid var(--line);border-radius:3px;padding:8px 10px;color:var(--bone)}
+.season-row input[type=date]:focus{outline:2px solid var(--gold-dim);outline-offset:-1px;border-color:var(--gold-dim)}
+.season-row .state{flex:1 1 260px;font-size:12.5px;color:var(--bone-dim)}
+.season-row .state.done{color:#e58b80}
 .season-note{margin:10px 0 0;font-size:12.5px;color:var(--bone-dim);max-width:76ch}
 .season-note b{color:var(--bone);font-weight:500}
 .counts{display:flex;flex-wrap:wrap;gap:4px 18px;font-size:14px;color:var(--bone-dim);margin:0 0 14px}
@@ -129,11 +133,25 @@ details.by-file[open] summary{margin-bottom:10px}
         <button class="btn sm" type="button" id="btnToggleOpen"></button>
         <button class="btn sm ghost" type="button" id="btnLogout">잠그기</button>
       </div>
+      <div class="season-row" id="regCloseRow" hidden>
+        <label for="regClose" class="dim" style="font-size:13.5px">모집 종료</label>
+        <input type="date" id="regClose" aria-describedby="regCloseState">
+        <button class="btn sm" type="button" id="btnRegClose">날짜 저장</button>
+        <button class="btn sm ghost" type="button" id="btnRegCloseOff" hidden>지우기</button>
+        <span class="state" id="regCloseState"></span>
+      </div>
       <div class="season-row">
         <label for="season" class="dim" style="font-size:13.5px">시즌 이름</label>
         <input type="text" id="season" maxlength="30">
         <button class="btn sm" type="button" id="btnSeason">이름만 고치기</button>
         <span class="dim" style="font-size:12.5px">등록 페이지와 순위 페이지 위쪽에 보입니다. 이름만 바뀌고 명단은 그대로입니다.</span>
+      </div>
+      <div class="season-row" id="seasonEndRow" hidden>
+        <label for="seasonEnd" class="dim" style="font-size:13.5px">시즌 종료</label>
+        <input type="date" id="seasonEnd" aria-describedby="seasonEndState">
+        <button class="btn sm" type="button" id="btnSeasonEnd">날짜 저장</button>
+        <button class="btn sm ghost" type="button" id="btnSeasonEndOff" hidden>지우기</button>
+        <span class="state" id="seasonEndState"></span>
       </div>
       <div class="season-row">
         <label for="newSeason" class="dim" style="font-size:13.5px">새 시즌</label>
@@ -144,6 +162,9 @@ details.by-file[open] summary{margin-bottom:10px}
       <p class="season-note">새 시즌을 시작하면 <b>순위(승·패)와 경기 기록만 새로 시작합니다.</b> 등록 명단과 선수는 그대로 이어지고, 선수는 다시 등록하지 않습니다.
         끝난 시즌의 명단·순위·경기 기록은 시트에 그 시즌 이름이 붙은 탭으로 남습니다.
         등록을 받을지는 시즌과 상관없이 위의 <b>등록 열기·닫기</b>로 정합니다. <span id="pastSeasons"></span></p>
+      <p class="season-note" id="dateNote" hidden><b>모집 종료</b>와 <b>시즌 종료</b>는 날짜를 정해 두면 <b>그날 0시(한국 시간)</b>에 저절로 됩니다. 11월 1일로 정하면 10월 31일 밤까지입니다.
+        시즌 종료 시각 <b>전에 시작한 경기</b>까지가 그 시즌의 경기이고, 끝난 시각이 그 뒤여도 그 경기는 기록됩니다. 그 뒤에 시작한 경기는 봇이 기록하지 않습니다.
+        시즌이 끝나도 새 시즌은 저절로 시작하지 않으니, 남은 경기의 결과를 모두 기록한 뒤에 <b>새 시즌 시작</b>을 눌러 주세요.</p>
       <div class="season-row" id="alertRow" hidden>
         <label for="webhook" class="dim" style="font-size:13.5px">새 등록 알림</label>
         <input type="password" id="webhook" autocomplete="off" placeholder="디스코드 웹후크 주소" aria-describedby="alertNote">
@@ -282,10 +303,10 @@ details.by-file[open] summary{margin-bottom:10px}
 <footer id="site-foot"></footer>
 
 <script src="config.js"></script>
-<script src="assets/site.js"></script>
+<script src="assets/site.js?v=16"></script>
 <script>
 (function(){
-  const {L, api, esc, mountChrome, setSeason, toast, PREF_LABEL} = window.Site;
+  const {L, api, esc, mountChrome, setSeason, toast, PREF_LABEL, dayStart, dayAt, dayBefore} = window.Site;
   const $ = s => document.querySelector(s);
   // 다른 사이트가 이 페이지를 틀(iframe) 안에 띄워 놓고, 위에 다른 그림을 덮어 승인 같은 버튼을 누르게 만드는 속임수를 막는다
   if(window.top !== window.self){ document.body.textContent = '리그 관리자 페이지는 다른 사이트 안에서 열 수 없습니다. 주소를 직접 열어 주세요.'; return; }
@@ -375,7 +396,28 @@ details.by-file[open] summary{margin-bottom:10px}
     if(box.dataset.auto !== String(auto)){ box.open = !auto; box.dataset.auto = String(auto); }   // 서버가 넣어 주면 파일 방식은 접어 둔다 (리그 관리자가 펼친 것은 다시 접지 않는다)
     $('#openPill').textContent = status.open ? '등록 받는 중' : '등록 닫힘';
     $('#openPill').className = 'pill ' + (status.open ? 'on' : 'off');
-    $('#openHint').textContent = status.open ? '누구나 등록 페이지에서 등록하거나 정보를 고칠 수 있습니다.' : '등록 페이지에서 새로 등록하거나 고칠 수 없습니다.';
+    // 날짜로 닫기(서버 버전 16): 모집 종료 날짜는 리그 관리자 누구나, 시즌 종료 날짜는 주인 키로만 정한다. 기준은 그날 0시(한국 시간)다
+    const dated = (status.version || 0) >= 16;
+    const closeDay = dated ? status.regClose || '' : '', endDay = dated ? status.seasonEnd || '' : '';
+    const closePassed = !!closeDay && dayStart(closeDay) <= Date.now();
+    $('#openHint').textContent = status.open
+      ? '누구나 등록 페이지에서 등록하거나 정보를 고칠 수 있습니다.' + (closeDay ? ' ' + dayAt(closeDay) + '에 저절로 닫힙니다.' : '')
+      : closePassed ? '모집 종료 날짜(' + dayAt(closeDay) + ')가 지나 닫혔습니다. 다시 받으려면 등록 열기를 누르세요.'
+      : '등록 페이지에서 새로 등록하거나 고칠 수 없습니다.';
+    $('#regCloseRow').hidden = !dated; $('#seasonEndRow').hidden = !dated; $('#dateNote').hidden = !dated;
+    if(document.activeElement !== $('#regClose')) $('#regClose').value = closeDay;
+    $('#btnRegCloseOff').hidden = !closeDay;
+    $('#regCloseState').className = 'state' + (closePassed ? ' done' : '');
+    $('#regCloseState').textContent = !closeDay ? '정하지 않았습니다. 정해 두면 그날 0시에 등록이 저절로 닫힙니다.'
+      : closePassed ? dayAt(closeDay) + '에 등록이 닫혔습니다.'
+      : dayAt(closeDay) + '에 등록이 저절로 닫힙니다. ' + dayBefore(closeDay) + '까지 받습니다.' + (status.open ? '' : ' 지금은 닫아 둔 상태라, 등록을 열어야 받습니다.');
+    if(document.activeElement !== $('#seasonEnd')) $('#seasonEnd').value = endDay;
+    $('#seasonEnd').disabled = !owner; $('#btnSeasonEnd').disabled = !owner; $('#btnSeasonEndOff').disabled = !owner;
+    $('#btnSeasonEndOff').hidden = !endDay;
+    $('#seasonEndState').className = 'state' + (endDay && status.seasonEnded ? ' done' : '');
+    $('#seasonEndState').textContent = (!endDay ? '정하지 않았습니다. 정해 두면 그날 0시 전에 시작한 경기까지만 이 시즌에 기록됩니다.'
+      : status.seasonEnded ? dayAt(endDay) + '에 시즌이 끝났습니다. 그 전에 시작한 경기의 결과만 기록됩니다. 다음 시즌은 아래 새 시즌 시작으로 엽니다.'
+      : dayAt(endDay) + '에 시즌이 끝납니다. ' + dayBefore(endDay) + '까지 시작한 경기가 이 시즌의 경기입니다.') + (owner ? '' : ' 주인 키로만 바꿀 수 있습니다.');
     $('#btnToggleOpen').textContent = status.open ? '등록 닫기' : '등록 열기';
     if(document.activeElement !== $('#season')) $('#season').value = status.season || '';
     const past = status.pastSeasons || [];
@@ -390,6 +432,32 @@ details.by-file[open] summary{margin-bottom:10px}
     if(!next && !confirm('선수 등록을 닫을까요? 닫는 동안에는 새로 등록하거나 정보를 고칠 수 없습니다.')) return;
     try{ status = await adminPost({action: 'adminConfig', open: next}); renderStatus(); toast(next ? '등록을 열었습니다' : '등록을 닫았습니다'); }
     catch(err){ toast(err.message); }
+  });
+  /* ---------- 날짜로 닫기: 모집 종료 날짜와 시즌 종료 날짜 (그날 0시에 저절로 닫힌다) ---------- */
+  // field 는 서버에 보내는 이름(regClose | seasonEnd). day 가 빈 값이면 날짜를 지운다
+  async function saveDay(field, day, done){
+    try{ status = await adminPost({action: 'adminConfig', [field]: day}); renderStatus(); toast(done); }
+    catch(err){ toast(err.message); }
+  }
+  $('#btnRegClose').addEventListener('click', () => {
+    const day = $('#regClose').value;
+    if(!day){ toast('모집 종료 날짜를 골라 주세요'); $('#regClose').focus(); return; }
+    if(dayStart(day) <= Date.now() && !confirm(dayAt(day) + '는 이미 지났습니다. 저장하면 지금 바로 등록이 닫힙니다. 계속할까요?')) return;
+    saveDay('regClose', day, '모집 종료 날짜를 저장했습니다. ' + dayAt(day) + '에 등록이 닫힙니다.');
+  });
+  $('#btnRegCloseOff').addEventListener('click', () => {
+    if(!confirm('모집 종료 날짜를 지울까요? 지우면 등록은 직접 닫을 때까지 열려 있습니다.')) return;
+    saveDay('regClose', '', '모집 종료 날짜를 지웠습니다');
+  });
+  $('#btnSeasonEnd').addEventListener('click', () => {
+    const day = $('#seasonEnd').value;
+    if(!day){ toast('시즌 종료 날짜를 골라 주세요'); $('#seasonEnd').focus(); return; }
+    if(dayStart(day) <= Date.now() && !confirm(dayAt(day) + '는 이미 지났습니다. 저장하면 지금 바로 시즌이 끝난 것으로 되고, 그 시각 뒤에 시작한 경기의 결과는 봇이 기록하지 않습니다. 계속할까요?')) return;
+    saveDay('seasonEnd', day, '시즌 종료 날짜를 저장했습니다. ' + dayAt(day) + ' 전에 시작한 경기까지 이 시즌의 경기입니다.');
+  });
+  $('#btnSeasonEndOff').addEventListener('click', () => {
+    if(!confirm('시즌 종료 날짜를 지울까요? 지우면 이 시즌은 새 시즌을 시작할 때까지 이어집니다.')) return;
+    saveDay('seasonEnd', '', '시즌 종료 날짜를 지웠습니다');
   });
   $('#btnSeason').addEventListener('click', async () => {
     try{ status = await adminPost({action: 'adminConfig', season: $('#season').value}); renderStatus(); toast('시즌 이름을 고쳤습니다'); }
@@ -428,7 +496,7 @@ details.by-file[open] summary{margin-bottom:10px}
         '선수는 다시 등록하지 않습니다. 지금 명단은 시트의 "선수등록 (' + esc(old) + ')" 탭에도 남습니다.'],
       ['선수단 — 그대로', '승인된 선수 ' + n('승인') + '명은 계속 선수입니다. 승인을 풀었거나 제외했는데 이번 시즌에 경기를 치러 선수단에 남아 있던 선수는 이때 빠집니다.'],
       ['디스코드 봇', '리그 선수 역할은 그대로 둡니다. 봇이 올려 둔 참가 명단과 짠 팀은 지워지니, ' +
-        '결과를 아직 기록하지 않은 판이 있으면 먼저 <code>/승리</code>로 기록해 주세요.'],
+        '결과를 아직 기록하지 않은 판이 있으면 먼저 <code>/승리</code>로 기록해 주세요. 새 시즌을 시작한 뒤에는 지난 시즌에 짠 팀의 결과를 봇이 기록하지 않습니다.'],
       ['리그 매니저', '열면 새 시즌의 기록(같은 선수, 0승 0패, 경기 없음)을 받아 옵니다.']
     ].map(([title, text]) => '<li><b>' + title + '</b>' + text + '</li>').join('');
   }

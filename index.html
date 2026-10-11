@@ -264,7 +264,7 @@ body.at-intro .site-foot{margin-top:0}
 <footer id="site-foot"></footer>
 
 <script src="config.js"></script>
-<script src="assets/site.js"></script>
+<script src="assets/site.js?v=16"></script>
 <script>
 (function(){
   const {L, api, mountChrome, setSeason, PREF_LABEL} = window.Site;
@@ -574,9 +574,11 @@ body.at-intro .site-foot{margin-top:0}
       return;
     }
     regOpen = true;
-    intro(s.season, '선수 모집 중', '닉네임, 스팀 프로필, 디스코드, MMR, 포지션 순서만 적으면 됩니다. 1분이면 충분합니다.');
+    // 모집 종료 날짜(서버 버전 16): 그날 0시에 닫히므로 전날까지 받는다
+    const until = s.regClose && window.Site.dayStart(s.regClose) > Date.now() ? ' 등록은 ' + window.Site.dayBefore(s.regClose) + '까지 받습니다.' : '';
+    intro(s.season, '선수 모집 중', '닉네임, 스팀 프로필, 디스코드, MMR, 포지션 순서만 적으면 됩니다. 1분이면 충분합니다.' + until);
     $('#introSteps').hidden = false; $('#btnStart').hidden = false; $('#introFine').hidden = false;
-    $('#stateLine').textContent = (s.season ? s.season + ' ' : '') + '선수 등록을 받고 있습니다.';
+    $('#stateLine').textContent = (s.season ? s.season + ' ' : '') + '선수 등록을 받고 있습니다.' + until;
     $('#stateLine').hidden = false;
     // 최고 MMR은 서버 버전 7부터 저장한다. 서버가 아직 예전 버전이면 적어도 남지 않으므로 칸을 보이지 않는다
     fieldEl('peak').hidden = !((s.version || 0) >= 7);

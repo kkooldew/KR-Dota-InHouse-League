@@ -160,6 +160,7 @@ table.hist{border-collapse:collapse;font-size:13.5px}
 <main class="wrap">
   <h1 class="page-title">순위와 경기 기록</h1>
   <div class="status" id="status" aria-live="polite"></div>
+  <div class="notice" id="seasonEnd" style="margin:10px 0 4px;max-width:720px" hidden><p></p></div>
 
   <div id="main" hidden>
     <p class="lead" id="lead"></p>
@@ -216,7 +217,7 @@ table.hist{border-collapse:collapse;font-size:13.5px}
 <footer id="site-foot"></footer>
 
 <script src="config.js"></script>
-<script src="assets/site.js"></script>
+<script src="assets/site.js?v=16"></script>
 <script>
 const {L, api, mountChrome, setSeason, esc} = window.Site;
 const $ = s => document.querySelector(s);
@@ -599,7 +600,17 @@ $('#boardBody').addEventListener('click', e => {
 /* =========================================================
    시작
    ========================================================= */
-if(api.ready) api.get('status').then(s => setSeason(s.season)).catch(() => {});
+// 시즌 종료 날짜(서버 버전 16): 그날 0시 전에 시작한 경기까지가 이 시즌의 경기다
+function showSeasonEnd(s){
+  const box = $('#seasonEnd');
+  box.hidden = !s.seasonEnd;
+  if(!s.seasonEnd) return;
+  const {dayAt, dayBefore} = window.Site;
+  box.querySelector('p').textContent = s.seasonEnded
+    ? '이 시즌은 ' + dayAt(s.seasonEnd) + '에 끝났습니다. 그 전에 시작한 경기까지 반영한 순위입니다.'
+    : '이 시즌은 ' + dayBefore(s.seasonEnd) + '까지입니다. ' + dayAt(s.seasonEnd) + ' 전에 시작한 경기까지 순위에 들어갑니다.';
+}
+if(api.ready) api.get('status').then(s => { setSeason(s.season); showSeasonEnd(s); }).catch(() => {});
 load();
 </script>
 </body>

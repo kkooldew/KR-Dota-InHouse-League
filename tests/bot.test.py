@@ -119,6 +119,7 @@ class World:
         self.season = "시즌 1"
         self.season_no = None     # 시즌 번호. None 이면 번호를 주지 않는 예전 서버처럼 군다
         self.past = {}            # 끝난 시즌의 등록 명단 {시즌 번호: 명단}
+        self.season_end = None    # 시즌 종료 시각(밀리초, 정하지 않았으면 0). None 이면 그 값을 주지 않는 예전 서버(버전 15까지)처럼 군다
         # 서버가 답하지 않는 경우 {요청 이름: ["drop" | "lost" | "", …]}. 그 요청이 올 때마다 앞에서부터 하나씩 꺼내 쓴다.
         # drop 은 요청이 서버에 닿지 못한 것, lost 는 서버는 처리했는데 답이 돌아오지 않은 것, "" 는 정상
         self.glitch = {}
@@ -155,9 +156,11 @@ class World:
                     return {"ok": True, "players": [dict(p) for p in self.registered], "season": self.season}
                 if k is not None and k != self.season_no:
                     return {"ok": True, "players": [dict(p) for p in self.past.get(k, [])], "season": f"시즌 {k + 1}", "seasonNo": k, "current": self.season_no}
-                return {"ok": True, "players": [dict(p) for p in self.registered], "season": self.season, "seasonNo": self.season_no, "current": self.season_no}
+                return {"ok": True, "players": [dict(p) for p in self.registered], "season": self.season, "seasonNo": self.season_no, "current": self.season_no,
+                        **({} if self.season_end is None else {"seasonEndAt": self.season_end})}
             if action == "adminLeague":
-                return {"ok": True, "league": self.league, "rev": self.rev}
+                return {"ok": True, "league": self.league, "rev": self.rev, **({} if self.season_no is None else {"seasonNo": self.season_no}),
+                        **({} if self.season_end is None else {"seasonEndAt": self.season_end})}
             if action == "saveLeague":
                 if self.conflicts > 0:
                     self.conflicts -= 1
@@ -185,6 +188,7 @@ class World:
         mod.bot.manager_role_id = 0
         mod.bot.wants, mod.bot.want_joined, mod.bot.want_alerted, mod.bot.want_channel_id, mod.bot.want_role_id = {}, set(), False, 0, 0
         mod.bot.want_board, mod.bot.want_alert_at, mod.bot.want_seq, mod.bot.want_fresh, mod.bot.want_lock = None, 0.0, 0, False, asyncio.Lock()
+        mod.bot.season_no, mod.bot.season_end = None, 0.0
         mod.STATE_PATH.unlink(missing_ok=True)
 
     def texts(self, mock):
@@ -2091,10 +2095,10 @@ async def main():
     check(t.startswith("<@1>님, `/내전하자` 설정이에요.") and "대화방: 정하지 않음 (어느 채널에서나 받고" in t and "알릴 역할: 정하지 않음" in t and "지금 기다리는 사람: 0명" in t
           and "⚠️ 리그 운영진 역할을 정하지 않아" in t and (await mod.want_status()).startswith("대화방을 정하지 않음(어느 채널에서나 받습니다), 알릴 역할을 정하지 않음 [확인 필요]"),
           "/내전하자설정: 정하기 전의 상태")
-    room = Mock()
-    room.id = 400
+    chat_room = Mock()
+    chat_room.id = 400
     SROLE.mentionable = False
-    t, _ = await run(mod.want_setup, 100, ADMIN, room, SROLE)
+    t, _ = await run(mod.want_setup, 100, ADMIN, chat_room, SROLE)
     check(t.startswith("<@1>님이 `/내전하자` 설정을 바꿨어요.") and "대화방: <#400>" in t and "알릴 역할: <@&66>" in t and mod.bot.want_channel_id == 400 and mod.bot.want_role_id == 66
           and "⚠️ 봇이 **리그 운영진** 역할을 멘션해도 알림이 울리지 않아요." in t and json.loads(mod.STATE_PATH.read_text(encoding="utf-8"))["want"]["role_id"] == 66,
           "/내전하자설정: 대화방과 역할을 정하고, 멘션해도 알림이 울리지 않는 역할이면 고치는 법을 알린다")
@@ -2130,6 +2134,146 @@ async def main():
     t, _ = await run(mod.show_help, 100, GUEST)
     check("**리그 운영진**이 쓸 수 있는 명령어예요." in t, "/도움말: 운영진 채널에서 입력한 사람은 리그 운영진이다 (리그 운영진 역할을 따로 정하지 않았을 때)")
     mod.bot.player_role_id = 0
+
+    # ── 시즌 종료 (서버 버전 16, 운영자가 2026-10-12에 정함): 시즌 종료 시각 전에 시작한 경기까지만 기록한다. 끝난 시각이 그 뒤여도 그 경기는 기록한다 ──
+    mod.run_matchmaker = fake_matchmaker
+    mod.SYNC_URL, mod.SYNC_KEY = "https://example.invalid/exec", "k"
+    ms = lambda at: int(at * 1000)
+    saves = lambda: sum(1 for x in w.server if x["action"] == "saveLeague")
+
+    async def lined(end, no=3):
+        """시즌 종료 시각이 end(초, 0이면 정하지 않음)인 서버에서 12명을 모아 팀을 짠다. 돌려주는 값: (가짜 서버, 그 내전, 그 편성)"""
+        world = World(mod, forum=True, league=league_of(12))
+        world.season_no, world.season_end = no, ms(end)
+        rec = await gather(world, 12)
+        await run(mod.close_now, 300, ADMIN)
+        return world, rec, mod.bot.lineups[-1]
+
+    # 서버의 답에서 시즌 번호와 종료 시각을 받아 적는다. 그 값을 주지 않는 예전 서버의 답은 건드리지 않는다
+    w = World(mod, forum=True)
+    mod.note_season({"seasonNo": 4, "seasonEndAt": 1793458800000})
+    check(mod.bot.season_no == 4 and mod.bot.season_end == 1793458800.0 and mod.season_over(1793458800) and not mod.season_over(1793458799.9), "시즌: 서버가 알려 준 시즌 번호와 종료 시각을 적어 둔다 (그 시각부터 끝난 것이다)")
+    mod.note_season({"league": None})
+    check(mod.bot.season_no == 4 and mod.bot.season_end == 1793458800.0, "시즌: 그 값을 주지 않는 예전 서버의 답은 적어 둔 것을 바꾸지 않는다")
+    mod.note_season({"seasonNo": 5, "seasonEndAt": 0})
+    check(mod.bot.season_no == 5 and mod.bot.season_end == 0 and not mod.season_over(), "시즌: 종료 날짜를 정해 두지 않았으면 끝나지 않는다")
+    check(mod.match_start({"at": 100.0}) == 100.0 and mod.match_start({"at": 100.0, "began": 250.0, "started": 400.0}) == 250.0,
+          "시즌: 경기를 시작한 시각은 /시작 으로 처음 옮긴 때, 쓰지 않았으면 팀을 짠 때")
+    # 등록 명단을 읽을 때(5분마다)도 받아 둔다. 역할을 찾지 못해 맞추지 못해도 시즌은 적어 둔다
+    w.season_no, w.season_end = 6, 1793458800000
+    mod.bot.player_role_id = 55
+    no_role = Mock()
+    no_role.get_role = Mock(return_value=None)
+
+    async def empty_town():
+        return no_role
+
+    mod.get_guild = empty_town
+    out = await mod.sync_roles()
+    check(out["problem"] and mod.bot.season_no == 6 and mod.bot.season_end == 1793458800.0, "시즌: 등록 명단을 읽을 때마다 시즌 종료 시각을 받아 둔다")
+    mod.bot.player_role_id = 0
+
+    # 종료 날짜를 정해 두지 않은 시즌: 전과 같다
+    w, rec, entry = await lined(0)
+    check(entry["season"] == 3 and mod.bot.season_end == 0 and not rec.offseason and not any("시즌" in x for x in w.texts(w.thread.send)), "시즌: 종료 날짜를 정해 두지 않았으면 전과 같다 (편성에 시즌 번호를 적어 둔다)")
+    t, _ = await run(mod.record_win, 300, ADMIN, "r")
+    check("🏆" in t and saves() == 1, "시즌: 종료 날짜가 없으면 결과를 그대로 기록한다")
+
+    # 시즌이 끝나기 전에 시작한 경기: 결과를 시즌이 끝난 뒤에 입력해도 기록한다 ("종료 시간이 시즌 종료 시간을 넘어가도 해당 매치까지는 유효")
+    w, rec, entry = await lined(time.time() + 3600)
+    entry["at"] = time.time() - 100                           # 팀을 짠 때(= 경기를 시작한 시각)는 100초 전
+    w.season_end = ms(time.time() - 50)                       # 시즌은 50초 전에 끝났다
+    t, _ = await run(mod.record_win, 300, ADMIN, "r")
+    check("🏆" in t and saves() == 1 and entry["result"]["winner"] == "r" and mod.season_over(), "시즌: 종료 시각 전에 시작한 경기는 결과를 그 뒤에 입력해도 기록한다")
+    t, _ = await run(mod.undo_win, 300, ADMIN)
+    check("취소하고 MMR을 되돌렸어요" in t and entry["result"] is None and saves() == 2, "시즌: 끝난 뒤에도 그 경기의 결과를 되돌릴 수 있다")
+
+    # 시즌이 끝난 뒤에 시작한 경기: 기록하지 않고 그 판을 치운다
+    entry["at"] = time.time() - 10
+    n = len(w.texts(w.thread.send))
+    end = int(mod.bot.season_end)
+    t, i = await run(mod.record_win, 300, ADMIN, "r")
+    check(t.startswith(f"<@1>님, 이 경기는 시즌 종료(<t:{end}:f>) 뒤에 시작한 경기라 결과를 기록하지 않았어요. 순위와 MMR은 바뀌지 않고, 이 판은 정리했어요.")
+          and "시즌 종료 날짜가 잘못돼 있다면 리그 관리자에게 알려 주세요." in t and saves() == 2 and w.league["matches"] == [],
+          "시즌: 종료 시각 뒤에 시작한 경기는 /승리 를 입력해도 기록하지 않는다")
+    check(w.texts(w.thread.send)[n:] == [f"<@1>님이 결과를 입력했지만, 이 경기는 시즌 종료(<t:{end}:f>) 뒤에 시작해서 기록하지 않았어요. 순위와 MMR은 바뀌지 않습니다."]
+          and entry not in mod.bot.lineups and not rec.lineup and mod.pending_entry(100) is None and w.server[-1] == {"action": "pushLineup", "lineup": None},
+          "시즌: 그 판은 치워서 선수들이 다음 내전에 참여할 수 있고, 모집 글에 까닭을 알린다")
+    t, _ = await run(mod.record_win, 300, ADMIN, "r")
+    check("결과를 기다리는 팀이 없어요" in t or "결과를 기록할 팀이 없어요" in t, "시즌: 치운 판에는 다시 기록할 수 없다")
+
+    # 경기를 시작한 시각은 /시작 으로 처음 옮긴 때다. 팀을 시즌이 끝나기 전에 짰어도 /시작 이 그 뒤면 이 시즌의 경기가 아니다
+    w, rec, entry = await lined(time.time() + 3600)
+    town = use(Town(room(901, "로비", range(100, 109)), room(902, "래디언트"), room(903, "다이어")))
+    t, _ = await run(mod.start_game, 300, ADMIN)
+    began = entry.get("began")
+    check(began == entry["started"] and "시즌 종료" not in t, "시즌: /시작 으로 선수를 처음 옮긴 때를 경기를 시작한 시각으로 적어 둔다")
+    town.voice_channels[0].voice_states[109] = Mock()          # 늦게 온 선수
+    await asyncio.sleep(0.05)
+    await run(mod.start_game, 300, ADMIN)
+    check(entry["began"] == began and entry["started"] > began, "시즌: /시작 을 다시 써도 처음 시작한 시각은 그대로다")
+    saved = json.loads(mod.STATE_PATH.read_text(encoding="utf-8"))["lineups"][-1]
+    check(saved["began"] == began and saved["season"] == 3, "시즌: 시작한 시각과 시즌 번호를 상태 파일에 적어 둔다")
+    entry["at"], entry["began"] = time.time() - 100, time.time() - 20
+    w.season_end = ms(time.time() - 50)                       # 팀은 시즌이 끝나기 전에 짰고, /시작 은 끝난 뒤였다
+    mod.bot.season_end = time.time() - 50                     # (5분마다 받아 둔 값)
+    town.voice_channels[1].voice_states.pop(100)
+    town.voice_channels[0].voice_states[100] = Mock()          # 한 명이 로비로 돌아와 있다
+    t, _ = await run(mod.start_game, 300, ADMIN)
+    check(t.endswith(f"⚠️ 시즌 종료(<t:{int(mod.bot.season_end)}:f>) 뒤에 시작한 경기라, 결과는 순위에 기록되지 않아요."), "시즌: 종료 시각 뒤에 시작한 경기면 /시작 의 답에서 미리 알린다")
+    t, _ = await run(mod.record_win, 300, ADMIN, "d")
+    check("뒤에 시작한 경기라 결과를 기록하지 않았어요" in t and saves() == 0 and entry not in mod.bot.lineups, "시즌: 팀을 먼저 짰어도 /시작 이 종료 시각 뒤면 기록하지 않는다")
+    await run(mod.end_game, 300, ADMIN)
+
+    # 시즌이 끝난 뒤에 여는 내전: 열 수는 있고, 결과가 기록되지 않는다고 리그 운영진과 모집 글에 알린다
+    w = World(mod, forum=True, league=league_of(12))
+    w.season_no, w.season_end = 3, ms(time.time() - 60)
+    mod.bot.season_end = w.season_end / 1000                  # (5분마다 받아 둔 값)
+    end = int(mod.bot.season_end)
+    t, _ = await run(mod.create_inhouse, 100, ADMIN)
+    rec = mod.bot.current
+    body = w.signup.create_thread.call_args.kwargs["content"]
+    check(f"\n⚠️ 시즌이 종료됐어요(<t:{end}:f>). 이 내전의 결과는 순위에 기록되지 않아요." in t and rec.offseason and "공지\nℹ️ 시즌이 종료되어 이 내전의 결과는 순위에 기록되지 않습니다.\n\n⏰" in body,
+          "시즌: 끝난 뒤에도 내전을 열 수 있고, 결과가 기록되지 않는다고 리그 운영진과 모집 글에 알린다")
+    for k in range(12):
+        await run(mod.join, 300, user(100 + k, f"선수{k}"))
+    check("ℹ️ 시즌이 종료되어" in w.message.edit.call_args.kwargs["content"] and json.loads(mod.STATE_PATH.read_text(encoding="utf-8"))["games"][-1]["offseason"] is True,
+          "시즌: 그 안내는 모집 글 본문에 남고 상태 파일에도 적힌다")
+    await run(mod.close_now, 300, ADMIN)
+    posts, entry = w.texts(w.thread.send), mod.bot.lineups[-1]
+    check(posts[-2].startswith("⚔️ **팀 편성**") and posts[-1] == f"ℹ️ 시즌이 종료되어 이 내전의 결과는 순위에 기록되지 않습니다. (시즌 종료: <t:{end}:f>)"
+          and w.thread.send.call_args.kwargs["allowed_mentions"].users is False, "시즌: 끝난 뒤에 짠 팀에는 결과가 기록되지 않는다고 바로 알린다 (알림 없이)")
+    last = w.texts(w.admin.send)[-1]
+    check(f"시즌이 종료돼서(<t:{end}:f>) 이 경기의 결과는 기록되지 않습니다." in last and "`/승리` 를 입력해 이 판을 정리해 주세요" in last and "이긴 팀을 골라 결과를 기록하세요" not in last,
+          "시즌: 운영진 채널에는 /승리 로 정리만 하라고 알린다")
+    t, _ = await run(mod.record_win, 300, ADMIN, "x")
+    check("경기 없이 정리했어요" in t and entry not in mod.bot.lineups and saves() == 0, "시즌: 끝난 뒤의 판도 경기 안 함으로 정리할 수 있다")
+    await mod.restore_state()
+    check(mod.bot.games[-1].offseason is True, "시즌: 껐다 켜도 끝난 뒤에 연 내전이라는 것을 기억한다")
+    for g in mod.bot.games:
+        mod.stop_timer(g)
+
+    # 팀을 짠 뒤에 새 시즌이 시작됐으면 그 판의 결과를 새 시즌에 기록하지 않는다 (지난 시즌의 경기가 새 시즌의 순위에 들어가지 않게)
+    w, rec, entry = await lined(0)
+    await run(mod.record_win, 300, ADMIN, "r")
+    w.season_no = 4                                           # 새 시즌이 시작됐다
+    t, _ = await run(mod.undo_win, 300, ADMIN)
+    check(t == "<@1>님, 이 결과는 지난 시즌의 기록이라 봇으로는 되돌릴 수 없어요. 고쳐야 한다면 리그 관리자에게 알려 주세요." and entry["result"] and saves() == 1,
+          "시즌: 새 시즌이 시작된 뒤에는 지난 시즌에 기록한 결과를 봇으로 되돌리지 않는다")
+    w, rec, entry = await lined(0)
+    w.season_no = 4
+    n = len(w.texts(w.thread.send))
+    t, _ = await run(mod.record_win, 300, ADMIN, "r")
+    check(t.startswith("<@1>님, 이 경기의 팀을 짠 뒤에 새 시즌이 시작돼서 결과를 기록하지 않았어요.") and "지난 시즌의 기록에 넣어야 하는 경기라면 리그 관리자에게 알려 주세요." in t
+          and saves() == 0 and entry not in mod.bot.lineups
+          and w.texts(w.thread.send)[n:] == ["<@1>님이 결과를 입력했지만, 이 경기의 팀을 짠 뒤에 새 시즌이 시작돼서 기록하지 않았어요. 순위와 MMR은 바뀌지 않습니다."],
+          "시즌: 팀을 짠 뒤에 새 시즌이 시작됐으면 그 판의 결과를 새 시즌에 기록하지 않는다")
+    # 시즌 번호를 주지 않는 예전 서버에서는 아무것도 막지 않는다
+    w, rec, entry = await lined(0, no=None)
+    w.season_end = None
+    t, _ = await run(mod.record_win, 300, ADMIN, "r")
+    check("🏆" in t and entry["season"] is None and saves() == 1, "시즌: 시즌 번호와 종료 시각을 주지 않는 예전 서버에서는 전처럼 기록한다")
+    mod.SYNC_URL, mod.SYNC_KEY = "", ""
 
     # ── 운영진 명령어로 봇이 하는 답은 모두 그 명령어를 쓴 운영진의 멘션으로 시작한다 (이 파일에서 돌린 모든 명령어를 본다) ──
     bare = [text for uid, text, _ in answers if not text.startswith(f"<@{uid}>")]
