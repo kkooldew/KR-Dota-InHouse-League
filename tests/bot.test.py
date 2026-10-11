@@ -1658,6 +1658,55 @@ async def main():
     t, _ = await run(mod.start_game, 100, user(2, "다른 운영자", admin=True))
     check(t.startswith("<@2>님, 배정된 팀이 없어서 옮길 사람이 없어요."), "다른 운영진이 쓰면 그 운영진을 멘션한다")
 
+    # ── 카테고리로 나눈 팀 음성 채널 (운영자가 2026-10-11에 만든 모양): '게임 채널 1·2·3' 카테고리마다 이름이 같은 '래디언트'·'다이어'가 하나씩 있다 ──
+    def in_category(ch, name):
+        ch.category = Mock()
+        ch.category.name = name
+        return ch
+
+    lob = room(950, "로비 (디코 중계방)")
+    lob.category = None
+    cats = use(Town(lob, *[in_category(room(951 + 2 * k + side, nm), f"게임 채널 {k + 1}") for k in range(3) for side, nm in enumerate(("래디언트", "다이어"))]))
+    mod.bot.voice = {}
+    rooms, problem = mod.voice_rooms(cats)
+    pairs = mod.team_pairs(cats, rooms)
+    check(not problem and (rooms["lobby"].id, rooms["radiant"].id, rooms["dire"].id) == (950, 951, 952) and mod.room_number(cats.voice_channels[3]) == 2,
+          "이름이 같은 채널은 카테고리 이름의 번호로 가린다 (기억해 두는 한 벌은 1번 카테고리의 것)")
+    check([(n, p["radiant"].id, p["dire"].id) for n, p in sorted(pairs.items())] == [(1, 951, 952), (2, 953, 954), (3, 955, 956)] and mod.pair_label(pairs[2]) == "게임 채널 2",
+          "카테고리마다 래디언트·다이어가 한 벌이다")
+    check(await mod.voice_status() == "로비 #로비 (디코 중계방), 래디언트 #래디언트, 다이어 #다이어 / 게임 채널 2 / 게임 채널 3 (팀 채널 3벌) - 권한 확인",
+          "켤 때 확인: 카테고리로 나눈 팀 채널은 카테고리 이름으로 적는다")
+    mod.bot.voice = {"lobby": 950, "radiant": 953, "dire": 954}                # 기억해 둔 채널이 2번 카테고리의 것이어도 세 벌을 모두 찾는다
+    rooms, problem = mod.voice_rooms(cats)
+    pairs = mod.team_pairs(cats, rooms)
+    check(sorted(pairs) == [1, 2, 3] and pairs[1]["radiant"].id == 951 and pairs[2]["radiant"].id == 953, "기억해 둔 벌이 몇 번이든 벌을 빠뜨리지 않는다")
+    mod.bot.voice = {"lobby": 950, "radiant": 951, "dire": 954}                # 번호가 서로 다른 채널을 골라 둔 경우: 그 벌을 쓰고, 그 채널이 든 벌은 뺀다
+    rooms, problem = mod.voice_rooms(cats)
+    pairs = mod.team_pairs(cats, rooms)
+    check([(n, p["radiant"].id, p["dire"].id) for n, p in sorted(pairs.items())] == [(1, 951, 954), (3, 955, 956)], "골라 둔 벌이 이름으로 찾은 벌과 다르면 그것을 쓰고, 한 채널을 두 벌이 쓰지 않는다")
+    w = World(mod, forum=True, league=league_of(22))           # 두 내전이 카테고리 1·2 를 하나씩 쓴다
+    w.many = True
+    await gather(w, 10)
+    await run(mod.close_now, 300, ADMIN)
+    await run(mod.create_inhouse, 100, ADMIN)
+    for k in range(10, 20):
+        await run(mod.join, 301, user(100 + k, f"선수{k}"))
+    await run(mod.close_now, 301, ADMIN)
+    lob.voice_states = {uid: Mock() for uid in (100, 105, 110, 115)}
+    t, _ = await run(mod.start_game, 300, ADMIN)
+    check("게임 채널 1: 🟢 <#951> 1명 · 🔴 <#952> 1명을 옮겼어요." in t and mod.bot.lineups[0]["rooms"] == {"radiant": 951, "dire": 952} and mod.bot.voice == {"lobby": 950, "radiant": 951, "dire": 952},
+          "/시작: 첫 내전은 1번 카테고리의 팀 채널로 옮기고, 어느 카테고리인지 리그 운영진에게 알린다")
+    t, _ = await run(mod.start_game, 301, ADMIN)
+    check("게임 채널 2: 🟢 <#953> 1명 · 🔴 <#954> 1명을 옮겼어요." in t and mod.bot.lineups[1]["rooms"] == {"radiant": 953, "dire": 954} and not lob.voice_states,
+          "/시작: 둘째 내전은 2번 카테고리의 팀 채널로 옮긴다")
+    t, _ = await run(mod.end_game, 301, ADMIN)
+    check("게임 채널 2에서 <#950> 로 2명을 옮겼어요." in t and sorted(lob.voice_states) == [110, 115] and list(cats.voice_channels[1].voice_states) == [100],
+          "/종료: 그 내전의 카테고리만 비우고, 어느 카테고리인지 알린다")
+    t, _ = await run(mod.end_game, 301, ADMIN)
+    check(t == "<@1>님, 게임 채널 2의 <#953> 와 <#954> 에 아무도 없어서 옮길 사람이 없어요.", "/종료: 비어 있을 때도 어느 카테고리인지 알린다")
+    await run(mod.end_game, 300, ADMIN)
+    use(town)
+
     # ── 내전을 동시에 여러 개 (운영자가 2026-10-11에 정함): 내전마다 글이 따로 생기고, 명령어는 입력한 글의 내전에 적용된다 ──
     mod.run_matchmaker = fake_matchmaker
     w = World(mod, forum=True)

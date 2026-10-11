@@ -1330,10 +1330,22 @@ async def role_loop() -> None:
 ROOM_NAMES = {"lobby": "로비", "radiant": "래디언트", "dire": "다이어"}
 
 
-def room_number(name: str) -> int:
-    """음성 채널 이름에 적힌 번호. '래디언트 2' → 2, 번호가 없으면 1"""
-    m = re.search(r"\d+", name)
-    return int(m.group()) if m else 1
+def room_number(channel) -> int:
+    """팀 음성 채널이 몇 번 벌인지. 채널 이름에 번호가 있으면 그 번호('래디언트 2' → 2), 없으면 그 채널이 든 카테고리 이름의 번호
+    ('게임 채널 2' 아래의 '래디언트' → 2. 운영자가 2026-10-11에 카테고리마다 래디언트·다이어를 하나씩 두는 모양으로 만들었다), 그것도 없으면 1"""
+    for name in (channel.name, getattr(getattr(channel, "category", None), "name", None)):
+        m = re.search(r"\d+", name) if isinstance(name, str) else None
+        if m:
+            return int(m.group())
+    return 1
+
+
+def pair_label(pair: dict) -> str:
+    """팀 음성 채널 한 벌을 가리키는 이름: 두 채널이 든 카테고리의 이름. 카테고리가 없거나 서로 다르면 빈 글.
+    카테고리마다 같은 이름의 채널을 두면 채널 이름만으로는 어느 벌인지 알 수 없어서, 리그 운영진에게 답할 때 함께 적는다"""
+    names = {getattr(getattr(c, "category", None), "name", None) for c in pair.values()}
+    name = names.pop() if len(names) == 1 else None
+    return name if isinstance(name, str) else ""
 
 
 def named_rooms(guild: discord.Guild, key: str) -> list:
@@ -1344,13 +1356,13 @@ def named_rooms(guild: discord.Guild, key: str) -> list:
 def voice_rooms(guild: discord.Guild) -> tuple[dict, str]:
     """로비·래디언트·다이어 음성 채널을 찾는다. 돌려주는 값: ({"lobby": 채널, "radiant": 채널, "dire": 채널}, 찾지 못한 까닭)
     /시작 에서 골라 둔 채널이 먼저다. 고른 적이 없는 것은 이름으로 찾는다: 로비는 이름에 그 낱말이 든 음성 채널이 하나뿐일 때,
-    래디언트·다이어는 그 가운데 1번(번호가 없거나 1인 채널)이 하나뿐일 때 그 채널을 쓴다.
-    여기서 찾는 래디언트·다이어는 팀 음성 채널의 1번 벌이다. 내전을 동시에 여러 개 진행할 때 쓰는 나머지 벌은 team_pairs 가 찾는다."""
+    래디언트·다이어는 그 가운데 1번(room_number: 채널이나 카테고리 이름의 번호가 1이거나 없는 채널)이 하나뿐일 때 그 채널을 쓴다.
+    여기서 찾는 래디언트·다이어는 봇이 기억해 두는 한 벌이다. 내전을 동시에 여러 개 진행할 때 쓰는 벌 전체는 team_pairs 가 찾는다."""
     rooms, unknown = {}, []
     for key in VOICE_ROOMS:
         channel = guild.get_channel(bot.voice[key]) if bot.voice.get(key) else None
         if not isinstance(channel, discord.VoiceChannel):  # 고른 적이 없거나, 골라 둔 채널이 지워졌다
-            named = [c for c in named_rooms(guild, key) if key == "lobby" or room_number(c.name) == 1]
+            named = [c for c in named_rooms(guild, key) if key == "lobby" or room_number(c) == 1]
             channel = named[0] if len(named) == 1 else None
         if channel is None:
             unknown.append(ROOM_NAMES[key])
@@ -1365,21 +1377,25 @@ def voice_rooms(guild: discord.Guild) -> tuple[dict, str]:
 
 
 def team_pairs(guild: discord.Guild, rooms: dict) -> dict[int, dict]:
-    """팀 음성 채널의 벌들 {번호: {"radiant": 채널, "dire": 채널}}. 내전마다 한 벌을 쓴다.
-    1번은 voice_rooms 가 찾은 래디언트·다이어다. 나머지는 이름으로 찾는다: '래디언트 2'와 '다이어 2'처럼 같은 번호가 붙은 채널이
-    하나씩 있으면 한 벌이다(운영자가 2026-10-11에 3벌까지 만들기로 했다)."""
-    pairs = {}
-    if "radiant" in rooms and "dire" in rooms:
-        pairs[1] = {"radiant": rooms["radiant"], "dire": rooms["dire"]}
-    taken = {c.id for c in rooms.values()}
+    """팀 음성 채널의 벌들 {번호: {"radiant": 채널, "dire": 채널}}. 내전마다 한 벌을 쓴다(운영자가 2026-10-11에 3벌까지 만들기로 했다).
+    번호(room_number)가 같은 래디언트 채널과 다이어 채널이 하나씩 있으면 한 벌이다: 카테고리 '게임 채널 2' 아래의 '래디언트'·'다이어',
+    또는 '래디언트 2'·'다이어 2'. 봇이 기억해 둔 래디언트·다이어(rooms)가 그렇게 찾은 벌이 아니면(이름이 다른 채널을 골라 둔 경우) 그것도 한 벌로 넣는다."""
     found = {key: {} for key in ("radiant", "dire")}
     for key in found:
         for c in named_rooms(guild, key):
-            if c.id not in taken:
-                found[key].setdefault(room_number(c.name), []).append(c)
-    for n in sorted(set(found["radiant"]) & set(found["dire"])):
-        if n not in pairs and len(found["radiant"][n]) == 1 and len(found["dire"][n]) == 1:
-            pairs[n] = {"radiant": found["radiant"][n][0], "dire": found["dire"][n][0]}
+            found[key].setdefault(room_number(c), []).append(c)
+    pairs = {n: {"radiant": found["radiant"][n][0], "dire": found["dire"][n][0]}
+             for n in sorted(set(found["radiant"]) & set(found["dire"])) if len(found["radiant"][n]) == 1 and len(found["dire"][n]) == 1}
+    if "radiant" in rooms and "dire" in rooms:
+        mine = {"radiant": rooms["radiant"], "dire": rooms["dire"]}
+        ids = {c.id for c in mine.values()}
+        if not any({p["radiant"].id, p["dire"].id} == ids for p in pairs.values()):
+            # 이름으로는 찾을 수 없는 벌이다. 그 채널이 든 다른 벌은 빼고(한 채널을 두 벌이 쓰지 않게) 비어 있는 가장 낮은 번호에 둔다
+            pairs = {n: p for n, p in pairs.items() if not ({p["radiant"].id, p["dire"].id} & ids)}
+            n = 1
+            while n in pairs:
+                n += 1
+            pairs[n] = mine
     return pairs
 
 
@@ -1450,11 +1466,12 @@ async def voice_status() -> str:
     if problem:
         return "음성 채널을 아직 모릅니다 (디스코드에서 `/시작` 을 입력할 때 로비·래디언트·다이어 채널을 고르면 됩니다)"
     pairs = team_pairs(guild, rooms)
-    extra = [pairs[n] for n in sorted(pairs) if n != 1]
+    mine = {rooms["radiant"].id, rooms["dire"].id}
+    extra = [pairs[n] for n in sorted(pairs) if {pairs[n]["radiant"].id, pairs[n]["dire"].id} != mine]
     problem = voice_problem(guild, list(rooms.values()) + [c for pair in extra for c in pair.values()])
     names = ", ".join(f"{ROOM_NAMES[key]} #{rooms[key].name}" for key in VOICE_ROOMS)
-    if extra:  # 내전을 동시에 진행할 때 쓰는 나머지 벌
-        names += " / " + " / ".join(f"#{pair['radiant'].name}·#{pair['dire'].name}" for pair in extra) + f" (팀 채널 {len(pairs)}벌)"
+    if extra:  # 내전을 동시에 진행할 때 쓰는 나머지 벌. 카테고리로 나눴으면 카테고리 이름으로 적는다
+        names += " / " + " / ".join(pair_label(pair) or f"#{pair['radiant'].name}·#{pair['dire'].name}" for pair in extra) + f" (팀 채널 {len(pairs)}벌)"
     return f"{names} [확인 필요] {problem}" if problem else f"{names} - 권한 확인"
 
 
@@ -1760,7 +1777,9 @@ async def start_game(interaction: discord.Interaction, lobby: Optional[discord.V
         notice = f"{actor}: 게임이 시작되어 선수들을 각자의 음성 채널로 이동시킵니다."
         await send_to(entry["place_id"], notice)
         moved, failed, denied = await move_people(guild, moves, "내전 시작 (/시작)")
-    lines = [notice, " · ".join(f"{mark} {team[side].mention} {sum(uid in moved for uid in seats[side])}명" for mark, side in (("🟢", "radiant"), ("🔴", "dire")))
+    label = pair_label(team)  # 카테고리마다 같은 이름의 채널을 뒀으면 어느 벌인지 카테고리 이름으로 알린다
+    lines = [notice, (f"{label}: " if label else "")
+             + " · ".join(f"{mark} {team[side].mention} {sum(uid in moved for uid in seats[side])}명" for mark, side in (("🟢", "radiant"), ("🔴", "dire")))
              + "을 옮겼어요."]
     if absent:
         lines.append("로비에 없어서 옮기지 못한 선수: " + ", ".join(f"<@{uid}>" for uid in absent))
@@ -1804,8 +1823,9 @@ async def end_game(interaction: discord.Interaction) -> None:
         if team is None:
             team = {"radiant": rooms["radiant"], "dire": rooms["dire"]}  # 벌을 정해 둔 적이 없는 판(예전 방식)은 1번 벌
         people = [uid for side in ("radiant", "dire") for uid in team[side].voice_states]
+        label = pair_label(team)  # 카테고리마다 같은 이름의 채널을 뒀으면 어느 벌인지 카테고리 이름으로 알린다
         if not people:
-            await answer(interaction, f"{actor}님, {team['radiant'].mention} 와 {team['dire'].mention} 에 아무도 없어서 옮길 사람이 없어요.{note}")
+            await answer(interaction, f"{actor}님, {f'{label}의 ' if label else ''}{team['radiant'].mention} 와 {team['dire'].mention} 에 아무도 없어서 옮길 사람이 없어요.{note}")
             return
         notice = f"{actor}: 게임이 종료되어 모든 선수를 로비로 이동시킵니다."
         if entry is not None:
@@ -1813,7 +1833,7 @@ async def end_game(interaction: discord.Interaction) -> None:
             save_state()
             await send_to(entry["place_id"], notice)
         moved, failed, denied = await move_people(guild, [(uid, rooms["lobby"]) for uid in people], "내전 종료 (/종료)")
-    lines = [notice, f"{rooms['lobby'].mention} 로 {len(moved)}명을 옮겼어요."]
+    lines = [notice, f"{f'{label}에서 ' if label else ''}{rooms['lobby'].mention} 로 {len(moved)}명을 옮겼어요."]
     if failed:
         lines.append(("⚠️ 봇에 **멤버 이동** 권한이 없어 옮기지 못한 사람: " if denied else "⚠️ 옮기지 못한 사람(그사이 음성 채널에서 나갔을 수 있어요): ")
                      + ", ".join(f"<@{uid}>" for uid in failed))
