@@ -12,8 +12,9 @@
  *   경기 결과 기록 (mode: 'result')
  *     lanes:  [{r: 선수 id, d: 선수 id}] 1번부터 5번 자리 순서
  *     winner: 'r' 또는 'd'
- *   마지막 경기 되돌리기 (mode: 'undo')
- *     matchId: 되돌릴 경기 id (그 경기가 마지막 경기일 때만 되돌린다)
+ *   경기 되돌리기 (mode: 'undo')
+ *     matchId: 되돌릴 경기 id (비우면 마지막 경기). 마지막 경기가 아니어도, 그 열 명이 그 뒤에 기록된 경기에 뛰지 않았으면 되돌린다.
+ *              뛰었으면 되돌리지 않고 {ok:false, code:'later', blockers:[{id, at}]} 로 그 경기들을 알려 준다(나중 경기가 앞)
  * 출력 (표준 출력, JSON)
  *   팀 편성: {ok:true, lanes:[{role, r:{id,name,mmr,rank,win,lose}, d:{…}}], bench:[{id,name}], stats:{…}}
  *     rank는 그 자리가 선수의 몇 지망인지(0부터), win·lose는 이 편성 그대로 이기거나 졌을 때의 MMR 변동
@@ -60,13 +61,26 @@ var lanes = null;
     return { ok: true, league: league(), match: { id: match.id, at: match.at, winner: match.winner }, changes: match.rows.map(change) };
   }
 
-  // 마지막 경기 되돌리기: 매니저의 "마지막 경기 되돌리기"와 같은 dropLatest. matchId 를 주면 그 경기가 마지막일 때만 되돌린다
+  // 경기 되돌리기: 매니저의 "마지막 경기 되돌리기"와 같은 dropLatest.
+  // 내전이 동시에 여러 개 돌면 되돌리려는 경기가 리그의 마지막 경기가 아닐 수 있다(2026-10-11). 그 열 명이 그 뒤에 기록된 경기에 뛰지 않았으면,
+  // 그 경기를 맨 앞으로 옮겨 dropLatest 로 되돌린 것과 똑같다: 선수마다 경기에 적어 둔 '이전 MMR'로 돌아가고, 다른 선수와 다른 경기는 건드리지 않는다.
+  // 뛰었으면 되돌리지 않는다. 그 뒤 경기의 점수가 이 경기의 결과 위에서 계산됐기 때문이다. 그 경기부터 차례로 되돌려야 한다.
+  // (매니저의 중간 경기 지우기처럼 뒤의 경기를 모두 다시 계산하지는 않는다. 이미 알린 다른 판의 점수가 말없이 바뀌고, 손으로 고친 MMR이 지워질 수 있다.)
   if (INPUT.mode === 'undo') {
-    const last = state.matches[0];
-    if (!last) return { ok: false, error: '되돌릴 경기가 없습니다' };
-    if (INPUT.matchId && last.id !== INPUT.matchId) return { ok: false, error: '그 뒤에 다른 경기가 기록돼 있어 되돌리지 않았습니다. 매니저에서 지워 주세요' };
+    if (!state.matches.length) return { ok: false, error: '되돌릴 경기가 없습니다' };
+    const at = INPUT.matchId ? state.matches.findIndex(m => m.id === INPUT.matchId) : 0;
+    if (at < 0) return { ok: false, error: '그 경기가 기록에 없습니다' };
+    const target = state.matches[at];
+    const ids = new Set(target.rows.map(r => r.id));
+    const later = state.matches.slice(0, at).filter(m => m.rows.some(r => ids.has(r.id)));     // 최근 경기가 앞이다
+    if (later.length) {
+      return { ok: false, code: 'later', blockers: later.map(m => ({ id: m.id, at: m.at })),
+               error: '이 경기 뒤에 같은 선수가 뛴 경기가 ' + later.length + '판 기록돼 있어 되돌리지 않았습니다. 그 경기부터 되돌려 주세요' };
+    }
+    state.matches.splice(at, 1);
+    state.matches.unshift(target);
     dropLatest();
-    return { ok: true, league: league(), match: { id: last.id, at: last.at, winner: last.winner }, changes: last.rows.map(change) };
+    return { ok: true, league: league(), match: { id: target.id, at: target.at, winner: target.winner }, changes: target.rows.map(change) };
   }
 
   // 팀 편성: 매니저의 "팀 짜기" 버튼과 같은 순서. 출전 10명 고르기 → 가장 좋은 편성 → 진영 정하기

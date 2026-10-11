@@ -68,11 +68,29 @@ class World:
         self.chat = Mock()            # 대화방 (/내전하자 를 쓰는 채널)
         self.chat.id = 400
         self.chat.send = AsyncMock()
+        # 내전마다 글이 따로 생기게 하려면 many 를 켠다(둘째 글부터 301, 302, …). 꺼 두면 언제나 같은 글(300)이다.
+        # 예전 확인들은 내전을 하나씩 차례로 열면서 같은 글을 쓴다
+        self.many = False
+        self.threads = {300: self.thread}
+        self.messages = {300: self.message}
+
+        def new_thread(**kwargs):
+            if not self.many or len(self.signup.create_thread.call_args_list) <= 1:
+                return Created(self.thread, self.message)
+            n = 299 + len(self.signup.create_thread.call_args_list)
+            thread, message = Mock(), Mock()
+            thread.id, message.id = n, n
+            thread.send, thread.edit, message.edit = AsyncMock(), AsyncMock(), AsyncMock()
+            message.jump_url = f"https://discord.com/channels/1/{n}/{n}"
+            thread.get_partial_message = Mock(return_value=message)
+            self.threads[n], self.messages[n] = thread, message
+            return Created(thread, message)
+
         if forum:
             self.signup = Mock(spec=discord.ForumChannel)
             self.signup.flags = Mock(require_tag=False)
             self.signup.available_tags = []
-            self.signup.create_thread = AsyncMock(return_value=Created(self.thread, self.message))
+            self.signup.create_thread = AsyncMock(side_effect=new_thread)
         else:
             self.signup = Mock(spec=discord.TextChannel)
             self.signup.send = AsyncMock(return_value=self.message)
@@ -81,7 +99,7 @@ class World:
         self.place_id = 300 if forum else 200
 
         async def get_channel(cid):
-            return {100: self.admin, 200: self.signup, 300: self.thread, 400: self.chat}[cid]
+            return {100: self.admin, 200: self.signup, 400: self.chat, **self.threads}[cid]
 
         self.pushed = []
 
@@ -212,6 +230,7 @@ async def run(cmd, channel_id, u, *args):
 
 async def main():
     mod = load()
+    mod.LOCK_CLOSED = True     # 마감한 글을 잠그는 설정을 켠 채로 본다(기본은 꺼짐. 꺼졌을 때는 아래에서 따로 확인한다)
     KST = mod.KST
     real_when, real_problem, real_call = mod.when, mod.match_problem, mod.call_server
     ADMIN = user(1, "운영자", admin=True)
@@ -230,9 +249,11 @@ async def main():
     w = World(mod, forum=True)
     t, _ = await run(mod.create_inhouse, 999, ADMIN)
     check("운영진 채널에서만" in t and mod.bot.current is None, "다른 채널의 /내전생성 거절")
-    for cmd, nm in ((mod.close_now, "마감"), (mod.extend, "연장"), (mod.cancel, "취소")):
+    # 마감·연장·취소·재모집은 내전의 글에서 쓰는 명령어라 어느 채널에서든 받는다. 내전이 없으면 없다고 답한다
+    for cmd, nm, word in ((mod.close_now, "마감", "모집 중인 내전이 없어요"), (mod.extend, "연장", "연장할 내전이 없어요"), (mod.cancel, "취소", "취소할 내전이 없어요"),
+                          (mod.restart, "재모집", "다시 모집할 내전이 없어요")):
         t, _ = await run(cmd, 300, ADMIN)
-        check("운영진 채널에서만" in t, f"다른 채널의 /{nm} 거절")
+        check(t.startswith("<@1>님, ") and word in t, f"내전이 없을 때 다른 채널의 /{nm}")
     t, _ = await run(mod.close_now, 100, ADMIN)
     check("모집 중인 내전이 없어요" in t, "모집이 없을 때 /마감")
     t, _ = await run(mod.extend, 100, ADMIN)
@@ -254,9 +275,6 @@ async def main():
     check(rec.end_ts % 60 == 0 and 300 <= rec.end_ts - before <= 361, "마감은 5~6분 뒤의 정각 분")
     check(t.startswith("<@1>님이 모집을 시작했어요! ") and w.message.jump_url in t and f"<t:{rec.end_ts}:t>" in t, "운영진에게 글 링크와 마감 시각 안내 (명령어를 쓴 운영진을 맨 앞에)")
     check(rec.task is not None and not rec.task.done(), "자동 마감 대기 중")
-
-    t, _ = await run(mod.create_inhouse, 100, ADMIN)
-    check("이미 모집 중" in t and w.signup.create_thread.await_count == 1, "모집 중 /내전생성 거절")
 
     t, _ = await run(mod.join, 200, A)
     check(t == "<#300> 에서 입력해 주세요." and not rec.participants, "모집 글 밖의 /참여 는 글로 안내")
@@ -432,11 +450,12 @@ async def main():
     named(w.admin, "운영진", everyone=True, view_channel=True, send_messages=True)
     named(w.signup, "내전모집", everyone=True, view_channel=True, send_messages=True, send_messages_in_threads=True, manage_threads=True)
     out = await startup(w)
-    check(len(out) == 4 and out[1].startswith("[확인 필요] 운영진 채널을 서버의 모든 사람이 볼 수 있습니다.") and "admin_role_id" in out[1]
+    check(len(out) == 5 and out[1].startswith("[확인 필요] 운영진 채널을 서버의 모든 사람이 볼 수 있습니다.") and "admin_role_id" in out[1]
           and out[2] == "참여 신청 채널: #내전모집 (포럼) - 권한 확인", "켤 때 확인: 운영진 채널이 모두에게 열려 있으면 알린다 (참여 신청 채널은 열려 있어도 된다)")
     mod.ADMIN_ROLE_ID = 77
     out = await startup(w)
-    check(len(out) == 3, "운영진 역할을 정해 두었으면 운영진 채널이 열려 있어도 알리지 않는다")
+    check(len(out) == 4 and out[3].startswith("동시에 진행할 수 있는 내전: 3개") and "마감한 글 잠그기: 켜짐" in out[3],
+          "운영진 역할을 정해 두었으면 운영진 채널이 열려 있어도 알리지 않는다. 동시에 진행할 수 있는 내전 수와 잠금 설정도 찍는다")
     mod.ADMIN_ROLE_ID = 0
     named(w.admin, "운영진", view_channel=True, send_messages=True)
 
@@ -445,22 +464,26 @@ async def main():
 
     mod.get_channel = missing_channel
     out = await startup(w)
-    check(len(out) == 3 and out[0].startswith("[확인 필요] 운영진 채널(100)을 찾지 못했습니다."), "켤 때 확인: 채널을 못 찾을 때")
+    check(len(out) == 4 and out[0].startswith("[확인 필요] 운영진 채널(100)을 찾지 못했습니다."), "켤 때 확인: 채널을 못 찾을 때")
 
     # ── 리그 운영진이 아닌 사람이 리그 운영진 명령어를 쓰면, 어디에서 입력했든 사용 권한이 없다고만 알린다 ──
     w = World(mod, forum=True)
     STAFF, GUEST = user(21, "운영진"), user(22, "손님")   # 둘 다 서버 관리자 권한은 없다. 리그 운영진만 운영진 채널을 볼 수 있다
     w.admin.permissions_for = Mock(side_effect=lambda who: Mock(view_channel=who is STAFF, use_application_commands=True))
-    commands = ((mod.create_inhouse, ()), (mod.close_now, ()), (mod.extend, ()), (mod.cancel, ()), (mod.start_game, ()), (mod.end_game, ()),
+    commands = ((mod.create_inhouse, ()), (mod.close_now, ()), (mod.extend, ()), (mod.cancel, ()), (mod.restart, ()), (mod.start_game, ()), (mod.end_game, ()),
                 (mod.record_win, ("r",)), (mod.undo_win, ()))
     told = [(await run(cmd, 300, GUEST, *args))[0] for cmd, args in commands]
     check(all("사용할 권한이 없어요. 리그 운영진만" in t and "운영진 채널" not in t for t in told) and mod.bot.current is None and not w.server,
-          "리그 운영진이 아닌 사람의 리그 운영진 명령어 8개: 사용 권한이 없다고 알린다 (운영진 채널로 가라고 하지 않는다)")
+          "리그 운영진이 아닌 사람의 리그 운영진 명령어 9개: 사용 권한이 없다고 알린다 (운영진 채널로 가라고 하지 않는다)")
     t, i = await run(mod.create_inhouse, 999, GUEST)
     check("사용할 권한이 없어요" in t and i.response.send_message.call_args.kwargs.get("ephemeral") is True and not w.signup.create_thread.await_count,
           "그 안내는 본인에게만 보이고, 모집은 만들어지지 않는다")
-    told = [(await run(cmd, 300, STAFF, *args))[0] for cmd, args in commands]
-    check(all("운영진 채널에서만" in t and "권한이 없어요" not in t for t in told) and mod.bot.current is None, "리그 운영진이 다른 채널에서 쓰면 운영진 채널에서 쓰라고 알린다")
+    t, _ = await run(mod.create_inhouse, 300, STAFF)
+    check("운영진 채널에서만" in t and "권한이 없어요" not in t and mod.bot.current is None, "리그 운영진이 다른 채널에서 /내전생성 을 쓰면 운영진 채널에서 쓰라고 알린다")
+    # 나머지는 내전의 글에서 쓰는 명령어라 어느 채널에서든 받는다(운영진 채널을 볼 수 있는 사람이면 리그 운영진이다). 음성 채널을 건드리는 둘은 아래에서 따로 본다
+    told = [(await run(cmd, 300, STAFF, *args))[0] for cmd, args in commands if cmd not in (mod.create_inhouse, mod.start_game, mod.end_game)]
+    check(len(told) == 6 and all(t.startswith("<@21>님, ") and "권한이 없어요" not in t and "운영진 채널에서만" not in t for t in told),
+          "리그 운영진은 /마감·/연장·/취소·/재모집·/승리·/승리취소 를 운영진 채널 밖에서도 쓴다")
 
     # /선수역할 은 리그 관리자만 쓴다 (서버 관리자 권한이 있는 사람과, 관리자역할 칸으로 정해 둔 역할이 있는 사람). 리그 운영진은 쓰지 못한다
     def role_of(rid, name, default=False, managed=False):
@@ -493,7 +516,7 @@ async def main():
     check(all("리그 관리자만 쓸 수 있는 명령어예요" in t for t in told), "리그 관리자 역할을 정한 뒤에도 리그 운영진은 /선수역할 을 쓰지 못한다")
     w.admin.permissions_for = Mock(return_value=Mock(view_channel=False, use_application_commands=False))
     t, _ = await run(mod.close_now, 300, MANAGER)
-    check("운영진 채널에서만" in t, "리그 관리자는 리그 운영진 명령어도 쓸 수 있는 사람이다 (운영진 채널이 보이지 않아도 채널 안내를 받는다)")
+    check("모집 중인 내전이 없어요" in t, "리그 관리자는 리그 운영진 명령어도 쓸 수 있는 사람이다 (운영진 채널이 보이지 않아도 받는다)")
     mod.bot.manager_role_id = 0
     await mod.restore_state()
     check(mod.bot.manager_role_id == 88, "껐다 켜도 리그 관리자 역할을 기억한다")
@@ -515,7 +538,7 @@ async def main():
     check("사용할 권한이 없어요" in t, "운영진 채널이 보여도 거기서 명령어를 쓸 수 없는 사람은 리그 운영진이 아니다")
     w.admin.permissions_for = Mock(return_value=Mock(view_channel=False, use_application_commands=False))
     t, _ = await run(mod.close_now, 300, ADMIN)
-    check("운영진 채널에서만" in t, "서버 관리자 권한이 있으면 언제나 리그 운영진이다")
+    check("모집 중인 내전이 없어요" in t, "서버 관리자 권한이 있으면 언제나 리그 운영진이다")
     w.admin.permissions_for = Mock(side_effect=RuntimeError("채널 확인 실패"))
     with contextlib.redirect_stdout(io.StringIO()):
         t, _ = await run(mod.close_now, 300, STAFF)
@@ -527,8 +550,8 @@ async def main():
     w.admin.permissions_for = Mock(return_value=Mock(view_channel=True, use_application_commands=True))
     STAFF.roles = [Mock(id=77)]
     told = [(await run(mod.close_now, cid, who))[0] for cid, who in ((100, GUEST), (300, GUEST), (300, STAFF), (100, STAFF))]
-    check("사용할 권한이 없어요" in told[0] and "사용할 권한이 없어요" in told[1] and "운영진 채널에서만" in told[2] and "모집 중인 내전이 없어요" in told[3]
-          and not w.admin.permissions_for.call_count, "리그 운영진 역할을 정해 두었을 때: 역할이 없으면 어디서든 권한 없음, 있으면 운영진 채널 안내")
+    check("사용할 권한이 없어요" in told[0] and "사용할 권한이 없어요" in told[1] and "모집 중인 내전이 없어요" in told[2] and "모집 중인 내전이 없어요" in told[3]
+          and not w.admin.permissions_for.call_count, "리그 운영진 역할을 정해 두었을 때: 역할이 없으면 어디서든 권한 없음, 있으면 어디서든 받는다")
     mod.ADMIN_ROLE_ID = 0
 
     # ── 마감 시각을 정해서 만들기 ──
@@ -568,7 +591,8 @@ async def main():
     await run(mod.join, 300, B)
     rec = mod.bot.current
     saved = json.loads(mod.STATE_PATH.read_text(encoding="utf-8"))
-    check(saved["current"]["participants"] == [[11, "가", "u11"], [12, "나*별", "u12"]] and saved["current"]["thread_id"] == 300 and not saved["current"]["closed"], "모집 상태를 파일에 적어 둔다")
+    check(len(saved["games"]) == 1 and "current" not in saved and saved["games"][0]["participants"] == [[11, "가", "u11"], [12, "나*별", "u12"]]
+          and saved["games"][0]["thread_id"] == 300 and not saved["games"][0]["closed"], "모집 상태를 파일에 적어 둔다 (내전마다 하나씩)")
     mod.stop_timer(rec)
     mod.bot.current = None                                   # 봇이 꺼졌다 켜진 것처럼
     await mod.restore_state()
@@ -608,12 +632,20 @@ async def main():
 
     mod.get_channel, mod.bot.current = busy_channel, None
     await mod.restore_state()
-    check(mod.bot.current is None and json.loads(mod.STATE_PATH.read_text(encoding="utf-8"))["current"] == kept["current"] and kept["current"] is not None,
+    check(mod.bot.current is None and json.loads(mod.STATE_PATH.read_text(encoding="utf-8"))["games"] == kept["games"] and len(kept["games"]) == 1,
           "디스코드가 잠깐 답하지 않아 이어받지 못했으면 상태 파일은 그대로 둔다 (다음에 켤 때 다시 이어받는다)")
+    mod.save_state()
+    check(json.loads(mod.STATE_PATH.read_text(encoding="utf-8"))["games"] == kept["games"], "이어받지 못한 내전은 그사이 다른 일로 상태를 다시 적어도 파일에 남는다")
     mod.get_channel = gone_channel
     await mod.restore_state()
-    check(mod.bot.current is None and json.loads(mod.STATE_PATH.read_text(encoding="utf-8"))["current"] is None, "모집 글이 지워져 있으면 이어받지 않고 상태 파일에서도 지운다")
+    check(mod.bot.current is None and json.loads(mod.STATE_PATH.read_text(encoding="utf-8"))["games"] == [], "모집 글이 지워져 있으면 이어받지 않고 상태 파일에서도 지운다")
     mod.get_channel = good_channel
+    old = dict(kept)                                         # 내전이 하나뿐이던 때의 상태 파일: games 대신 current 하나가 적혀 있다
+    old["current"] = old.pop("games")[0]
+    mod.STATE_PATH.write_text(json.dumps(old), encoding="utf-8")
+    mod.bot.current = None
+    await mod.restore_state()
+    check(len(mod.bot.games) == 1 and mod.bot.current.closed and list(mod.bot.current.participants) == [11], "예전 상태 파일(current 하나)도 이어받는다")
     mod.STATE_PATH.write_text("깨진 파일", encoding="utf-8")
     mod.bot.current = None
     await mod.restore_state()
@@ -628,7 +660,7 @@ async def main():
     def league_of(n):
         players = []
         for k in range(n):
-            f = FIRSTS[k]
+            f = FIRSTS[k % len(FIRSTS)]
             players.append({"id": f"p{k}", "name": f"선수{k}", "baseMMR": 3000 + k * 150, "mmr": 3000 + k * 150,
                             "prefs": [f] + [x for x in (1, 2, 3, 4) if x != f], "wins": 2, "losses": 2, "streak": 0,
                             "roleCount": [0, 0, 0, 0, 0], "discord": f"u{100 + k}", "steam": ""})
@@ -657,20 +689,30 @@ async def main():
                           "sides": [{"lane": "탑", "r": 6500, "d": 6400, "rRoles": [3, 4], "dRoles": [1, 5]},
                                     {"lane": "봇", "r": 6400, "d": 6450, "rRoles": [1, 5], "dRoles": [3, 4]}]}}
     asked = []
+    played = {}                                              # 가짜 정산이 기록한 경기마다 뛴 선수 {경기 id: 선수 id 들}
 
     async def fake_matchmaker(payload):
         asked.append(payload)
         league = payload["league"]
         if payload.get("mode") == "result":                  # 이긴 팀은 +20, 진 팀은 −20
-            mid = "m%d" % (len(league["matches"]) + 1)
+            n = len(league["matches"]) + 1
+            while any(m["id"] == "m%d" % n for m in league["matches"]):
+                n += 1
+            mid = "m%d" % n
+            played[mid] = {l[side] for l in payload["lanes"] for side in ("r", "d")}
             gain = lambda side: 20 if side == payload["winner"] else -20
             changes = [{"id": l[side], "name": side.upper() + l[side], "side": side, "role": k + 1, "before": 3000, "delta": gain(side), "after": 3000 + gain(side)}
                        for k, l in enumerate(payload["lanes"]) for side in ("r", "d")]
             return {"ok": True, "league": dict(league, matches=[{"id": mid}] + league["matches"]), "match": {"id": mid, "at": "", "winner": payload["winner"]}, "changes": changes}
         if payload.get("mode") == "undo":
-            if not league["matches"] or league["matches"][0]["id"] != payload["matchId"]:
-                return {"ok": False, "error": "그 뒤에 다른 경기가 기록돼 있어 되돌리지 않았습니다"}
-            return {"ok": True, "league": dict(league, matches=league["matches"][1:]), "match": league["matches"][0], "changes": []}
+            at = next((k for k, m in enumerate(league["matches"]) if m["id"] == payload["matchId"]), -1)
+            if at < 0:
+                return {"ok": False, "error": "그 경기가 기록에 없습니다"}
+            mine = played.get(payload["matchId"], set())
+            later = [m for m in league["matches"][:at] if played.get(m["id"], set()) & mine]
+            if later:
+                return {"ok": False, "code": "later", "blockers": [{"id": m["id"]} for m in later], "error": "이 경기 뒤에 같은 선수가 뛴 경기가 기록돼 있어 되돌리지 않았습니다"}
+            return {"ok": True, "league": dict(league, matches=league["matches"][:at] + league["matches"][at + 1:]), "match": league["matches"][at], "changes": []}
         ids = payload["participants"]
         return fake_result(ids[:10], ids[10:])
 
@@ -734,14 +776,21 @@ async def main():
     check(rec.lineup and len(asked) == 2 and len(mod.bot.lineups) == 1, "다시 마감하면 팀도 다시 짠다")
     first_ten = list(mod.bot.lineups[0]["ids"])
 
-    w.message.id = 301                                       # 다음 판은 다른 모집 글이다
-    await run(mod.create_inhouse, 100, ADMIN)                # 같은 날 다음 판: 앞 판에 뛴 사람을 오늘 뛴 사람으로 넘긴다
-    for k in range(12):
-        await run(mod.join, 300, user(100 + k, f"선수{k}"))
-    await run(mod.close_now, 100, ADMIN)
+    w.many = True                                            # 다음 판은 다른 모집 글이다(301)
+    w.league = league_of(22)
+    await run(mod.create_inhouse, 100, ADMIN)                # 같은 날 다음 판. 앞 판의 결과는 아직 기록하지 않았다
+    second = mod.bot.current
+    t, _ = await run(mod.join, 301, user(100, "선수0"))
+    check(t == "아직 참여 중인 게임의 결과가 기록되지 않아 다음 경기에 참여할 수 없습니다.\n<#300>" and not second.participants,
+          "결과가 아직 기록되지 않은 판에서 뛰는 사람은 다른 내전에 참여하지 못한다 (문구는 운영자가 정했다)")
+    for k in range(10, 22):                                  # 앞 판에서 쉰 두 명(110, 111)과 새로 온 열 명
+        await run(mod.join, 301, user(100 + k, f"선수{k}"))
+    check(list(second.participants)[:2] == [110, 111] and len(second.participants) == 12, "앞 판에서 쉬는 사람은 다음 판에 참여할 수 있다")
+    await run(mod.close_now, 301, ADMIN)
     check(len(asked) == 3 and asked[2]["busy"] == sorted(first_ten) and len(mod.bot.lineups) == 2, "아직 기록하지 않은 앞 판에 뛴 사람을 오늘 뛴 사람으로 넘긴다")
-    await run(mod.cancel, 100, ADMIN)
-    check(len(mod.bot.lineups) == 1 and w.server[-1] == {"action": "pushLineup", "lineup": None}, "취소하면 그 판의 팀만 지운다")
+    check(mod.bot.lineups[1]["place_id"] == 301 and any(x.startswith("<#301> 의 팀 편성") for x in w.texts(w.admin.send)), "운영진 채널의 편성 안내에는 어느 내전인지 적는다")
+    await run(mod.cancel, 301, ADMIN)
+    check(len(mod.bot.lineups) == 1 and mod.bot.lineups[0]["place_id"] == 300 and w.server[-1] == {"action": "pushLineup", "lineup": None}, "취소하면 그 판의 팀만 지운다")
 
     w = World(mod, forum=True, league=league_of(12))
     await gather(w, 9, extra=[stranger])                     # 열 명이 왔지만 등록된 선수는 아홉
@@ -800,9 +849,9 @@ async def main():
     t, _ = await run(mod.undo_win, 100, ADMIN)
     check("되돌릴 결과가 없어요" in t, "기록한 결과가 없을 때의 /승리취소")
     t, _ = await run(mod.record_win, 300, ADMIN, "r")
-    check("운영진 채널에서만" in t, "다른 채널의 /승리 거절")
+    check("결과를 기록할 팀이 없어요" in t, "팀을 짜기 전에는 다른 채널에서 입력해도 기록할 팀이 없다고 답한다")
     t, _ = await run(mod.undo_win, 300, ADMIN)
-    check("운영진 채널에서만" in t, "다른 채널의 /승리취소 거절")
+    check("되돌릴 결과가 없어요" in t, "기록한 결과가 없으면 다른 채널에서 입력해도 되돌릴 것이 없다고 답한다")
 
     rec = await gather(w, 10)
     await run(mod.close_now, 100, ADMIN)
@@ -846,9 +895,9 @@ async def main():
     w = World(mod, forum=True, league=league_of(12))         # 결과를 기록하지 않고 다음 판을 만들면 알려 준다
     await gather(w, 10)
     await run(mod.close_now, 100, ADMIN)
-    w.message.id = 301
+    w.many = True
     t, _ = await run(mod.create_inhouse, 100, ADMIN)
-    check("결과를 아직 기록하지 않은 판" in t and "/승리" in t, "앞 판의 결과가 없으면 다음 /내전생성 때 알린다")
+    check("결과를 아직 기록하지 않은 판이 있어요: <#300>" in t and "/승리" in t and "다른 내전에 참여할 수 없어요" in t, "앞 판의 결과가 없으면 다음 /내전생성 때 그 글과 함께 알린다")
     t, _ = await run(mod.record_win, 100, ADMIN, "r")
     check("🏆" in t and mod.bot.lineups[0]["result"]["winner"] == "r", "다음 모집이 열려 있어도 앞 판의 결과를 기록한다")
     await run(mod.cancel, 100, ADMIN)
@@ -857,35 +906,42 @@ async def main():
     await run(mod.cancel, 100, ADMIN)
 
     # 팀만 짜고 열리지 않은 판: /승리 에서 '경기 안 함'을 고르면 기록 없이 치운다. 그대로 두면 다음 /승리 가 그 판에 적용된다
-    w = World(mod, forum=True, league=league_of(12))
+    w = World(mod, forum=True, league=league_of(22))
     t, _ = await run(mod.record_win, 100, ADMIN, "x")
     check("결과를 기록할 팀이 없어요" in t, "팀을 짜기 전의 경기 안 함")
-    await gather(w, 10)                                      # 앞 판: 팀만 짜고 열리지 않았다
+    await gather(w, 10)                                      # 앞 판(300): 팀만 짜고 열리지 않았다
     await run(mod.close_now, 100, ADMIN)
-    w.message.id = 301                                       # 다음 판
+    w.many = True                                            # 다음 판(301)
     t, _ = await run(mod.create_inhouse, 100, ADMIN)
     check("열리지 않은 판이면 `/승리` 에서 **경기 안 함**" in t, "앞 판의 결과가 없으면 정리하는 법도 알려 준다")
-    for k in reversed(range(10)):                            # 참여 순서가 거꾸로라 앞 판과 팀이 다르다
-        await run(mod.join, 300, user(100 + k, f"선수{k}"))
-    await run(mod.close_now, 100, ADMIN)
+    for k in range(10, 20):                                  # 앞 판의 열 명은 다음 판에 들어갈 수 없으니 다른 열 명이 모인다
+        await run(mod.join, 301, user(100 + k, f"선수{k}"))
+    await run(mod.close_now, 301, ADMIN)
     ghost, real = mod.bot.lineups
     n, sent = len(w.server), len(w.texts(w.thread.send))
     t, _ = await run(mod.record_win, 100, ADMIN, "x")
+    check(t == "<@1>님, 결과를 기다리는 내전이 여러 개예요. 그 내전의 글에서 입력해 주세요: <#300>, <#301>" and mod.bot.lineups == [ghost, real] and len(w.server) == n,
+          "운영진 채널에서 입력했는데 결과를 기다리는 내전이 여럿이면, 고르지 않고 글에서 입력하라고 알린다")
+    t, i = await run(mod.record_win, 300, ADMIN, "x")
     check(mod.bot.lineups == [real] and w.rev == 1 and not any(p["action"] in ("saveLeague", "pushLineup") for p in w.server[n:]),
-          "경기 안 함: 가장 먼저 짠 판을 기록 없이 치운다 (리그 기록은 그대로, 서버에 올려 둔 나중 판의 편성도 그대로)")
+          "경기 안 함: 그 글의 판을 기록 없이 치운다 (리그 기록은 그대로, 서버에 올려 둔 나중 판의 편성도 그대로)")
     check(w.texts(w.thread.send)[sent:] == ["<@1>님이 이 판을 경기 없이 정리했어요. 결과는 기록되지 않습니다."] and t.startswith("<@1>님이 <#300> 의 판을 경기 없이 정리했어요.")
-          and "결과를 기다리는 판이 1개 더 있어요" in t, "모집 글과 운영진에게 알리고, 남은 판이 있으면 함께 알린다")
+          and "결과를 기다리는 판이 1개 더 있어요. 그 내전의 글에서 `/승리` 로 정리해 주세요: <#301>" in t, "모집 글과 운영진에게 알리고, 남은 판이 있으면 그 글과 함께 알린다")
+    check(i.response.defer.call_args.kwargs == {"ephemeral": True}, "내전의 글에서 입력한 리그 운영진 명령어의 답은 본인에게만 보인다 (그 글에는 봇이 알림을 따로 올린다)")
     check(json.loads(mod.STATE_PATH.read_text(encoding="utf-8"))["lineups"] == [real], "치운 판은 상태 파일에서도 지운다")
-    t, _ = await run(mod.record_win, 100, ADMIN, "r")
-    check("🏆" in t and real["result"]["winner"] == "r" and asked[-1]["lanes"] == real["lanes"] and "더 있어요" not in t, "그다음 /승리 는 실제로 치른 판에 적용된다")
-    await run(mod.undo_win, 100, ADMIN)
+    t, _ = await run(mod.join, 301, user(100, "선수0"))
+    check("모집 중인 내전이 없어요" in t, "(치운 판의 선수는 이제 막히지 않는다. 다만 다음 판은 이미 마감했다)")
+    t, i = await run(mod.record_win, 100, ADMIN, "r")
+    check("🏆" in t and real["result"]["winner"] == "r" and asked[-1]["lanes"] == real["lanes"] and "더 있어요" not in t and i.response.defer.call_args.kwargs == {"ephemeral": False},
+          "결과를 기다리는 판이 하나뿐이면 운영진 채널에서 입력해도 그 판에 적용된다 (답은 모두에게 보인다)")
+    await run(mod.undo_win, 301, ADMIN)
     rec = mod.bot.current
-    t, _ = await run(mod.record_win, 100, ADMIN, "x")         # 하나 남은(가장 나중에 짠) 판을 치우는 경우
+    t, _ = await run(mod.record_win, 301, ADMIN, "x")         # 하나 남은(가장 나중에 짠) 판을 치우는 경우
     check(mod.bot.lineups == [] and w.server[-1] == {"action": "pushLineup", "lineup": None} and not rec.lineup and "더 있어요" not in t,
           "가장 나중에 짠 판을 치우면 서버에 올려 둔 편성도 비운다")
-    t, _ = await run(mod.extend, 100, ADMIN)
+    t, _ = await run(mod.extend, 301, ADMIN)
     check("다시 열었어요" in t and not rec.closed, "치운 판의 모집은 다시 열 수 있다")
-    await run(mod.cancel, 100, ADMIN)
+    await run(mod.cancel, 301, ADMIN)
 
     # ── 리그 서버가 답하지 않을 때 (구글 서버는 가끔 제때 답하지 않거나 오류 화면을 돌려준다) ──
     # 올린 기록을 서버가 받았는지 모르는 채 다시 올리면 같은 경기가 두 번 기록된다. 그런 일이 없어야 한다
@@ -1418,12 +1474,12 @@ async def main():
 
     mod.run_matchmaker = fake_matchmaker
     w = World(mod, forum=True, league=league_of(12))
-    for cmd, nm in ((mod.start_game, "시작"), (mod.end_game, "종료")):
-        t, _ = await run(cmd, 300, ADMIN)
-        check("운영진 채널에서만" in t, f"다른 채널의 /{nm} 거절")
 
     # 채널을 고른 적이 없으면 이름으로 찾는다. 찾지 못하면 고르는 법을 알려 준다
     plain = use(Town(room(911, "대기실"), room(912, "1팀"), room(913, "2팀")))
+    for cmd, nm in ((mod.start_game, "시작"), (mod.end_game, "종료")):
+        t, _ = await run(cmd, 300, ADMIN)
+        check("음성 채널을 찾지 못했어요" in t and "운영진 채널에서만" not in t, f"/{nm} 도 내전의 글에서 쓰는 명령어라 어느 채널에서든 받는다")
     t, _ = await run(mod.start_game, 100, ADMIN)
     check(t.startswith("<@1>님, 로비·래디언트·다이어 음성 채널을 찾지 못했어요. `/시작` 을 입력할 때") and mod.bot.voice == {}, "/시작: 음성 채널을 찾지 못하면 고르는 법을 알려 준다")
     t, _ = await run(mod.end_game, 100, ADMIN)
@@ -1512,21 +1568,86 @@ async def main():
     check(t.startswith("<@1>님, 봇에 **멤버 이동** 권한이 없어요.") and not rad.voice_states and not dire.voice_states, "/시작: 봇에 멤버 이동 권한이 없으면 아무도 옮기지 않는다")
     dire.permissions_for = Mock(return_value=Mock(move_members=True, view_channel=True, connect=True))
 
-    # 결과를 기록하지 않은 판이 둘이면 나중에 짠 팀으로 옮긴다. 다음 판은 참여 순서가 거꾸로라 래디언트가 111~107, 다이어가 106~102 다
-    w.message.id = 301
+    # ── 내전 두 개가 동시에 진행될 때: 내전마다 팀 음성 채널을 한 벌씩 쓴다 ──
+    # 앞 내전(300)은 결과를 기다리고 있고, 다른 열 명(110~119)으로 다음 내전(301)을 연다. 가짜 편성은 래디언트 110~114, 다이어 115~119
+    w.many = True
+    w.league = league_of(22)
+    rad2, dire2 = room(905, "래디언트 2"), room(906, "다이어 2")
+    town.voice_channels += [rad2, dire2]
+    pairs = mod.team_pairs(town, {"lobby": lobby, "radiant": rad, "dire": dire})
+    check(sorted(pairs) == [1, 2] and pairs[1] == {"radiant": rad, "dire": dire} and pairs[2] == {"radiant": rad2, "dire": dire2},
+          "팀 음성 채널의 벌: 같은 번호가 붙은 래디언트·다이어 채널이 한 벌이다 (번호가 없으면 1번)")
+    check(await mod.voice_status() == "로비 #🎧 로비, 래디언트 #🟢 Radiant, 다이어 #🔴 다이어 / #래디언트 2·#다이어 2 (팀 채널 2벌) - 권한 확인", "켤 때 확인: 팀 채널이 여러 벌일 때")
     await run(mod.create_inhouse, 100, ADMIN)
-    for k in reversed(range(12)):
-        await run(mod.join, 300, user(100 + k, f"선수{k}"))
-    await run(mod.close_now, 100, ADMIN)
-    lobby.voice_states = {uid: Mock() for uid in (102, 111, 100)}
+    for k in range(10, 20):
+        await run(mod.join, 301, user(100 + k, f"선수{k}"))
+    await run(mod.close_now, 301, ADMIN)
+    first, second = mod.bot.lineups
+    lobby.voice_states = {uid: Mock() for uid in (100, 105, 110, 115, 777)}
     t, _ = await run(mod.start_game, 100, ADMIN)
-    check(len(mod.bot.lineups) == 2 and list(rad.voice_states) == [111] and list(dire.voice_states) == [102] and list(lobby.voice_states) == [100],
-          "결과를 기다리는 판이 둘이면 나중에 짠 팀으로 옮긴다 (앞 판에서 래디언트였던 102 가 이번에는 다이어)")
-    check(mod.bot.lineups[1].get("started") and "ended" not in mod.bot.lineups[1], "이번 판을 시작한 판으로 적는다")
-    await run(mod.record_win, 100, ADMIN, "r")                   # 앞 판(먼저 짠 팀)의 결과 기록은 /시작 과 상관없이 그대로 된다
-    check(mod.bot.lineups[0]["result"]["winner"] == "r" and mod.bot.lineups[1]["result"] is None, "/승리 는 지금처럼 먼저 짠 판부터 기록한다")
-    await run(mod.end_game, 100, ADMIN)
-    check(mod.bot.lineups[1].get("ended") and sorted(lobby.voice_states) == [100, 102, 111], "/종료 는 가장 최근에 시작한 판을 끝낸다")
+    check(t == "<@1>님, 팀이 짜인 내전이 여러 개예요. 그 내전의 글에서 입력해 주세요: <#300>, <#301>" and not rad.voice_states and not rad2.voice_states,
+          "운영진 채널의 /시작: 팀이 짜인 내전이 여럿이면 옮기지 않고 글에서 입력하라고 알린다")
+    t, _ = await run(mod.start_game, 300, ADMIN)
+    check(list(rad.voice_states) == [100] and list(dire.voice_states) == [105] and first["rooms"] == {"radiant": 902, "dire": 903} and "ended" not in first,
+          "내전의 글에서 /시작: 그 내전의 선수만 그 내전의 팀 채널로 옮긴다")
+    sent = len(w.texts(w.threads[301].send))
+    t, _ = await run(mod.start_game, 301, ADMIN)
+    check(list(rad2.voice_states) == [110] and list(dire2.voice_states) == [115] and sorted(lobby.voice_states) == [777] and second["rooms"] == {"radiant": 905, "dire": 906}
+          and "🟢 <#905> 1명 · 🔴 <#906> 1명을 옮겼어요." in t, "둘째 내전은 비어 있는 2번 벌을 쓴다 (앞 내전의 사람은 건드리지 않는다)")
+    check(w.texts(w.threads[301].send)[sent:] == ["<@1>: 게임이 시작되어 선수들을 각자의 음성 채널로 이동시킵니다."], "시작 안내는 그 내전의 글에 올린다")
+    check(mod.pick_rooms(town, {"lanes": []}, pairs) is None, "진행 중인 내전이 팀 채널을 모두 쓰고 있으면 남은 벌이 없다")
+    mod.bot.lineups.append({"at": time.time(), "ids": ["p20", "p21"], "message_id": 302, "place_id": 302, "lanes": [{"role": 1, "r": "p20", "d": "p21"}],
+                            "who": {"p20": 120, "p21": 121}, "result": None})
+    t, _ = await run(mod.start_game, 302, ADMIN)
+    check(t.startswith("<@1>님, 비어 있는 팀 음성 채널이 없어요.") and "`/종료`" in t, "셋째 내전이 쓸 벌이 없으면 옮기지 않고 알린다")
+    mod.bot.lineups.pop()
+    t, _ = await run(mod.end_game, 100, ADMIN)
+    check(t == "<@1>님, 경기 중인 내전이 여러 개예요. 그 내전의 글에서 입력해 주세요: <#300>, <#301>" and list(rad.voice_states) == [100] and list(rad2.voice_states) == [110],
+          "운영진 채널의 /종료: 경기 중인 내전이 여럿이면 아무도 옮기지 않는다 (다른 내전의 선수를 로비로 보내지 않게)")
+    t, _ = await run(mod.end_game, 301, ADMIN)
+    check(not rad2.voice_states and not dire2.voice_states and list(rad.voice_states) == [100] and list(dire.voice_states) == [105] and second.get("ended") and "ended" not in first
+          and "<#901> 로 2명을 옮겼어요." in t, "내전의 글에서 /종료: 그 내전의 팀 채널만 비운다")
+    await run(mod.record_win, 301, ADMIN, "r")
+    check(second["result"]["winner"] == "r" and first["result"] is None, "/승리 는 입력한 글의 판을 기록한다")
+    t, _ = await run(mod.join, 301, user(100, "선수0"))
+    await run(mod.end_game, 300, ADMIN)
+    check(first.get("ended") and not rad.voice_states and not dire.voice_states and sorted(lobby.voice_states) == [100, 105, 110, 115, 777], "앞 내전도 그 글에서 /종료 한다")
+    await run(mod.record_win, 300, ADMIN, "d")
+    check(first["result"]["winner"] == "d" and w.league["matches"][0]["id"] != w.league["matches"][1]["id"], "두 내전의 결과가 차례로 기록된다")
+
+    # /승리취소: 그 글의 판을 되돌린다. 선수가 겹치지 않는 다른 내전의 결과가 뒤에 기록돼 있어도 된다
+    older, newer = second["result"]["match_id"], first["result"]["match_id"]      # 둘째 내전(301)의 결과가 먼저 기록됐다
+    t, _ = await run(mod.undo_win, 100, ADMIN)
+    check(t == "<@1>님, 결과를 기록한 내전이 여러 개예요. 그 내전의 글에서 입력해 주세요: <#300>, <#301>" and len(w.league["matches"]) == 2,
+          "운영진 채널의 /승리취소: 결과를 기록한 내전이 여럿이면 되돌리지 않고 글에서 입력하라고 알린다")
+    t, _ = await run(mod.undo_win, 301, ADMIN)
+    check("결과 기록을 취소" in t and second["result"] is None and [m["id"] for m in w.league["matches"]] == [newer] and first["result"]["match_id"] == newer,
+          "마지막 경기가 아니어도, 그 선수들이 뒤 경기에 뛰지 않았으면 되돌린다 (다른 내전의 기록은 그대로)")
+    await run(mod.record_win, 301, ADMIN, "d")
+    # 같은 선수가 그 뒤에 뛴 경기가 기록돼 있으면 되돌리지 않는다. 어느 경기부터 되돌릴지 알리고 리그 관리자 역할을 부른다
+    played[second["result"]["match_id"]] |= played[newer]      # 둘째 내전의 경기에 앞 내전의 선수가 뛴 것으로 꾸민다
+    said_here = len(w.texts(w.thread.send))
+    t, _ = await run(mod.undo_win, 300, ADMIN)
+    told = w.texts(w.thread.send)[said_here:]
+    check(first["result"]["winner"] == "d" and len(w.league["matches"]) == 2 and t == "<@1>님, 결과를 되돌리지 못했어요. 까닭과 순서를 방금 이 채널에 올렸어요.",
+          "/승리취소: 같은 선수가 뒤에 뛴 경기가 기록돼 있으면 되돌리지 않는다")
+    check(len(told) == 1 and told[0].startswith("<@1>님, 이 경기는 지금 되돌릴 수 없어요.") and "먼저 되돌릴 경기: <#301>" in told[0] and "순서: 그 경기의 글에서 `/승리취소`" in told[0]
+          and "리그 관리자에게 알려 주세요." in told[0] and "관리자역할" in told[0] and not w.thread.send.call_args.kwargs["allowed_mentions"].roles,
+          "그 까닭과 먼저 되돌릴 경기의 글, 순서를 모두가 보게 올린다 (리그 관리자 역할을 정해 두지 않았으면 알리라고만 한다)")
+    mod.bot.manager_role_id = 88
+    await run(mod.undo_win, 300, ADMIN)
+    pinged = w.thread.send.call_args.kwargs["allowed_mentions"]
+    check(w.texts(w.thread.send)[-1].endswith("<@&88> 확인해 주세요.") and [r.id for r in pinged.roles] == [88] and not pinged.everyone and not pinged.users,
+          "리그 관리자 역할을 정해 두었으면 그 역할을 부른다 (알림은 그 역할에만 울린다)")
+    mod.bot.manager_role_id = 0
+    played["밖에서기록"] = set(played[newer])                     # 봇이 모르는 경기(리그 매니저에서 기록)가 뒤에 있는 경우
+    w.league = dict(w.league, matches=[{"id": "밖에서기록"}] + w.league["matches"])
+    await run(mod.undo_win, 300, ADMIN)
+    check("봇이 모르는 경기가 1판 있어요" in w.texts(w.thread.send)[-1] and "리그 매니저에서 고쳐야 해요" in w.texts(w.thread.send)[-1], "봇이 모르는 뒤 경기가 있으면 리그 관리자가 매니저에서 고쳐야 한다고 알린다")
+    w.league = dict(w.league, matches=w.league["matches"][1:])
+    await run(mod.undo_win, 301, ADMIN)                         # 알려 준 순서대로: 뒤 경기부터 되돌리면
+    t, _ = await run(mod.undo_win, 300, ADMIN)
+    check("결과 기록을 취소" in t and first["result"] is None and second["result"] is None and w.league["matches"] == [], "뒤 경기부터 차례로 되돌리면 된다")
 
     # 봇이 짠 팀이 없어도 /종료 는 팀 채널의 사람을 로비로 옮긴다 (모집 글에는 알릴 곳이 없다)
     w = World(mod, forum=True)
@@ -1536,6 +1657,137 @@ async def main():
     check(sorted(lobby.voice_states) == [1, 2, 3] and "<#901> 로 3명을 옮겼어요." in t and "기억했어요" not in t and not w.thread.send.await_count, "봇이 짠 팀이 없을 때의 /종료")
     t, _ = await run(mod.start_game, 100, user(2, "다른 운영자", admin=True))
     check(t.startswith("<@2>님, 배정된 팀이 없어서 옮길 사람이 없어요."), "다른 운영진이 쓰면 그 운영진을 멘션한다")
+
+    # ── 내전을 동시에 여러 개 (운영자가 2026-10-11에 정함): 내전마다 글이 따로 생기고, 명령어는 입력한 글의 내전에 적용된다 ──
+    mod.run_matchmaker = fake_matchmaker
+    w = World(mod, forum=True)
+    w.many = True
+    await run(mod.create_inhouse, 100, ADMIN)
+    t, _ = await run(mod.create_inhouse, 100, ADMIN)
+    g1, g2 = mod.bot.games
+    check(g1.place_id == 300 and g2.place_id == 301 and not g1.closed and t.startswith("<@1>님이 모집을 시작했어요! https://discord.com/channels/1/301/301")
+          and "그 글에서 입력해 주세요." in t, "모집 중인 내전이 있어도 /내전생성 으로 하나 더 연다 (내전마다 글이 따로 생긴다)")
+    await run(mod.join, 300, A)
+    t, i = await run(mod.join, 301, A)
+    check(t == "이미 다른 내전에 참여 신청을 했습니다.\n<#300>" and 11 not in g2.participants and i.response.send_message.call_args.kwargs.get("ephemeral") is True,
+          "모집 중인 다른 내전에 참여 신청을 해 둔 사람은 받지 않는다 (문구는 운영자가 정했다)")
+    await run(mod.leave, 300, A)
+    await run(mod.join, 301, A)
+    check(11 in g2.participants and 11 not in g1.participants, "참여를 취소하면 다른 내전에 참여할 수 있다")
+    t, _ = await run(mod.join, 200, B)
+    check(t == "<#300>, <#301> 에서 입력해 주세요.", "모집 글 밖의 /참여: 모집 중인 내전의 글들을 알려 준다")
+    await run(mod.join, 300, B)
+    for cmd, nm, what in ((mod.close_now, "마감", "모집 중인"), (mod.extend, "연장", "진행 중인"), (mod.cancel, "취소", "진행 중인"), (mod.restart, "재모집", "진행 중인")):
+        t, _ = await run(cmd, 100, ADMIN)
+        check(t == f"<@1>님, {what} 내전이 여러 개예요. 그 내전의 글에서 입력해 주세요: <#300>, <#301>", f"운영진 채널의 /{nm}: 내전이 여럿이면 고르지 않고 글에서 입력하라고 알린다")
+    check(not g1.closed and not g2.closed and not g1.cancelled and not g2.cancelled and list(g1.participants) == [12] and list(g2.participants) == [11], "그때는 어느 내전도 건드리지 않는다")
+    ends = (g1.end_ts, g2.end_ts)
+    t, i = await run(mod.extend, 301, ADMIN)
+    check(g2.end_ts == ends[1] + 300 and g2.extended and g1.end_ts == ends[0] and not g1.extended and i.response.defer.call_args.kwargs == {"ephemeral": True}
+          and w.texts(w.threads[301].send)[-1].startswith("<@1>님이 모집을 연장했어요!"), "/연장: 입력한 글의 내전만 연장한다 (알림은 그 글에, 답은 본인에게만)")
+    t, _ = await run(mod.close_now, 300, ADMIN)
+    check(g1.closed and not g2.closed and t == "<@1>님이 모집을 마감했어요. (최종 1명)" and any("내전 참여 명단" in x for x in w.texts(w.thread.send))
+          and not any("내전 참여 명단" in x for x in w.texts(w.threads[301].send)), "/마감: 입력한 글의 내전만 마감한다")
+    check(any(x.startswith("[모집 종료] 주최: <@1> · <#300>") for x in w.texts(w.admin.send)), "운영진 채널의 마감 안내에 어느 내전인지 적는다")
+    t, _ = await run(mod.close_now, 300, ADMIN)
+    check(t == "<@1>님, 이 내전은 이미 마감했어요.", "마감한 내전의 글에서 /마감")
+    t, _ = await run(mod.join, 300, C)
+    check(t == "<#301> 에서 입력해 주세요." and 13 not in g1.participants, "마감한 내전의 글에서 /참여: 모집 중인 내전의 글을 알려 준다")
+    await run(mod.close_now, 100, ADMIN)
+    check(g2.closed, "모집 중인 내전이 하나뿐이면 운영진 채널에서 입력해도 그 내전에 적용된다")
+    t, _ = await run(mod.cancel, 301, ADMIN)
+    check(g2.cancelled and not g1.cancelled, "/취소: 입력한 글의 내전만 취소한다")
+    t, _ = await run(mod.extend, 300, ADMIN)
+    check("다시 열었어요" in t and not g1.closed, "인원이 모자라 마감된 내전도 그 글에서 /연장 으로 다시 연다")
+    await run(mod.cancel, 300, ADMIN)
+
+    # 동시에 진행하는 내전은 세 개까지 (팀 음성 채널이 세 벌)
+    w = World(mod, forum=True)
+    w.many = True
+    for _ in range(3):
+        await run(mod.create_inhouse, 100, ADMIN)
+    t, i = await run(mod.create_inhouse, 100, ADMIN)
+    check(len(mod.bot.games) == 3 and t.startswith("지금 진행 중인 내전이 3개라 더 만들 수 없어요(동시에 3개까지).") and "<#300>, <#301>, <#302>" in t
+          and i.response.send_message.call_args.kwargs.get("ephemeral") is True and w.signup.create_thread.await_count == 3, "진행 중인 내전이 세 개면 더 만들지 않는다")
+    await run(mod.cancel, 301, ADMIN)
+    await run(mod.create_inhouse, 100, ADMIN)
+    check(len(mod.bot.games) == 4 and mod.bot.current.place_id == 303 and sum(mod.is_active(g) for g in mod.bot.games) == 3, "하나를 정리하면 다시 열 수 있다")
+    saved = json.loads(mod.STATE_PATH.read_text(encoding="utf-8"))["games"]
+    check([g["thread_id"] for g in saved] == [300, 301, 302, 303] and [g["cancelled"] for g in saved] == [False, True, False, False], "내전들을 모두 상태 파일에 적는다")
+    for g in mod.bot.games:
+        mod.stop_timer(g)
+    mod.bot.current = None
+    await mod.restore_state()
+    back = mod.bot.games
+    check([g.place_id for g in back] == [300, 301, 302, 303] and [g.cancelled for g in back] == [False, True, False, False] and sum(g.task is not None for g in back) == 3,
+          "껐다 켜도 내전들을 모두 이어받는다 (모집 중인 것은 마감 시각을 다시 기다린다)")
+    # 마감 처리 중(팀이 아직 나오지 않은 몇 초)인 내전의 참가자는 누가 뛸지 모르므로 다른 내전에 들어가지 못한다
+    back[0].participants[11] = {"name": "가", "username": "u11"}
+    back[0].closed, back[0].matching = True, True
+    t, _ = await run(mod.join, 302, A)
+    check(t == "아직 참여 중인 게임의 결과가 기록되지 않아 다음 경기에 참여할 수 없습니다.\n<#300>" and 11 not in back[2].participants, "마감 처리 중인 내전의 참가자는 다른 내전에 참여하지 못한다")
+    back[0].matching = False
+    t, _ = await run(mod.join, 302, A)
+    check("참여 완료" in t and 11 in back[2].participants, "팀이 짜이지 않고 끝난 내전의 참가자는 다른 내전에 참여할 수 있다")
+    for g in mod.bot.games:
+        mod.stop_timer(g)
+
+    # 참여 신청 채널이 포럼이 아니면 내전마다 글이 따로 없어 가릴 수 없으므로, 전처럼 한 번에 하나만 모집한다
+    w = World(mod, forum=False)
+    await run(mod.create_inhouse, 100, ADMIN)
+    t, _ = await run(mod.create_inhouse, 100, ADMIN)
+    check("이미 모집 중인 내전이 있어요. (마감 <t:" in t and len(mod.bot.games) == 1 and w.signup.send.await_count == 1, "일반 채널: 모집 중에는 /내전생성 을 받지 않는다")
+    await run(mod.cancel, 100, ADMIN)
+
+    # ── /재모집: 모인 사람을 모두 참여 취소로 돌리고 5분 동안 처음부터 다시 모집한다 (운영자가 2026-10-11에 요청) ──
+    w = World(mod, forum=True)
+    await run(mod.create_inhouse, 100, ADMIN)
+    rec = mod.bot.current
+    for u in (A, B, C):
+        await run(mod.join, 300, u)
+    now, task = time.time(), rec.task
+    rec.extended = True
+    t, i = await run(mod.restart, 300, ADMIN)
+    await asyncio.sleep(0)
+    check(rec.participants == {} and not rec.closed and not rec.extended and rec.end_ts % 60 == 0 and 300 <= rec.end_ts - now <= 361 and task.cancelled()
+          and rec.task is not task and not rec.task.done(), "/재모집: 참여 신청을 모두 취소하고 마감을 5분 뒤로 한다")
+    last, pinged = w.texts(w.thread.send)[-1], w.thread.send.call_args.kwargs["allowed_mentions"]
+    check(last.startswith("<@1>님이 모집을 처음부터 다시 받아요. 지금까지의 참여 신청은 모두 취소됐어요.\n참여하려면 `/참여` 를 다시 입력해 주세요.")
+          and f"**<t:{rec.end_ts}:t>까지** 받아요." in last and last.endswith("\n<@11> <@12> <@13>") and [x.id for x in pinged.users] == [11, 12, 13] and not pinged.roles,
+          "모집 글에 알리고, 참여 신청이 취소된 사람들에게만 알림이 간다")
+    check(t.startswith("<@1>님이 모집을 처음부터 다시 받게 했어요. 참여 신청 3명을 취소했어요. 새 마감: ") and "참여자 (0명): 아직 없음" in w.message.edit.call_args.kwargs["content"]
+          and json.loads(mod.STATE_PATH.read_text(encoding="utf-8"))["games"][0]["participants"] == [], "운영진에게 답하고, 본문의 명단과 상태 파일도 비운다")
+    await run(mod.join, 300, A)
+    check(list(rec.participants) == [11], "다시 /참여 를 받는다")
+    await run(mod.cancel, 300, ADMIN)
+    t, _ = await run(mod.restart, 300, ADMIN)
+    check(t == "<@1>님, 다시 모집할 내전이 없어요. `/내전생성` 으로 새로 모집해 주세요." and rec.cancelled, "취소한 내전은 다시 모집하지 않는다")
+    # 마감해서 팀까지 짠 뒤의 /재모집: 다시 열고, 짠 팀과 서버에 올린 명단을 없던 일로 한다
+    w = World(mod, forum=True, sync=True, league=league_of(12))
+    rec = await gather(w, 10)
+    await run(mod.close_now, 300, ADMIN)
+    check(rec.lineup and len(mod.bot.lineups) == 1 and rec.synced, "(재모집 준비) 마감해서 팀을 짰다")
+    t, _ = await run(mod.restart, 300, ADMIN)
+    check(not rec.closed and not rec.lineup and mod.bot.lineups == [] and not rec.synced and w.pushed[-1] == "clear" and w.server[-1] == {"action": "pushLineup", "lineup": None}
+          and rec.participants == {} and w.thread.edit.call_args.kwargs == {"locked": False, "archived": False}, "마감한 뒤의 /재모집: 글을 다시 열고 짠 팀과 올린 명단을 비운다")
+    for k in range(10):
+        await run(mod.join, 300, user(100 + k, f"선수{k}"))
+    await run(mod.close_now, 300, ADMIN)
+    await run(mod.record_win, 300, ADMIN, "r")
+    t, _ = await run(mod.restart, 300, ADMIN)
+    check("이미 경기 결과를 기록한 내전이에요" in t and rec.closed and len(rec.participants) == 10, "결과를 기록한 내전은 다시 모집하지 않는다")
+
+    # ── 마감한 글 잠그기는 설정이다. 기본은 잠그지 않는다: 잠긴 글에서는 스레드 관리 권한이 없는 리그 운영진이 /시작·/승리 를 쓰지 못한다 ──
+    mod.LOCK_CLOSED = False
+    w = World(mod, forum=True)
+    await run(mod.create_inhouse, 100, ADMIN)
+    await run(mod.join, 300, A)
+    await run(mod.close_now, 300, ADMIN)
+    check(mod.bot.current.closed and w.thread.edit.await_count == 0, "기본 설정에서는 마감한 글을 잠그지 않는다")
+    await run(mod.extend, 300, ADMIN)
+    await run(mod.cancel, 300, ADMIN)
+    check(w.thread.edit.call_args.kwargs == {"locked": True, "archived": False}, "취소한 글은 잠근다")
+    mod.LOCK_CLOSED = True
 
     # ── /내전하자: 지금 내전을 하고 싶다고 알리기 (한 시간 유지, 10명이 모이면 대화방에서 리그 운영진을 멘션) ──
     w = World(mod, forum=True)
@@ -1702,8 +1954,9 @@ async def main():
           and "`/내전하자` —" not in helps["손님"] and "`/내전생성`" not in helps["손님"] and "<#100>" not in helps["손님"], "/도움말: 리그 선수가 아닌 사람에게는 누구나 쓰는 명령어만")
     check("**리그 선수**가 쓸 수 있는 명령어예요." in helps["선수"] and "`/내전하자` — <#400> 에서 써요." in helps["선수"] and "`/참여`" in helps["선수"]
           and "`/내전생성`" not in helps["선수"] and "`/선수역할`" not in helps["선수"], "/도움말: 리그 선수에게는 /내전하자 까지")
-    check("**리그 운영진**이 쓸 수 있는 명령어예요." in helps["운영진"] and "**리그 운영진** (<#100> 에서 써요)" in helps["운영진"]
-          and all(f"`/{c}`" in helps["운영진"] for c in ("내전하자", "내전생성", "마감", "연장", "취소", "시작", "종료", "승리", "승리취소"))
+    check("**리그 운영진**이 쓸 수 있는 명령어예요." in helps["운영진"] and "`/내전생성` — <#100> 에서 써요." in helps["운영진"] and "동시에 3개까지" in helps["운영진"]
+          and "아래 명령어는 **그 내전의 글**에서 써요." in helps["운영진"] and helps["운영진"].index("그 내전의 글") < helps["운영진"].index("`/마감`")
+          and all(f"`/{c}`" in helps["운영진"] for c in ("내전하자", "내전생성", "마감", "연장", "재모집", "취소", "시작", "종료", "승리", "승리취소"))
           and "`/선수역할`" not in helps["운영진"] and "`/내전하자설정`" not in helps["운영진"], "/도움말: 리그 운영진에게는 내전을 여는 명령어까지")
     check("**리그 관리자**가 쓸 수 있는 명령어예요." in helps["관리자"] and "`/선수역할`" in helps["관리자"] and "`/내전하자설정`" in helps["관리자"] and "`/내전생성`" in helps["관리자"],
           "/도움말: 리그 관리자에게는 모두")

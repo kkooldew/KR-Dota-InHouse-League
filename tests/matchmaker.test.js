@@ -137,7 +137,35 @@ assert(two.ok && two.league.matches.length === 2 && of(two.league, radiant[0]).s
 u = makeMatch({ mode: 'undo', league: copy(two.league), matchId: two.match.id });
 assert(u.ok && JSON.stringify(u.league) === JSON.stringify(r.league), '두 번째 경기만 되돌리면 첫 경기 뒤의 상태가 된다');
 u = makeMatch({ mode: 'undo', league: copy(two.league), matchId: r.match.id });
-assert(!u.ok && /다른 경기가 기록돼/.test(u.error), '마지막 경기가 아니면 되돌리지 않는다');
+assert(!u.ok && u.code === 'later' && u.blockers.length === 1 && u.blockers[0].id === two.match.id && /그 경기부터 되돌려/.test(u.error),
+  '같은 선수가 그 뒤에 뛴 경기가 기록돼 있으면 되돌리지 않고, 먼저 되돌릴 경기를 알려 준다');
+assert(!makeMatch({ mode: 'undo', league: copy(two.league), matchId: 'nope' }).ok, '기록에 없는 경기는 되돌리지 않는다');
+
+// 내전이 동시에 돌 때(2026-10-11): 선수가 겹치지 않는 다른 판의 결과가 뒤에 기록돼 있어도 되돌린다. 다른 판과 다른 선수는 그대로다
+const others = FIRSTS.map((f, i) => player(i + 11, 3100 + i * 120, [f, ...rest(f)]));
+const both = { players: [...ten(), ...others], matches: [], settings };
+const lanesB = run(others, { settings }).lanes.map(l => ({ r: l.r.id, d: l.d.id }));
+const gameA = makeMatch({ mode: 'result', league: copy(both), lanes, winner: 'r', now: NOW });                         // A판
+const gameB = makeMatch({ mode: 'result', league: copy(gameA.league), lanes: lanesB, winner: 'd', now: NOW + 60e3 });  // B판의 결과가 그 뒤에 들어왔다
+const onlyB = makeMatch({ mode: 'result', league: copy(both), lanes: lanesB, winner: 'd', now: NOW + 60e3 });          // 견줄 것: B판만 기록한 경우
+const shape = l => JSON.stringify({ players: l.players, games: l.matches.map(m => [m.winner, m.at, m.rows]) });        // 경기 id 는 만들 때마다 달라서 뺀다
+u = makeMatch({ mode: 'undo', league: copy(gameB.league), matchId: gameA.match.id });
+assert(gameA.ok && gameB.ok && u.ok && u.match.id === gameA.match.id && u.changes.length === 10 && u.league.matches.length === 1 && u.league.matches[0].id === gameB.match.id
+  && shape(u.league) === shape(onlyB.league), '선수가 겹치지 않는 판이 뒤에 기록돼 있어도 되돌린다. 그 판의 기록과 다른 선수는 그대로다');
+const backB = makeMatch({ mode: 'undo', league: copy(u.league), matchId: gameB.match.id });
+assert(backB.ok && JSON.stringify(backB.league) === JSON.stringify(both), '남은 판까지 되돌리면 처음과 똑같아진다');
+u = makeMatch({ mode: 'undo', league: copy(gameB.league), matchId: gameB.match.id });
+assert(u.ok && shape(u.league) === shape(gameA.league), '나중에 기록한 판을 먼저 되돌려도 된다');
+// 세 판: A → (A의 선수가 다시 뛴) C → (겹치지 않는) B. A를 막는 것은 C뿐이다
+const gameC = makeMatch({ mode: 'result', league: copy(gameA.league), lanes, winner: 'd', now: NOW + 30e3 });
+const three = makeMatch({ mode: 'result', league: copy(gameC.league), lanes: lanesB, winner: 'r', now: NOW + 90e3 });
+u = makeMatch({ mode: 'undo', league: copy(three.league), matchId: gameA.match.id });
+assert(!u.ok && u.code === 'later' && u.blockers.map(b => b.id).join() === gameC.match.id && JSON.stringify(three.league.matches.map(m => m.id)) === JSON.stringify([three.match.id, gameC.match.id, gameA.match.id]),
+  '되돌리지 못하게 막는 것은 같은 선수가 뛴 뒤 경기뿐이다');
+u = makeMatch({ mode: 'undo', league: copy(three.league), matchId: gameC.match.id });
+assert(u.ok && u.league.matches.map(m => m.id).join() === [three.match.id, gameA.match.id].join()
+  && ten().every(p => of(u.league, p.id).mmr === of(gameA.league, p.id).mmr && of(u.league, p.id).streak === of(gameA.league, p.id).streak),
+  '가운데 판을 되돌리면 그 선수들은 앞 판 뒤의 상태로 돌아가고, 남은 경기의 순서는 그대로다');
 u = makeMatch({ mode: 'undo', league: copy(before) });
 assert(!u.ok && /되돌릴 경기가 없습니다/.test(u.error), '경기가 없으면 되돌릴 것이 없다');
 

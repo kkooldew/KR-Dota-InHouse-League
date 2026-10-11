@@ -10,5 +10,7 @@
   "sync_url": "",
   "sync_key": "",
   "auto_match": true,
-  "node_path": ""
+  "node_path": "",
+  "max_games": 3,
+  "lock_closed_threads": false
 }
