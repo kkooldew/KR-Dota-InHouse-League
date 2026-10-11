@@ -2121,15 +2121,14 @@ async def main():
         helps[name], i = await run(mod.show_help, 400, who)
         quiet.append(private(i) and len(helps[name]) < 2000)
     check(all(quiet), "/도움말: 본인에게만 보이고 메시지 하나에 들어간다")
-    check("**리그 선수**가 쓰는 명령어예요. 선수 등록을 하고 승인을 받으면 쓸 수 있어요." in helps["손님"] and "\n\n**리그 선수**\n`/참여` · `/참여취소` —" in helps["손님"]
-          and "`/내전하자` —" in helps["손님"] and "`/도움말` —" in helps["손님"] and "`/내전생성`" not in helps["손님"] and "<#100>" not in helps["손님"],
-          "/도움말: 리그 선수가 아닌 사람에게는 리그 선수가 쓰는 명령어를 보여 주고, 승인을 받으면 쓸 수 있다고 알린다")
+    check(helps["손님"] == mod.PLAYER_ONLY == "이 명령어를 사용할 권한이 없어요. 리그 선수만 쓸 수 있는 명령어예요. 선수 등록을 하고 승인을 받으면 쓸 수 있어요.",
+          "/도움말: 리그 선수 역할이 없는 사람은 쓰지 못한다 (등록하고 승인을 받으라고 알린다)")
     mine = helps["선수"]
     check("**리그 선수**가 쓸 수 있는 명령어예요." in mine and "`/내전하자` — <#400> 에서 써요." in mine
           and mine.index("\n\n**리그 선수**\n") < mine.index("`/참여` · `/참여취소` —") < mine.index("`/내전하자` —") < mine.index("`/포지션변경` —") < mine.index("`/도움말` —")
           and "`/내전생성`" not in mine and "`/선수역할`" not in mine, "/도움말: 선수가 쓰는 명령어(/참여·/참여취소·/내전하자·/포지션변경·/도움말)는 모두 리그 선수 칸에 있다")
-    check(all("누구나" not in h for h in helps.values()) and all(h.count("**리그 선수**\n") == 1 for h in helps.values()),
-          "/도움말: '누구나' 칸은 없고, 리그 선수 칸은 누구에게나 한 번 보인다")
+    check(all("누구나" not in h for h in helps.values()) and all(helps[k].count("**리그 선수**\n") == 1 for k in ("선수", "운영진", "관리자")),
+          "/도움말: '누구나' 칸은 없고, 리그 선수 칸은 쓸 수 있는 모든 사람에게 한 번 보인다")
     check("**리그 운영진**이 쓸 수 있는 명령어예요." in helps["운영진"] and "`/내전생성` — <#100> 에서 써요." in helps["운영진"] and "동시에 3개까지" in helps["운영진"]
           and "아래 명령어는 **그 내전의 글**에서 써요." in helps["운영진"] and helps["운영진"].index("그 내전의 글") < helps["운영진"].index("`/마감`")
           and all(f"`/{c}`" in helps["운영진"] for c in ("내전하자", "내전생성", "마감", "연장", "재모집", "취소", "시작", "종료", "승리", "승리취소"))
@@ -2138,6 +2137,30 @@ async def main():
           "/도움말: 리그 관리자에게는 모두")
     t, _ = await run(mod.show_help, 100, GUEST)
     check("**리그 운영진**이 쓸 수 있는 명령어예요." in t, "/도움말: 운영진 채널에서 입력한 사람은 리그 운영진이다 (리그 운영진 역할을 따로 정하지 않았을 때)")
+
+    # ── 선수가 쓰는 명령어는 리그 선수 역할이 있는 사람만 쓴다 (운영자가 2026-10-12에 정함): /참여·/참여취소·/포지션변경·/도움말 ──
+    await run(mod.create_inhouse, 100, ADMIN)
+    rec = mod.bot.current
+    n = len(w.server)
+    t, i = await run(mod.join, 300, GUEST)
+    check(t == mod.PLAYER_ONLY and private(i) and 22 not in rec.participants, "/참여: 리그 선수 역할이 없는 사람은 받지 않는다")
+    rec.participants[22] = {"name": "손님", "username": "u22"}          # 신청한 뒤에 역할을 잃은 사람
+    t, i = await run(mod.leave, 300, GUEST)
+    check(t == mod.PLAYER_ONLY and private(i) and 22 in rec.participants, "/참여취소: 리그 선수 역할이 없는 사람은 받지 않는다")
+    rec.participants.pop(22)
+    t, i = await positions(GUEST, 4, 1, 2, 3)
+    check(t == mod.PLAYER_ONLY and private(i) and len(w.server) == n, "/포지션변경: 리그 선수 역할이 없는 사람은 받지 않는다 (서버에 묻지도 않는다)")
+    joined = [(await run(mod.join, 300, who))[0] for who in (player(602), STAFF, ADMIN)]
+    check(all("참여 완료" in x for x in joined) and list(rec.participants) == [602, 21, 1], "/참여: 리그 선수 역할이 있는 사람과 리그 운영진·리그 관리자는 쓴다")
+    t, _ = await run(mod.leave, 300, player(602))
+    check(t == "참여를 취소했어요." and 602 not in rec.participants, "/참여취소: 리그 선수 역할이 있는 사람은 쓴다")
+    t, _ = await run(mod.join, 100, GUEST)
+    check("에서 입력해 주세요" in t and 22 not in rec.participants, "운영진 채널에서 입력한 사람은 리그 운영진으로 본다 (그 뒤의 확인은 전과 같다)")
+    mod.bot.player_role_id = 0
+    t, _ = await run(mod.join, 300, GUEST)
+    check("참여 완료" in t and 22 in rec.participants, "리그 선수 역할을 정해 두지 않았으면(/선수역할 을 끈 동안) 누구나 쓴다")
+    mod.bot.player_role_id = 55
+    await run(mod.cancel, 300, ADMIN)
     mod.bot.player_role_id = 0
 
     # ── 시즌 종료 (서버 버전 16, 운영자가 2026-10-11에 정함): 시즌 종료 시각 전에 시작한 경기까지만 기록한다. 끝난 시각이 그 뒤여도 그 경기는 기록한다 ──

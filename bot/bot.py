@@ -16,6 +16,7 @@
   (운영진 채널에서 입력하면 가리키는 내전이 하나뿐일 때만 적용하고, 여러 개면 글에서 입력하라고 알려 준다)
 - /마감 (지금 인원으로 바로 마감), /연장 (마감을 5분 뒤로, 마감한 뒤에도 가능), /재모집 (참여 신청을 모두 비우고 5분 동안 다시 모집), /취소 (내전 취소)
 - 한 사람은 한 번에 한 내전에만 들어간다: 모집 중인 다른 내전에 신청해 둔 사람과, 결과가 아직 기록되지 않은 판에서 뛰는 사람은 /참여 를 받지 않는다
+- 선수가 쓰는 명령어(/참여, /참여취소, /내전하자, /포지션변경, /도움말)는 리그 선수 역할이 있는 사람과 리그 운영진·리그 관리자만 쓴다
 - 경기가 끝나면 /승리 (이긴 팀을 골라 결과 기록과 MMR 정산), /승리취소 (그 내전에 기록한 결과 되돌리기)
   · 정산도 리그 매니저의 로직 그대로 한다. 리그 기록의 원본은 서버에 있고, 봇은 받아서 고친 뒤 다시 올린다
   · /승리취소 는 그 판의 선수가 그 뒤에 기록된 경기에 뛰지 않았을 때만 된다. 뛰었으면 그 경기부터 되돌리라고 알리고 리그 관리자 역할을 부른다
@@ -2167,6 +2168,8 @@ def busy_elsewhere(uid: int, rec: Recruitment) -> str:
 
 @bot.tree.command(name="참여", description="진행 중인 내전 모집에 참여합니다", guild=GUILD)
 async def join(interaction: discord.Interaction) -> None:
+    if not await player_only(interaction):
+        return
     rec = await open_recruitment(interaction)
     if rec is None:
         return
@@ -2193,6 +2196,8 @@ async def join(interaction: discord.Interaction) -> None:
 
 @bot.tree.command(name="참여취소", description="내전 참여 신청을 취소합니다", guild=GUILD)
 async def leave(interaction: discord.Interaction) -> None:
+    if not await player_only(interaction):
+        return
     rec = await open_recruitment(interaction)
     if rec is None:
         return
@@ -2241,6 +2246,21 @@ async def can_want(user: discord.abc.User) -> bool:
     if bot.player_role_id in mine or (staff_role_id() and staff_role_id() in mine):
         return True
     return await is_admin(user, False)
+
+
+PLAYER_ONLY = "이 명령어를 사용할 권한이 없어요. 리그 선수만 쓸 수 있는 명령어예요. 선수 등록을 하고 승인을 받으면 쓸 수 있어요."
+
+
+async def player_only(interaction: discord.Interaction) -> bool:
+    """선수가 쓰는 명령어(/참여·/참여취소·/포지션변경·/도움말)의 공통 확인: 리그 선수 역할이 있는 사람만 받는다
+    (운영자가 2026-10-12에 정함. 그 전에는 누구나 입력할 수 있었고, 등록이 확인되지 않은 사람은 팀을 짤 때에야 빠졌다).
+    기준은 /내전하자 와 같다(can_want): 리그 선수 역할(/선수역할 로 정한 역할)이 있는 사람과 리그 운영진·리그 관리자.
+    운영진 채널에서 입력한 사람은 리그 운영진으로 본다. 리그 선수 역할을 정해 두지 않았으면 가릴 수 없어 누구나 쓴다.
+    방금 승인된 선수는 봇이 역할을 줄 때까지(5분마다 확인한다) 쓰지 못하고, 승인 전인 사람은 /포지션변경 도 쓰지 못한다(등록 페이지에서 다시 제출해 고친다)."""
+    if await can_want(interaction.user) or await is_admin(interaction.user, interaction.channel_id == ADMIN_CHANNEL_ID):
+        return True
+    await interaction.response.send_message(PLAYER_ONLY, ephemeral=True)
+    return False
 
 
 def want_problem(guild: discord.Guild) -> str:
@@ -2412,8 +2432,7 @@ async def want_join(interaction: discord.Interaction, typed: bool = False) -> No
         await interaction.response.send_message(f"이 명령어는 <#{bot.want_channel_id}> 에서 써 주세요.", ephemeral=True)
         return
     if not await can_want(interaction.user):
-        await interaction.response.send_message(
-            "이 명령어를 사용할 권한이 없어요. 리그 선수만 쓸 수 있는 명령어예요. 선수 등록을 하고 승인을 받으면 쓸 수 있어요.", ephemeral=True)
+        await interaction.response.send_message(PLAYER_ONLY, ephemeral=True)
         return
     uid, now = interaction.user.id, time.time()
     who = wanting(now)
@@ -2531,6 +2550,8 @@ def in_pending_lineup(uid: int) -> bool:
 @app_commands.choices(first=POSITION_CHOICES, second=POSITION_CHOICES, third=POSITION_CHOICES, fourth=POSITION_CHOICES)
 async def change_positions(interaction: discord.Interaction, first: app_commands.Choice[int], second: app_commands.Choice[int],
                            third: app_commands.Choice[int], fourth: app_commands.Choice[int]) -> None:
+    if not await player_only(interaction):
+        return
     user = interaction.user
     prefs = [first.value, second.value, third.value, fourth.value]
     if sorted(prefs) != [1, 2, 3, 4]:
@@ -2575,23 +2596,21 @@ async def change_positions(interaction: discord.Interaction, first: app_commands
 # ── /도움말: 내가 쓸 수 있는 명령어 ─────────────────────────────
 @bot.tree.command(name="도움말", description="내가 쓸 수 있는 퍼그나봇 명령어를 보여 줍니다", guild=GUILD)
 async def show_help(interaction: discord.Interaction) -> None:
-    """입력한 사람의 자리(리그 관리자, 리그 운영진, 리그 선수, 그 밖)에 맞춰, 쓸 수 있는 명령어만 본인에게 보여 준다.
+    """입력한 사람의 자리(리그 관리자, 리그 운영진, 리그 선수)에 맞춰, 쓸 수 있는 명령어만 본인에게 보여 준다.
     선수가 쓰는 명령어(/참여·/참여취소·/내전하자·/포지션변경·/도움말)는 모두 '리그 선수' 칸에 모은다
     (운영자가 2026-10-12에 정함. 전에는 /참여·/참여취소·/포지션변경·/도움말 이 '누구나' 칸에 있었다).
-    리그 선수가 아닌 사람에게도 그 칸을 보여 준다: 등록하고 승인을 받으면 무엇을 쓰게 되는지 알 수 있게.
-    목록만 그렇게 묶은 것이고, 명령어를 실제로 받는 조건은 그대로다(/참여 는 누구나 입력할 수 있고, 등록이 확인되지 않은 사람은 팀을 짤 때 빠진다)."""
+    이 명령어도 리그 선수 역할이 있는 사람만 쓴다(player_only)."""
+    if not await player_only(interaction):
+        return
     user = interaction.user
     manager = is_manager(user)
     staff = manager or await is_admin(user, interaction.channel_id == ADMIN_CHANNEL_ID)
-    player = staff or await can_want(user)
     if manager:
         head = "**리그 관리자**가 쓸 수 있는 명령어예요."
     elif staff:
         head = "**리그 운영진**이 쓸 수 있는 명령어예요."
-    elif player:
-        head = "**리그 선수**가 쓸 수 있는 명령어예요."
     else:
-        head = "**리그 선수**가 쓰는 명령어예요. 선수 등록을 하고 승인을 받으면 쓸 수 있어요."
+        head = "**리그 선수**가 쓸 수 있는 명령어예요."
     parts = ["**퍼그나봇 명령어**\n" + head]
     where = f"<#{bot.want_channel_id}> 에서 써요. " if bot.want_channel_id else ""
     parts.append("**리그 선수**\n"
