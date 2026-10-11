@@ -1696,7 +1696,10 @@ async def main():
     t, _ = await run(mod.start_game, 300, ADMIN)
     check("게임 채널 1: 🟢 <#951> 1명 · 🔴 <#952> 1명을 옮겼어요." in t and mod.bot.lineups[0]["rooms"] == {"radiant": 951, "dire": 952} and mod.bot.voice == {"lobby": 950, "radiant": 951, "dire": 952},
           "/시작: 첫 내전은 1번 카테고리의 팀 채널로 옮기고, 어느 카테고리인지 리그 운영진에게 알린다")
+    check(w.texts(w.thread.send)[-1] == "<@1>: 게임이 시작되어 선수들을 각자의 음성 채널로 이동시킵니다. (게임 채널 1)" and t.startswith(w.texts(w.thread.send)[-1] + "\n"),
+          "모집 글의 시작 안내 뒤에 카테고리 이름을 붙인다 (로비에 없던 선수가 어디로 들어갈지 알 수 있게)")
     t, _ = await run(mod.start_game, 301, ADMIN)
+    check(w.texts(w.threads[301].send)[-1] == "<@1>: 게임이 시작되어 선수들을 각자의 음성 채널로 이동시킵니다. (게임 채널 2)", "둘째 내전의 글에는 그 내전의 카테고리를 적는다")
     check("게임 채널 2: 🟢 <#953> 1명 · 🔴 <#954> 1명을 옮겼어요." in t and mod.bot.lineups[1]["rooms"] == {"radiant": 953, "dire": 954} and not lob.voice_states,
           "/시작: 둘째 내전은 2번 카테고리의 팀 채널로 옮긴다")
     t, _ = await run(mod.end_game, 301, ADMIN)

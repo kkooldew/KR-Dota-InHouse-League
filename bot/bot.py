@@ -1774,10 +1774,12 @@ async def start_game(interaction: discord.Interaction, lobby: Optional[discord.V
         entry.pop("ended", None)
         entry["rooms"] = {side: team[side].id for side, _ in sides}  # /종료 는 이 벌만 비운다
         save_state()
-        notice = f"{actor}: 게임이 시작되어 선수들을 각자의 음성 채널로 이동시킵니다."
+        # 카테고리마다 같은 이름의 채널을 뒀으면 어느 벌인지 카테고리 이름으로 알린다. 모집 글의 안내에도 붙인다:
+        # 로비에 없어서 옮겨지지 않은 선수가 어느 카테고리로 들어가야 하는지 알 수 있게 (운영자가 2026-10-11에 붙여 달라고 함)
+        label = pair_label(team)
+        notice = f"{actor}: 게임이 시작되어 선수들을 각자의 음성 채널로 이동시킵니다." + (f" ({label})" if label else "")
         await send_to(entry["place_id"], notice)
         moved, failed, denied = await move_people(guild, moves, "내전 시작 (/시작)")
-    label = pair_label(team)  # 카테고리마다 같은 이름의 채널을 뒀으면 어느 벌인지 카테고리 이름으로 알린다
     lines = [notice, (f"{label}: " if label else "")
              + " · ".join(f"{mark} {team[side].mention} {sum(uid in moved for uid in seats[side])}명" for mark, side in (("🟢", "radiant"), ("🔴", "dire")))
              + "을 옮겼어요."]
