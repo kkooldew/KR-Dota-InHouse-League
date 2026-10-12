@@ -17,7 +17,7 @@
  * 코드를 고친 뒤에는 배포 → 배포 관리 → 수정(연필) → 버전: 새 버전 → 배포 를 눌러야 반영됩니다.
  */
 
-const SERVER_VERSION = 19;                         // 서버를 고칠 때마다 올린다. 상태 응답에 실려서 새 버전이 배포됐는지 밖에서 확인할 수 있다
+const SERVER_VERSION = 20;                         // 서버를 고칠 때마다 올린다. 상태 응답에 실려서 새 버전이 배포됐는지 밖에서 확인할 수 있다
 const SHEET_NAME = '선수등록';                             // 등록 탭 이름의 앞부분. 시즌마다 '선수등록 (시즌 이름)' 탭을 따로 쓴다
 // 칸을 더할 때는 맨 뒤에 붙이고 LAYOUT 을 올린다. 이미 있는 탭에는 ready_ 가 새 머리글을 채워 넣는다
 // 처리자·처리시각: 그 등록의 상태(승인·제외·대기)를 마지막으로 바꾼 리그 관리자와 그 시각 (버전 11)
@@ -35,6 +35,7 @@ const LEAGUE_MAX = 8000000;                                // 리그 기록의 �
 const ORACLE_MAX = 2000000;                                // 오라클 봇이 올리는 포인트 기록 사본의 최대 크기(글자 수)
 const ORACLE_PLAY = 100;                                   // 참가 포인트의 처음 값: 결과가 기록되면 그 판에 뛴 선수가 승패와 상관없이 받는다 (버전 19)
 const ORACLE_PLAY_MAX = 10000;                             // 참가 포인트로 받는 가장 큰 값
+const ORACLE_RESET_WORD = '포인트 초기화';                  // 승부 예측 포인트를 초기화할 때 주인이 직접 입력해야 하는 확인 문구 (버전 20)
 const SEASON_WORD = '시즌 변경';                            // 새 시즌을 시작할 때 리그 관리자가 직접 입력해야 하는 확인 문구
 const LINKED = '1';                                        // 승인한 선수를 선수단에 넣기 시작했다는 표시 (버전 10). ready_ 가 처음 한 번 맞춘다
 const OWNER_NAME = '주인';                                 // 주인 키(ADMIN_KEY)로 한 일에 남기는 이름
@@ -123,6 +124,7 @@ function doPost(e) {
       case 'adminLineup': requireAdmin_(body); return { lineup: getLineup_() };
       case 'saveOracle': requireAdmin_(body); return saveOracle_(body);
       case 'adminOracle': requireAdmin_(body); return oracleState_(body);
+      case 'adminOracleReset': requireOwner_(body); return oracleReset_(body);
       default: fail_('알 수 없는 요청입니다');
     }
   });
@@ -271,6 +273,7 @@ function adminStatus_() {
     oracleOn: oracleOn_(),
     oracleSeen: PropertiesService.getScriptProperties().getProperty('ORACLE_SEEN') || '',
     oraclePlay: oraclePlay_(),      // 참가 포인트: 결과가 기록되면 그 판에 뛴 선수가 받는 포인트 (버전 19)
+    oracleResetAt: oracleResetId_(),    // 승부 예측 포인트를 마지막으로 초기화한 때 (없으면 빈 값. 버전 20)
     role: ACTOR && !ACTOR.owner ? 'staff' : 'owner',
     name: ACTOR ? ACTOR.name : OWNER_NAME
   });
@@ -1520,6 +1523,34 @@ function parsePlay_(v) {
   return n;
 }
 
+// 승부 예측 포인트 초기화 (버전 20, 운영자가 2026-10-13에 요청): 주인이 리그 관리자 페이지에서 누른다(adminOracleReset, 확인 문구가 함께 와야 한다).
+// 포인트는 봇이 갖고 있으므로 서버는 "초기화하라"는 표시(ORACLE_RESET: 누른 시각)만 남기고, 봇이 그것을 보고 포인트와 전적을 모두 지운다.
+// 봇에게는 켜 두었는지를 알려 주는 곳마다 함께 알려 준다(oracleReset). 공개 순위는 그 자리에서 비우고,
+// 아직 초기화하지 않은 봇이 올리는 순위(초기화 전의 것)는 받지 않는다(saveOracle 의 reset 이 지금 표시와 다르면 stale 로 답한다).
+function oracleResetId_() {
+  return PropertiesService.getScriptProperties().getProperty('ORACLE_RESET') || '';
+}
+
+function oracleReset_(body) {
+  if (body.confirm !== ORACLE_RESET_WORD)
+    fail_('승부 예측 포인트를 초기화하려면 확인 문구("' + ORACLE_RESET_WORD + '")를 입력해야 합니다. 리그 관리자 페이지를 새로 고친 뒤 다시 해 주세요.', 'confirm');
+  withLock_(() => {
+    const props = PropertiesService.getScriptProperties();
+    const at = new Date().toISOString();
+    props.setProperty('ORACLE_RESET', at);
+    // 공개 순위는 바로 비운다(봇이 초기화한 뒤의 순위를 올릴 때까지 빈 순위로 보인다). 포인트 기록의 사본은 건드리지 않는다: 봇이 초기화한 뒤에 덮어쓴다
+    if (props.getProperty('ORACLE_FILE_ID')) {
+      let was = {};
+      try { was = publicOracle_(); } catch (err) { console.warn('비우기 전의 포인트 순위를 읽지 못했습니다: ' + err); }
+      const text = JSON.stringify({ weekly: Number(was.weekly) || 0, play: Number(was.play) || 0, players: [], updatedAt: at });
+      driveFile_('ORACLE_FILE_ID', '인하우스_오라클_순위.json').setContent(text);
+      putCache_('oracle', text);
+    }
+    log_('승부 예측 포인트 초기화', '', '모든 사람의 포인트와 예측 전적을 지움');
+  });
+  return adminStatus_();
+}
+
 // 오라클 봇(승부 예측)이 정산할 때마다 올리는 포인트 순위. 순위 페이지(oracle.html)가 키 없이 읽는다.
 // 공개 기록처럼 내보내도 되는 칸만 남긴다(이름, 포인트, 손익, 건 횟수, 맞힌 횟수, 포인트를 받은 횟수, 참가 포인트로 받은 합). 디스코드 ID는 받아도 버린다.
 function sanitizeOracle_(b) {
@@ -1538,6 +1569,9 @@ function sanitizeOracle_(b) {
 // 순위(board)는 걸러서 공개 파일과 캐시에 쓰고, 함께 온 포인트 기록(state)은 거르지 않고 비공개 파일에 사본으로 둔다.
 // 사본은 봇이 돌던 PC의 파일을 잃었을 때(또는 봇을 다른 PC로 옮겼을 때) 봇이 받아 가 되살리는 데 쓴다. 통째로 덮어쓰므로 다시 보내도 결과가 같다.
 function saveOracle_(body) {
+  // 주인이 포인트를 초기화했는데 아직 그것을 모르는 봇이 올린 순위는 초기화 전의 것이다. 받지 않고, 초기화하라고 알려 준다 (버전 20)
+  if (body.reset !== undefined && String(body.reset) !== oracleResetId_())
+    return { stale: true, oracleOn: oracleOn_(), oraclePlay: oraclePlay_(), oracleReset: oracleResetId_() };
   const clean = sanitizeOracle_(body.board);
   let backup = '';
   if (body.state != null) {
@@ -1551,7 +1585,7 @@ function saveOracle_(body) {
     driveFile_('ORACLE_FILE_ID', '인하우스_오라클_순위.json').setContent(text);
     putCache_('oracle', text);
     if (backup) driveFile_('ORACLE_STATE_ID', '인하우스_오라클_포인트기록.json').setContent(backup);
-    return { updatedAt: clean.updatedAt, players: clean.players.length, oracleOn: oracleOn_(), oraclePlay: oraclePlay_() };
+    return { updatedAt: clean.updatedAt, players: clean.players.length, oracleOn: oracleOn_(), oraclePlay: oraclePlay_(), oracleReset: oracleResetId_() };
   });
 }
 
@@ -1574,12 +1608,12 @@ function oracleState_(body) {
   const props = PropertiesService.getScriptProperties();
   if (body && body.brief === true) {
     props.setProperty('ORACLE_SEEN', new Date().toISOString());
-    return { oracleOn: oracleOn_(), oraclePlay: oraclePlay_() };
+    return { oracleOn: oracleOn_(), oraclePlay: oraclePlay_(), oracleReset: oracleResetId_() };
   }
   const id = props.getProperty('ORACLE_STATE_ID');
-  if (!id) return { state: null, oracleOn: oracleOn_(), oraclePlay: oraclePlay_() };
+  if (!id) return { state: null, oracleOn: oracleOn_(), oraclePlay: oraclePlay_(), oracleReset: oracleResetId_() };
   const text = readFile_(id);
-  return { state: text ? JSON.parse(text) : null, oracleOn: oracleOn_(), oraclePlay: oraclePlay_() };
+  return { state: text ? JSON.parse(text) : null, oracleOn: oracleOn_(), oraclePlay: oraclePlay_(), oracleReset: oracleResetId_() };
 }
 
 /* =========================================================
@@ -1615,7 +1649,8 @@ function getLeague_() {
   return { league: text ? JSON.parse(text) : null, rev, leagueAt: text ? (props.getProperty('LEAGUE_AT') || '') : '',
     seasonNo: list.length - 1, seasonEnd: end.date, seasonEndAt: end.at,
     oracleOn: oracleOn_(),        // 오라클 봇을 켜 두었는지. 봇이 팀을 짜기 직전에 받아, 그 판에 승부 예측을 열지 정한다 (버전 18)
-    oraclePlay: oraclePlay_() };  // 참가 포인트 (버전 19)
+    oraclePlay: oraclePlay_(),    // 참가 포인트 (버전 19)
+    oracleReset: oracleResetId_() };  // 승부 예측 포인트를 초기화하라는 표시 (버전 20)
 }
 
 // 서버가 직접 고치려고 읽는 리그 기록. 한 번도 올라온 적이 없으면 null 이다.

@@ -15,6 +15,8 @@
 - 포인트를 받은 적이 있는 사람들의 순위를 리그 서버에 올린다(saveOracle, 서버 버전 17). rank/oracle.html(승부의 신 랭킹)이 그것을 보여 준다.
 - 주인이 리그 관리자 페이지에서 켜고 끈다(서버 버전 18, 운영자가 2026-10-13에 요청). 처음에는 꺼져 있고, 켜 두었는지는 리그 서버에 5분마다 물어본다.
   꺼져 있으면 새 승부 예측을 열지 않고 포인트 받기와 걸기를 받지 않는다. 이미 받던 판은 끝까지 처리한다(마감, 정산, 돌려주기).
+- 포인트 초기화(서버 버전 20, 운영자가 2026-10-13에 요청): 주인이 리그 관리자 페이지에서 누르면 리그 서버가 그 표시를 알려 주고,
+  봇이 모든 사람의 포인트와 전적을 지운다. 그때 걸려 있던 포인트는 없던 일이 되고, 누구나 이번 주 포인트를 다시 받을 수 있다.
 - 참가 포인트(서버 버전 19, 운영자가 2026-10-13에 요청): 결과가 기록되면 그 판에 뛴 선수 열 명이 승패와 상관없이 포인트를 받는다.
   처음에는 한 판에 100이고 주인이 리그 관리자 페이지에서 바꾼다(0이면 주지 않는다). /승리취소 면 거두고, 다시 기록되면 다시 준다.
 
@@ -66,6 +68,8 @@ class State:
         self.on = False                 # 주인이 리그 관리자 페이지에서 켜 두었는지 (리그 서버가 알려 준다. 알기 전에는 꺼진 것으로 둔다)
         self.asked = 0.0                # 켜 두었는지를 마지막으로 물어본(또는 들은) 시각
         self.play = PLAY_POINTS         # 참가 포인트: 한 판에 얼마 (리그 서버가 알려 준다. 0이면 주지 않는다)
+        self.reset = ""                 # 마지막으로 따른 '포인트 초기화'의 표시 (리그 서버가 알려 준 값. 초기화한 적이 없으면 빈 글)
+        self.reset_wanted: str | None = None  # 리그 서버가 알려 온, 아직 따르지 않은 초기화의 표시 (곧 tick 이 따른다)
         self.loaded = False             # 상태 파일을 읽었는지 (못 읽었으면 켤 때 서버의 사본을 받아 본다)
         self.lock = asyncio.Lock()      # 마감·정산·되돌리기의 글이 뒤섞이지 않게 한 번에 하나씩 한다
         self.task: asyncio.Task | None = None
@@ -117,7 +121,7 @@ def signed(n: int) -> str:
 
 # ── 상태 파일 ─────────────────────────────────────────────────
 def snapshot() -> dict:
-    return {"on": S.on, "play": S.play, "channel_id": S.channel_id, "round": S.round, "accounts": S.accounts, "books": S.books, "dirty": S.dirty}
+    return {"on": S.on, "play": S.play, "reset": S.reset, "channel_id": S.channel_id, "round": S.round, "accounts": S.accounts, "books": S.books, "dirty": S.dirty}
 
 
 def save() -> None:
@@ -154,6 +158,7 @@ def adopt(data: dict) -> None:
     S.on = data.get("on") is True  # 마지막으로 알던 값. 켠 뒤 곧 리그 서버에 다시 물어본다
     amount = play_amount(data.get("play"))
     S.play = PLAY_POINTS if amount is None else amount
+    S.reset = data.get("reset") if isinstance(data.get("reset"), str) else ""
     S.channel_id = whole(data.get("channel_id"))
     r = data.get("round")
     S.round = ({"start": whole(r.get("start")), "message_id": whole(r.get("message_id")), "channel_id": whole(r.get("channel_id")),
@@ -199,9 +204,11 @@ def load() -> bool:
 
 
 # ── 켜고 끄기 (주인이 리그 관리자 페이지에서) ───────────────────
-def hear(value, play=None) -> None:
-    """리그 서버가 알려 준 값: 주인이 오라클 봇을 켜 두었는지(value)와 참가 포인트(play). 퍼그나봇이 팀을 짜기 직전에 받는 리그 기록에도 실려 온다.
-    그 값이 실려 있지 않은 답(예전 서버)으로는 바꾸지 않는다"""
+def hear(value, play=None, reset=None) -> None:
+    """리그 서버가 알려 준 값: 주인이 오라클 봇을 켜 두었는지(value), 참가 포인트(play), 포인트를 초기화하라는 표시(reset).
+    퍼그나봇이 팀을 짜기 직전에 받는 리그 기록에도 실려 온다. 그 값이 실려 있지 않은 답(예전 서버)으로는 바꾸지 않는다"""
+    if isinstance(reset, str) and reset != S.reset:
+        S.reset_wanted = reset  # 글을 고치고 올려야 해서 여기서 하지 않고, 곧 tick 이 한다 (apply_reset)
     amount = play_amount(play)
     if amount is not None and amount != S.play:
         S.play = amount
@@ -230,7 +237,7 @@ async def check_switch(force: bool = False) -> None:
         note(f"오라클: 리그 서버에서 켜 두었는지 확인하지 못했습니다. 알고 있던 대로 둡니다. ({e})")
         return
     if isinstance(got.get("oracleOn"), bool):
-        hear(got["oracleOn"], got.get("oraclePlay"))
+        hear(got["oracleOn"], got.get("oraclePlay"), got.get("oracleReset"))
     else:  # 예전 서버(버전 17까지)는 이 값을 모른다
         note("오라클: 리그 서버가 오라클 봇을 켜 두었는지 알려 주지 않습니다(서버 버전 18부터). Code.gs 를 새 버전으로 배포하기 전에는 꺼진 채로 둡니다.")
 
@@ -830,10 +837,13 @@ async def publish() -> None:
     if not S.dirty or S.host is None or S.host.server is None or now() < S.publish_at:
         return
     try:
-        await S.host.server({"action": "saveOracle", "board": board(), "state": snapshot()})
+        got = await S.host.server({"action": "saveOracle", "board": board(), "state": snapshot(), "reset": S.reset})
     except Exception as e:
         S.publish_at = now() + PUBLISH_RETRY
         note(f"오라클: 포인트 순위를 리그 서버에 올리지 못했습니다. 10분 뒤에 다시 올려 봅니다. ({e})")
+        return
+    if isinstance(got, dict) and got.get("stale"):  # 주인이 그사이 포인트를 초기화했다. 서버는 이 순위를 받지 않았다. 초기화한 뒤에 다시 올린다
+        hear(None, None, got.get("oracleReset"))
         return
     S.dirty = False
     S.publish_at = now() + PUBLISH_GAP
@@ -856,12 +866,49 @@ async def restore() -> None:
         print(f"오라클: 이 PC에 포인트 기록이 없어 리그 서버의 사본을 받아 왔습니다. ({len(S.accounts)}명)")
 
 
+# ── 포인트 초기화 (주인이 리그 관리자 페이지에서) ─────────────────
+async def apply_reset() -> None:
+    """주인이 승부 예측 포인트를 초기화했다(리그 서버가 알려 준 표시가 바뀌었다). 모든 사람의 포인트와 전적을 지운다.
+    - 결과를 기다리던 판: 건 포인트는 없던 일이 된다(돌려줄 포인트도 지워졌다). 받는 중인 판은 그대로 열어 두어 새로 받은 포인트로 다시 걸 수 있고,
+      마감한 판은 성립하지 않은 판으로 둔다(결과가 기록되면 참가 포인트만 준다).
+    - 끝난 판(결과를 받았거나 없던 일이 된 판)은 잊는다. 뒤늦게 /승리취소 가 와도 지운 포인트를 건드리지 않게.
+    - 이번 주에 받았다는 기록도 지워지므로 누구나 포인트를 다시 받을 수 있다. '포인트 받기' 글을 새로 올려 알린다"""
+    rid = S.reset_wanted
+    if rid is None or rid == S.reset:
+        S.reset_wanted = None
+        return
+    async with S.lock:
+        people, cleared, kept = len(S.accounts), [], []
+        for book in S.books:
+            if book["off"] or book["winner"] is not None:
+                continue
+            if book["bets"]:
+                cleared.append((book, book["state"]))
+            if book["state"] == "closed":
+                book.update(state="void", ended=now())
+            book.update(bets={}, paid={}, play={})
+            kept.append(book)
+        S.books, S.accounts = kept, {}
+        S.reset, S.reset_wanted = rid, None
+        S.dirty, S.publish_at = True, 0.0  # 비운 순위를 바로 올린다
+        save()
+        print(f"[{datetime.fromtimestamp(now(), KST):%m-%d %H:%M}] 오라클 봇: 리그 관리자 페이지에서 승부 예측 포인트를 초기화했습니다. ({people}명의 포인트와 전적을 지웠습니다)")
+        for book, was in cleared:
+            if was == "open":
+                await refresh_open(book)
+            await send(book["place_id"], "🔮 승부 예측 포인트가 초기화돼서, 이 경기에 건 포인트는 없던 일이 됐어요."
+                       + (" 마감 전까지 이번 주 포인트를 다시 받아 걸 수 있어요." if was == "open" else ""))
+    await post_round(force=True)
+
+
 # ── 주기적으로 확인 ────────────────────────────────────────────
 async def tick() -> None:
     """마감할 판을 마감하고, 새 주가 시작됐으면 '포인트 받기' 글을 올리고, 바뀐 순위를 서버에 올린다.
     주인이 꺼 둔 동안에도 받던 판은 여기서 끝까지 처리한다"""
     await check_switch()
     roll_round()
+    if S.reset_wanted is not None:
+        await apply_reset()
     await post_round()
     for book in list(S.books):
         async with S.lock:

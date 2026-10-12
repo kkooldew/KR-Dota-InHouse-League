@@ -1214,7 +1214,7 @@ assert(props.ADMIN_KEY === key, 'running setup again keeps the admin key');
     'dates: a day starts at 0:00 Korean time; days that do not exist are not dates');
 
   let st = status();
-  assert(st.open === true && st.regClose === '' && st.seasonEnd === '' && st.seasonEnded === false && st.version === 19 && !('registered' in st),
+  assert(st.open === true && st.regClose === '' && st.seasonEnd === '' && st.seasonEnded === false && st.version === 20 && !('registered' in st),
     'dates: nothing set at first (the public status carries both dates)');
 
   // 모집 종료 날짜
@@ -1355,7 +1355,7 @@ assert(props.ADMIN_KEY === key, 'running setup again keeps the admin key');
   const staffKey = post({ action: 'adminStaffAdd', key, name: '봇' }).key;
   assert(post({ action: 'saveOracle', key: staffKey, board: { players: [] } }).ok && get('oracle').oracle.players.length === 0, 'oracle: a staff key can save too');
   const st = get('status');
-  assert(st.version === 19 && !('oracle' in st) && !('oracleOn' in st) && !('oracleSeen' in st) && !('oraclePlay' in st), 'oracle: the public status is unchanged');
+  assert(st.version === 20 && !('oracle' in st) && !('oracleOn' in st) && !('oracleSeen' in st) && !('oraclePlay' in st), 'oracle: the public status is unchanged');
 
   // 켜고 끄기 (버전 18): 주인이 리그 관리자 페이지에서 켜고 끈다. 처음에는 꺼져 있다
   const logs = () => (S.sheets['운영 기록'] ? S.sheets['운영 기록'].grid.slice(1).map(r => r[2] + '|' + r[3]) : []);
@@ -1413,4 +1413,35 @@ assert(props.ADMIN_KEY === key, 'running setup again keeps the admin key');
   assert(r.ok && r.oraclePlay === 0, 'play points: other settings leave it alone');
   S.props.ORACLE_PLAY = 'broken';
   assert(post({ action: 'ping', key }).oraclePlay === 100, 'play points: a broken stored value falls back to 100');
+
+  // 승부 예측 포인트 초기화 (버전 20): 주인이 확인 문구와 함께 누른다. 서버는 표시만 남기고 공개 순위를 비운다. 포인트는 봇이 그 표시를 보고 지운다
+  S.props.ORACLE_PLAY = '100';
+  const before = { weekly: 1000, play: 100, players: [{ name: '가', points: 500, claimed: 1 }] };
+  r = post({ action: 'saveOracle', key, board: before, reset: '' });
+  assert(r.ok && !r.stale && r.oracleReset === '' && get('oracle').oracle.players.length === 1 && post({ action: 'ping', key }).oracleResetAt === ''
+    && post({ action: 'adminOracle', key, brief: true }).oracleReset === '', 'reset: never reset at first');
+  r = post({ action: 'adminOracleReset', key: staffKey, confirm: '포인트 초기화' });
+  assert(!r.ok && r.code === 'owner' && get('oracle').oracle.players.length === 1 && !('ORACLE_RESET' in S.props), 'reset: only the owner key');
+  r = post({ action: 'adminOracleReset', key });
+  assert(!r.ok && r.code === 'confirm' && !('ORACLE_RESET' in S.props), 'reset: the typed words are needed');
+  r = post({ action: 'adminOracleReset', key, confirm: '초기화' });
+  assert(!r.ok && r.code === 'confirm' && get('oracle').oracle.players.length === 1, 'reset: other words are refused');
+  r = post({ action: 'adminOracleReset', key, confirm: '포인트 초기화' });
+  const rid = S.props.ORACLE_RESET;
+  assert(r.ok && /^\d{4}-\d\d-\d\dT/.test(rid) && r.oracleResetAt === rid && 'registered' in r && r.version === 20
+    && logs().filter(l => l === '주인|승부 예측 포인트 초기화').length === 1, 'reset: the owner resets (logged; the admin page is told when)');
+  r = get('oracle');
+  assert(r.ok && r.oracle.players.length === 0 && r.oracle.weekly === 1000 && r.oracle.play === 100 && /^\d{4}-/.test(r.oracle.updatedAt), 'reset: the public ranking is emptied at once');
+  assert(post({ action: 'adminOracle', key, brief: true }).oracleReset === rid && post({ action: 'adminOracle', key }).oracleReset === rid
+    && post({ action: 'adminLeague', key }).oracleReset === rid, 'reset: the bot is told wherever it is told the switch');
+  assert(JSON.stringify(post({ action: 'adminOracle', key }).state) === JSON.stringify(state), 'reset: the copy of the points is left for the bot to overwrite');
+  r = post({ action: 'saveOracle', key, board: before, state: { old: true }, reset: '' });
+  assert(r.ok && r.stale === true && r.oracleReset === rid && get('oracle').oracle.players.length === 0
+    && JSON.stringify(post({ action: 'adminOracle', key }).state) === JSON.stringify(state), 'reset: a ranking from a bot that has not reset yet is not stored (it is told to reset)');
+  r = post({ action: 'saveOracle', key, board: { weekly: 1000, play: 100, players: [{ name: '나', points: 1000, claimed: 1 }] }, state: { fresh: true }, reset: rid });
+  assert(r.ok && !r.stale && r.oracleReset === rid && get('oracle').oracle.players[0].name === '나' && post({ action: 'adminOracle', key }).state.fresh === true,
+    'reset: once the bot has reset, its ranking is stored again');
+  r = post({ action: 'saveOracle', key, board: { players: [] } });
+  assert(r.ok && !r.stale && get('oracle').oracle.players.length === 0, 'reset: a save without a reset mark is still accepted');
+  assert(!('oracleResetAt' in get('status')) && !('oracleReset' in get('status')), 'reset: nothing about it in the public status');
 })();

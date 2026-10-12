@@ -22,7 +22,7 @@
 
 /* 순위표 (순위 페이지와 같은 모양) */
 .scroll{overflow-x:auto;-webkit-overflow-scrolling:touch}
-table.board{width:100%;border-collapse:collapse;min-width:560px}
+table.board{width:100%;border-collapse:collapse;min-width:500px}
 .board th{text-align:left;font-size:12px;font-weight:500;color:var(--bone-dim);padding:0 10px 2px;border-bottom:1px solid var(--line);white-space:nowrap}
 .board td{padding:11px 10px;border-bottom:1px solid var(--line-soft);vertical-align:middle}
 .board th.n,.board td.n{text-align:right}
@@ -39,16 +39,16 @@ th[aria-sort="descending"] .sort::after{content:'▼';font-size:9px;opacity:1}
 .c-rank{width:44px;font-family:var(--num);font-size:17px;color:var(--bone-dim)}
 .c-rank.is-top{color:var(--gold)}
 .c-name{font-weight:500;font-size:15.5px}
-.c-points,.c-profit,.c-hits,.c-rate,.c-claimed{font-family:var(--num);font-size:16px;font-variant-numeric:tabular-nums;white-space:nowrap}
-.c-hits,.c-rate,.c-claimed{color:var(--bone-dim)}
+.c-points,.c-profit,.c-hits,.c-rate{font-family:var(--num);font-size:16px;font-variant-numeric:tabular-nums;white-space:nowrap}
+.c-hits,.c-rate{color:var(--bone-dim)}
 .c-hits small{font-size:12.5px;margin-left:2px}
 .up{color:var(--rad)}
 .down{color:var(--dire)}
 .dim{color:var(--bone-dim)}
 /* 지금 정렬 기준인 숫자를 가장 크게 (순위는 보유 포인트로 매기므로 순위로 정렬할 때도 포인트를 크게) */
 .board.by-rank td.c-points,.board.by-points td.c-points{font-size:24px;color:var(--gold);line-height:1}
-.board.by-profit td.c-profit,.board.by-hits td.c-hits,.board.by-rate td.c-rate,.board.by-claimed td.c-claimed{font-size:22px;line-height:1}
-.board.by-hits td.c-hits,.board.by-rate td.c-rate,.board.by-claimed td.c-claimed{color:var(--gold)}
+.board.by-profit td.c-profit,.board.by-hits td.c-hits,.board.by-rate td.c-rate{font-size:22px;line-height:1}
+.board.by-hits td.c-hits,.board.by-rate td.c-rate{color:var(--gold)}
 .board.by-name td.c-name{color:var(--gold)}
 .board td.c-points.down{color:var(--dire)}   /* 0보다 적은 포인트는 정렬 기준이어도 붉게 */
 
@@ -85,7 +85,6 @@ th[aria-sort="descending"] .sort::after{content:'▼';font-size:9px;opacity:1}
             <th scope="col" class="n" title="승부 예측으로 얻은 포인트에서 잃은 포인트를 뺀 값"><button type="button" class="sort" data-sort="profit">예측 손익</button></th>
             <th scope="col" class="n" title="맞힌 횟수 / 건 횟수"><button type="button" class="sort" data-sort="hits">맞힘</button></th>
             <th scope="col" class="n"><button type="button" class="sort" data-sort="rate">적중률</button></th>
-            <th scope="col" class="n" title="한 주에 한 번 받을 수 있습니다"><button type="button" class="sort" data-sort="claimed">포인트 받은 주</button></th>
           </tr>
         </thead>
         <tbody id="boardBody"></tbody>
@@ -110,7 +109,7 @@ const REFRESH = 60;   // 화면이 보이는 동안 이만큼(초)마다 다시 
 const NUM = new Intl.NumberFormat('ko-KR');
 const TIME = new Intl.DateTimeFormat('ko-KR', {timeZone: 'Asia/Seoul', month: 'long', day: 'numeric', hour: 'numeric', minute: '2-digit'});
 // 처음 눌렀을 때의 순서: 순위와 선수는 오름차순(1위, 가나다부터), 숫자는 큰 값부터
-const FIRST_DIR = {rank: 1, name: 1, points: -1, profit: -1, hits: -1, rate: -1, claimed: -1};
+const FIRST_DIR = {rank: 1, name: 1, points: -1, profit: -1, hits: -1, rate: -1};
 
 mountChrome('oracle');
 
@@ -126,7 +125,7 @@ function prepare(data){
   const players = (Array.isArray(data.players) ? data.players : []).filter(p => p && typeof p === 'object').map(p => {
     const bets = Math.max(0, int(p.bets)), hits = Math.min(bets, Math.max(0, int(p.hits)));
     return {name: String(p.name || '이름 없음'), points: int(p.points), profit: int(p.profit), bets, hits,
-      rate: bets ? hits / bets : null, claimed: Math.max(0, int(p.claimed))};
+      rate: bets ? hits / bets : null};
   });
   players.sort((a, b) => b.points - a.points || b.profit - a.profit || a.name.localeCompare(b.name, 'ko'));
   players.forEach((p, i) => { p.order = i; p.rank = i && players[i - 1].points === p.points ? players[i - 1].rank : i + 1; });
@@ -169,7 +168,6 @@ function renderBoard(){
       '<td class="n c-profit ' + (p.profit > 0 ? 'up' : p.profit < 0 ? 'down' : 'dim') + '">' + signed(p.profit) + '</td>' +
       '<td class="n c-hits">' + (p.bets ? p.hits + '<small> / ' + p.bets + '</small>' : '<span class="dim">–</span>') + '</td>' +
       '<td class="n c-rate">' + (p.rate === null ? '<span class="dim">–</span>' : Math.round(p.rate * 100) + '%') + '</td>' +
-      '<td class="n c-claimed">' + p.claimed + '</td>' +
     '</tr>').join('');
 }
 

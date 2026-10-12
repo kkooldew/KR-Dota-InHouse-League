@@ -97,6 +97,7 @@ class World:
         self.switch = True                # 주인이 리그 관리자 페이지에서 오라클 봇을 켜 두었는지. None 이면 그 값을 모르는 예전 서버처럼 군다
         self.polls, self.deaf = 0, False  # 봇이 켜 두었는지 물어본 횟수. deaf 면 그 물음에 답하지 않는다
         self.play = None                  # 리그 서버가 알려 주는 참가 포인트. None 이면 그 값을 모르는 예전 서버처럼 군다
+        self.reset = None                 # 리그 서버가 알려 주는 '포인트를 초기화하라'는 표시. None 이면 그 값을 모르는 예전 서버처럼 군다
 
         async def can_play(user):
             return user.id in self.players
@@ -107,10 +108,14 @@ class World:
                 if self.deaf:
                     raise RuntimeError("서버가 답하지 않음")
                 extra = {} if self.play is None else {"oraclePlay": self.play}
+                if self.reset is not None:
+                    extra["oracleReset"] = self.reset
                 return {"ok": True} if self.switch is None else {"ok": True, "oracleOn": self.switch, **extra}
             self.asked.append(payload)
             if self.fail:
                 raise RuntimeError("서버 오류")
+            if payload["action"] == "saveOracle" and self.reset is not None and payload.get("reset") != self.reset:
+                return {"ok": True, "stale": True, "oracleReset": self.reset}   # 초기화 전의 순위는 받지 않는다
             return {"ok": True, "state": self.backup} if payload["action"] == "adminOracle" else {"ok": True}
 
         mod.now = lambda: self.at
@@ -945,6 +950,97 @@ async def main():
         await mod.cmd_setup(i, None)
     check("참가 포인트: 한 판에 **80** (결과가 기록되면 그 판에 뛴 선수가 받아요. 주인이 리그 관리자 페이지에서 바꿔요)\n" in said(i) and mod.S.play == 80,
           "/오라클설정 을 비우고 쓰면 참가 포인트도 보인다 (방금 바꾼 값이 그 자리에서 반영된다)")
+
+    # ── 포인트 초기화: 주인이 리그 관리자 페이지에서 누르면 모든 사람의 포인트와 전적을 지운다 (서버 버전 20) ──
+    path.unlink(missing_ok=True)
+    w = World(mod, path, T0)
+    mod.S.play = 100
+    w.reset = ""                                                     # 리그 서버: 초기화한 적이 없다
+    w.players = {11, 12, 13} | set(range(100, 112))
+    await mod.cmd_setup(inter(100, ADMIN), SimpleNamespace(id=400))
+    for u in (A, B, C, user(105)):
+        await mod.claim_points(inter(400, u))
+    acc = mod.S.accounts
+    done = lineup(1)                                                 # 결과까지 받은 판
+    await mod.on_lineup(done)
+    await mod.put_amount(inter(300, A), mod.S.books[0]["key"], "r", 300)
+    await mod.put_amount(inter(300, B), mod.S.books[0]["key"], "d", 300)
+    await mod.on_result(done, "r")
+    waiting = lineup(2, place=301)                                   # 마감하고 결과를 기다리는 판
+    await mod.on_lineup(waiting)
+    wb = mod.S.books[1]
+    await mod.put_amount(inter(301, A), wb["key"], "r", 200)
+    await mod.put_amount(inter(301, C), wb["key"], "d", 200)
+    w.at = wb["closes"]
+    await mod.tick()
+    opened = lineup(3, place=302)                                    # 받는 중인 판
+    await mod.on_lineup(opened)
+    ob = mod.S.books[2]
+    await mod.put_amount(inter(302, B), ob["key"], "r", 100)
+    post0 = w.place(400).sent[-1]
+    n300 = len(w.place(300).sent)
+    check(mod.S.reset == "" and mod.S.reset_wanted is None and len(acc) == 13 and acc["11"]["points"] == 1100 and wb["state"] == "closed" and ob["state"] == "open"
+          and len(mod.S.books) == 3, "초기화: 리그 서버가 초기화하라고 하기 전에는 아무것도 지우지 않는다")
+    w.reset = "2026-10-13T05:00:00.000Z"                            # 주인이 리그 관리자 페이지에서 눌렀다
+    w.at += 300
+    w.asked.clear()
+    with contextlib.redirect_stdout(io.StringIO()) as out:
+        await mod.tick()
+    check(mod.S.accounts == {} and mod.S.reset == w.reset and mod.S.reset_wanted is None and "승부 예측 포인트를 초기화했습니다. (13명의 포인트와 전적을 지웠습니다)" in out.getvalue()
+          and json.loads(path.read_text(encoding="utf-8"))["reset"] == w.reset, "초기화: 5분마다 묻다가 알게 되면 모든 사람의 포인트와 전적을 지운다 (파일에 적어 둔다)")
+    check([b["key"] for b in mod.S.books] == [wb["key"], ob["key"]] and (wb["state"], wb["bets"], wb["winner"], wb["off"]) == ("void", {}, None, False)
+          and (ob["state"], ob["bets"]) == ("open", {}), "초기화: 끝난 판은 잊고, 결과를 기다리던 판은 건 포인트만 없던 일로 한다 (받는 중인 판은 그대로 열어 둔다)")
+    check(w.place(301).texts()[-1] == "🔮 승부 예측 포인트가 초기화돼서, 이 경기에 건 포인트는 없던 일이 됐어요."
+          and w.place(302).texts()[-1] == "🔮 승부 예측 포인트가 초기화돼서, 이 경기에 건 포인트는 없던 일이 됐어요. 마감 전까지 이번 주 포인트를 다시 받아 걸 수 있어요."
+          and w.place(302).sent[0].text.endswith("지금까지 **0명**이 걸었어요.") and isinstance(w.place(302).sent[0].view, mod.BetView) and len(w.place(300).sent) == n300,
+          "초기화: 걸려 있던 판의 글에 알리고, 받는 중인 판의 글은 0명으로 고친다 (끝난 판의 글에는 알리지 않는다)")
+    live = [m for m in w.place(400).sent if not m.deleted and isinstance(m.view, mod.ClaimView)]
+    check(post0.deleted and len(live) == 1 and live[0].id == mod.S.round["message_id"] and live[0] is not post0, "초기화: '포인트 받기' 글을 새로 올린다 (앞의 글은 지워 버튼은 하나)")
+    sent = [p for p in w.asked if p["action"] == "saveOracle"]
+    check(len(sent) == 1 and sent[0]["reset"] == w.reset and sent[0]["board"]["players"] == [] and sent[0]["state"]["reset"] == w.reset and not mod.S.dirty,
+          "초기화: 비운 순위를 바로 리그 서버에 올린다 (초기화했다는 표시와 함께)")
+    i = inter(400, A)
+    await mod.claim_points(i)
+    check(said(i).startswith("✅ **1,000 포인트**를 받았어요. 보유 포인트는 **1,000**이에요.") and (acc is not mod.S.accounts) and mod.S.accounts["11"]["claimed"] == 1,
+          "초기화: 이번 주에 이미 받았던 사람도 다시 받을 수 있다")
+    acc = mod.S.accounts
+    i = inter(302, A)
+    await mod.put_amount(i, ob["key"], "r", 400)
+    check(said(i).startswith("✅ 🟢 래디언트에 **400 포인트**") and acc["11"]["points"] == 600, "초기화: 받는 중이던 판에는 새로 받은 포인트로 다시 걸 수 있다")
+    await mod.on_result(waiting, "r")
+    check(wb["play"] == {str(uid): 100 for uid in range(100, 110)} and acc["105"] == dict(acc["105"], points=100, claimed=0, played=1)
+          and w.place(301).texts()[-1].startswith("🎮 **참가 포인트** — 이 경기에 뛴 선수 10명이 **100 포인트**씩"),
+          "초기화: 결과를 기다리던 판은 결과가 기록되면 참가 포인트만 준다 (건 포인트는 정산하지 않는다)")
+    await mod.on_undo(done)
+    await mod.on_void(done)
+    check(len(w.place(300).sent) == n300 and acc["11"]["points"] == 600 and "12" not in acc, "초기화: 그 전에 끝난 판의 /승리취소 는 지운 포인트를 건드리지 않는다")
+    w.at += 300
+    await mod.tick()
+    check(acc is mod.S.accounts and acc["11"]["points"] == 600, "초기화: 같은 초기화를 두 번 하지 않는다")
+    # 5분마다 묻기 전에 순위를 올리다가 알게 되는 경우: 서버는 초기화 전의 순위를 받지 않고, 초기화하라고 알려 준다
+    w.reset = "2026-10-20T00:00:00.000Z"
+    await mod.claim_points(inter(400, B))
+    w.at += 21
+    w.asked.clear()
+    await mod.tick()
+    check(mod.S.reset_wanted == w.reset and "12" in mod.S.accounts and mod.S.dirty and len(w.asked) == 1,
+          "초기화: 순위를 올리다가 서버가 받지 않으면(그사이 초기화됐다) 초기화하라는 것을 알게 된다")
+    w.at += 10
+    with contextlib.redirect_stdout(io.StringIO()):
+        await mod.tick()
+    check(mod.S.accounts == {} and mod.S.reset == w.reset and not mod.S.dirty and w.asked[-1]["reset"] == w.reset and w.asked[-1]["board"]["players"] == [],
+          "초기화: 곧 초기화하고 비운 순위를 다시 올린다")
+    await mod.claim_points(inter(400, C))
+    w2 = World(mod, path, w.at)                                      # 봇을 껐다 켰다
+    w2.reset, w2.players = w.reset, {13}
+    await mod.tick()
+    check(mod.S.reset == w.reset and mod.S.accounts["13"]["points"] == 1000, "초기화: 봇을 껐다 켜도 이미 한 초기화를 다시 하지 않는다")
+    w2.reset = None                                                  # 그 값을 모르는 예전 서버(버전 19까지)
+    w2.at += 300
+    await mod.tick()
+    mod.hear(None, None, None)
+    mod.hear(None, None, 5)
+    check(mod.S.reset == w.reset and mod.S.reset_wanted is None and "13" in mod.S.accounts, "초기화: 그 값을 주지 않는 서버의 답으로는 초기화하지 않는다")
 
     # ── 오라클 봇을 쓰지 않을 때(토큰이 없을 때)는 아무 일도 하지 않는다 ──
     path.unlink(missing_ok=True)

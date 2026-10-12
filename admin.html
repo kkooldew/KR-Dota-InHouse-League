@@ -193,6 +193,15 @@ details.by-file[open] summary{margin-bottom:10px}
       <p class="season-note" id="oraclePlayNote" hidden><b>참가 포인트</b>는 내전의 결과가 기록될 때 그 판에 뛴 선수 열 명이 <b>승패와 상관없이</b> 받는 포인트입니다(쉬는 사람은 받지 않습니다).
         바꾸면 <b>5분 안에</b> 봇에 반영되고, 그 뒤에 기록되는 결과부터 새 값으로 줍니다. 이미 준 포인트는 그대로입니다. 0으로 두면 주지 않습니다.
         주인 키로만 바꿀 수 있습니다.</p>
+      <div class="season-row" id="oracleResetRow" hidden>
+        <span class="dim" style="font-size:13.5px">포인트 초기화</span>
+        <button class="btn sm" type="button" id="btnOracleReset">승부 예측 포인트 초기화</button>
+        <span class="state" id="oracleResetState"></span>
+      </div>
+      <p class="season-note" id="oracleResetNote" hidden><b>승부 예측 포인트 초기화</b>는 모든 사람의 보유 포인트와 예측 전적, 승부의 신 랭킹을 지웁니다. <b>되돌릴 수 없습니다.</b>
+        그때 걸려 있던 포인트도 없던 일이 됩니다. 초기화한 뒤에는 누구나 이번 주 포인트를 다시 받을 수 있고, 봇이 포인트 받기 글을 새로 올립니다.
+        랭킹은 바로 비워지고, 봇에는 <b>5분 안에</b> 반영됩니다. 시즌이 바뀌어도 포인트는 저절로 지워지지 않으니, 새 시즌에 새로 시작하려면 여기서 초기화합니다.
+        주인 키로만 할 수 있습니다.</p>
     </section>
 
     <section class="panel">
@@ -426,6 +435,12 @@ details.by-file[open] summary{margin-bottom:10px}
     $('#oraclePlayState').textContent = play
       ? '결과가 기록되면 그 판에 뛴 선수 열 명이 ' + play.toLocaleString('ko-KR') + ' 포인트씩 받습니다.'
       : '지금은 참가 포인트를 주지 않습니다(0).';
+    // 승부 예측 포인트 초기화(서버 버전 20): 주인 키로만. 서버는 누른 때를 적어 두고, 봇이 그것을 보고 포인트를 지운다
+    const canReset = owner && (status.version || 0) >= 20;
+    const resetAt = status.oracleResetAt || '';
+    $('#oracleResetRow').hidden = !canReset; $('#oracleResetNote').hidden = !canReset;
+    $('#oracleResetState').textContent = !resetAt ? '초기화한 적이 없습니다.'
+      : '마지막으로 초기화한 때는 ' + fmt(resetAt) + '입니다. ' + (status.oracleSeen && status.oracleSeen >= resetAt ? '봇이 확인해서 반영했습니다.' : '봇이 확인하러 오면 반영됩니다(5분 안).');
     if(hasStaff() && owner && !staffSeen){ staffSeen = true; loadStaff(); }
     const auto = autoLink(), box = $('#byFile');
     $('#autoLink').hidden = !auto; $('#linkHint').hidden = !auto; $('#fileWhen').hidden = !auto;
@@ -501,6 +516,21 @@ details.by-file[open] summary{margin-bottom:10px}
     finally{ $('#btnOraclePlay').disabled = false; }
   });
   $('#oraclePlay').addEventListener('keydown', e => { if(e.key === 'Enter'){ e.preventDefault(); $('#btnOraclePlay').click(); } });
+  /* ---------- 승부 예측 포인트 초기화: 주인 키로만. 되돌릴 수 없어서 확인 문구를 직접 입력해야 한다 (서버도 확인한다) ---------- */
+  const RESET_WORD = '포인트 초기화';
+  $('#btnOracleReset').addEventListener('click', async () => {
+    const typed = prompt('승부 예측 포인트를 초기화하면 모든 사람의 보유 포인트와 예측 전적, 승부의 신 랭킹이 지워집니다.\n'
+      + '되돌릴 수 없습니다. 지금 걸려 있는 포인트도 없던 일이 됩니다.\n\n계속하려면 아래에 "' + RESET_WORD + '"를 입력해 주세요.');
+    if(typed === null) return;
+    if(typed.trim() !== RESET_WORD){ toast('입력한 글이 "' + RESET_WORD + '"와 달라서 초기화하지 않았습니다.', 5000); return; }
+    $('#btnOracleReset').disabled = true;
+    try{
+      status = await adminPost({action: 'adminOracleReset', confirm: RESET_WORD});
+      renderStatus();
+      toast('승부 예측 포인트를 초기화했습니다. 랭킹은 바로 비워지고, 봇에는 5분 안에 반영됩니다.', 6000);
+    }catch(err){ toast(err.message); }
+    finally{ $('#btnOracleReset').disabled = false; }
+  });
   /* ---------- 날짜로 닫기: 모집 종료 날짜와 시즌 종료 날짜 (그날 0시에 저절로 닫힌다) ---------- */
   // field 는 서버에 보내는 이름(regClose | seasonEnd). day 가 빈 값이면 날짜를 지운다
   async function saveDay(field, day, done){

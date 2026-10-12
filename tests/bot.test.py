@@ -2422,7 +2422,7 @@ async def main():
         def enabled(self):
             return True
 
-        def hear(self, value, play=None):   # 리그 기록의 답에 실려 오는 '켜 두었는지'와 참가 포인트
+        def hear(self, value, play=None, reset=None):   # 리그 기록의 답에 실려 오는 '켜 두었는지', 참가 포인트, 포인트 초기화 표시
             pass
 
         async def on_lineup(self, entry):
@@ -2481,6 +2481,12 @@ async def main():
     play1 = mod.oracle.S.play
     mod.note_season({"seasonNo": 3, "oracleOn": False})
     check(play0 == 100 and play1 == 70 and mod.oracle.S.play == 70, "오라클: 리그 기록의 답에 실린 참가 포인트도 오라클에게 알린다 (처음에는 100. 그 값이 없는 답은 건드리지 않는다)")
+    mod.note_season({"seasonNo": 3, "oracleOn": False, "oracleReset": ""})
+    none = mod.oracle.S.reset_wanted
+    mod.note_season({"seasonNo": 3, "oracleOn": False, "oracleReset": "2026-10-13T05:00:00.000Z"})
+    check(none is None and mod.oracle.S.reset_wanted == "2026-10-13T05:00:00.000Z" and mod.oracle.S.reset == "",
+          "오라클: 리그 기록의 답에 실린 '포인트를 초기화하라'는 표시도 오라클에게 알린다 (오라클이 곧 초기화한다)")
+    mod.oracle.S.reset_wanted = None
     mod.SYNC_URL, mod.SYNC_KEY = "", ""
 
     # ── 운영진 명령어로 봇이 하는 답은 모두 그 명령어를 쓴 운영진의 멘션으로 시작한다 (이 파일에서 돌린 모든 명령어를 본다) ──
