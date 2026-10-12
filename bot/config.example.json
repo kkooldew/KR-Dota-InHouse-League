@@ -12,5 +12,7 @@
   "auto_match": true,
   "node_path": "",
   "max_games": 3,
-  "lock_closed_threads": false
+  "lock_closed_threads": false,
+  "oracle_token": "",
+  "oracle_page": ""
 }

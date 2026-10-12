@@ -36,6 +36,8 @@ def check(cond, label):
 
 def load():
     shutil.copy(SRC, HERE / "bot.py")
+    shutil.copy(SRC.with_name("oracle.py"), HERE / "oracle.py")   # bot.py 가 같은 폴더의 oracle.py(오라클 봇)를 불러온다
+    sys.path.insert(0, str(HERE))
     (HERE / "config.json").write_text(json.dumps({
         "token": "x", "guild_id": 1, "admin_channel_id": 100, "signup_channel_id": 200,
         "admin_role_id": 0, "signup_minutes": 5, "announcement": "공지", "sync_url": "", "sync_key": "",
@@ -1254,6 +1256,9 @@ async def main():
     check(saved["role_id"] == 500 and saved["season"] == "시즌 1" and saved["seen"]["s:1"]["ok"] and not saved["seen"]["s:5"]["ok"] and saved["seen"]["s:6"]["ok"] and "s:4" not in saved["seen"],
           "정한 역할과 누구까지 맞췄는지를 파일에 적는다")
     check(await mod.role_status() == "켜짐 (@리그 선수)", "켠 뒤의 상태 표시")
+    check(mod.league_nickname(21, "kim") == "김" and mod.league_nickname(100000000000000025, "choi") == "선수2" and mod.league_nickname(23, "lee") is None
+          and mod.league_nickname(24, "park") is None and mod.league_nickname(99, "KIM") == "김",
+          "등록 명단을 읽을 때 승인된 선수의 리그 닉네임을 적어 둔다 (디스코드 사용자명이나 숫자 ID로 찾는다. 오라클 봇의 포인트 순위에 쓴다)")
 
     n = len(guild.queries)
     await mod.role_tick()
@@ -2409,12 +2414,83 @@ async def main():
     w.season_end = None
     t, _ = await run(mod.record_win, 300, ADMIN, "r")
     check("🏆" in t and entry["season"] is None and saves() == 1, "시즌: 시즌 번호와 종료 시각을 주지 않는 예전 서버에서는 전처럼 기록한다")
+    # ── 오라클 봇(승부 예측)에게 알려 주기: 팀을 짰을 때, 결과를 기록하거나 되돌렸을 때, 팀 편성이 없던 일이 됐을 때 ──
+    check(not mod.oracle.enabled() and mod.oracle.status_line().startswith("꺼짐 (config.json 에 oracle_token"), "오라클 봇의 토큰을 넣지 않았으면 오라클은 꺼져 있다 (퍼그나봇만 돈다)")
+    told = []
+
+    class Heard:   # 오라클 봇 대신 듣는다
+        def enabled(self):
+            return True
+
+        async def on_lineup(self, entry):
+            place = await mod.get_channel(entry["place_id"])   # 그 내전의 글
+            told.append(("lineup", entry, len(mod.bot.lineups), [c.args[0] for c in place.send.call_args_list]))
+
+        async def on_result(self, entry, winner):
+            told.append(("result", entry, winner, w.texts(w.thread.send)[-1]))
+
+        async def on_undo(self, entry):
+            told.append(("undo", entry, w.texts(w.thread.send)[-1]))
+
+        async def on_void(self, entry):
+            told.append(("void", entry))
+
+    real_oracle, mod.oracle = mod.oracle, Heard()
+    w, rec, entry = await lined(0)
+    check(len(told) == 1 and told[0][0] == "lineup" and told[0][1] is entry and told[0][2] == 1 and told[0][3][-1].startswith("⚔️ **팀 편성**")
+          and len({entry["who"][pid] for pid in entry["ids"]}) == 10 and {entry["who"][pid] for pid in entry["ids"]} <= {100 + k for k in range(12)}
+          and entry["place_id"] == 300,
+          "오라클: 팀을 짜서 알린 바로 뒤에 알려 준다 (그 글 바로 아래에 승부 예측이 열린다. 뛰는 열 명의 디스코드 ID도 함께)")
+    await run(mod.record_win, 300, ADMIN, "d")
+    check(len(told) == 2 and told[1][:3] == ("result", entry, "d") and "🏆" in told[1][3], "오라클: /승리 로 결과를 기록하면 이긴 팀을 알려 준다 (결과 글을 올린 뒤에)")
+    await run(mod.undo_win, 300, ADMIN)
+    check(len(told) == 3 and told[2][:2] == ("undo", entry) and "취소했어요" in told[2][2], "오라클: /승리취소 로 결과를 되돌리면 알려 준다")
+    await run(mod.record_win, 300, ADMIN, "x")
+    check(len(told) == 4 and told[3] == ("void", entry) and entry not in mod.bot.lineups, "오라클: 경기 안 함으로 정리하면 그 판이 없던 일이 됐다고 알려 준다")
+    for cmd, what in ((mod.extend, "마감한 모집을 다시 열면"), (mod.restart, "/재모집 하면"), (mod.cancel, "/취소 하면")):
+        del told[:]
+        w, rec, entry = await lined(0)
+        await run(cmd, 300, ADMIN)
+        check([x[0] for x in told] == ["lineup", "void"] and told[1][1] is entry and not mod.bot.lineups, f"오라클: {what} 그 판이 없던 일이 됐다고 알려 준다")
+        mod.stop_timer(rec)
+    del told[:]
+    w, rec, entry = await lined(time.time() - 60)
+    check(mod.season_over() and not told, "오라클: 시즌이 끝난 뒤에 짠 팀은 알려 주지 않는다 (결과를 기록하지 않는 경기라 승부 예측을 열지 않는다)")
+    w, rec, entry = await lined(time.time() + 3600)
+    entry["at"] = time.time() - 10
+    w.season_end = ms(time.time() - 50)
+    del told[:]
+    await run(mod.record_win, 300, ADMIN, "r")
+    check(told == [("void", entry)], "오라클: 시즌 종료 뒤에 시작한 경기라 결과를 기록하지 않고 치우면, 없던 일이 됐다고 알려 준다")
+    mod.oracle = real_oracle
     mod.SYNC_URL, mod.SYNC_KEY = "", ""
 
     # ── 운영진 명령어로 봇이 하는 답은 모두 그 명령어를 쓴 운영진의 멘션으로 시작한다 (이 파일에서 돌린 모든 명령어를 본다) ──
     bare = [text for uid, text, _ in answers if not text.startswith(f"<@{uid}>")]
     check(len(answers) > 120 and not bare, f"운영진 명령어에 대한 답 {len(answers)}건이 모두 명령어를 쓴 운영진의 멘션으로 시작한다" + "".join(f"\n     빠진 답: {x[:60]}" for x in bare[:5]))
     check(all(quiet for _, _, quiet in answers), "그 답들은 멘션 알림을 울리지 않는다")
+
+    # ── 켜기: 퍼그나봇을 켜고, 오라클 봇의 토큰이 있을 때만 같은 프로그램 안에서 함께 켠다 (맨 끝에서 본다. 봇의 연결을 닫는다) ──
+    ran = []
+
+    async def fake_start(token):
+        await asyncio.sleep(0)
+        ran.append(("pugna", token))
+
+    async def fake_oracle():
+        ran.append(("oracle",))
+        await asyncio.sleep(3600)
+
+    mod.bot.start, mod.oracle.run = fake_start, fake_oracle
+    await mod.run_all()
+    check(ran == [("pugna", "x")], "켜기: 오라클 봇의 토큰이 없으면 퍼그나봇만 켠다")
+    del ran[:]
+    mod.oracle.S.token = "y"
+    await mod.run_all()
+    await asyncio.sleep(0)
+    check(ran == [("oracle",), ("pugna", "x")] and not [t for t in asyncio.all_tasks() if t.get_coro().__name__ == "fake_oracle" and not t.cancelled() and not t.done()],
+          "켜기: 오라클 봇의 토큰이 있으면 함께 켠다 (퍼그나봇이 꺼지면 오라클도 끈다)")
+    mod.oracle.S.token = ""
 
     for task in asyncio.all_tasks() - {asyncio.current_task()}:
         task.cancel()

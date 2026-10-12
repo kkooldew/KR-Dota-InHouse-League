@@ -1214,7 +1214,7 @@ assert(props.ADMIN_KEY === key, 'running setup again keeps the admin key');
     'dates: a day starts at 0:00 Korean time; days that do not exist are not dates');
 
   let st = status();
-  assert(st.open === true && st.regClose === '' && st.seasonEnd === '' && st.seasonEnded === false && st.version === 16 && !('registered' in st),
+  assert(st.open === true && st.regClose === '' && st.seasonEnd === '' && st.seasonEnded === false && st.version === 17 && !('registered' in st),
     'dates: nothing set at first (the public status carries both dates)');
 
   // 모집 종료 날짜
@@ -1285,4 +1285,75 @@ assert(props.ADMIN_KEY === key, 'running setup again keeps the admin key');
   g = post({ action: 'adminLeague', key });
   assert(r.ok && r.season === '시즌 2' && r.seasonEnd === '' && r.seasonEnded === false && list[0].end === day(0) && !('end' in list[1]) && r.regClose === day(5)
     && g.seasonNo === 1 && g.seasonEndAt === 0 && g.seasonEnd === '', 'new season: the end date stays with the season that ended, the new season has none');
+})();
+
+/* ---- 오라클 봇의 포인트 순위 (버전 17): 봇이 올리고, 순위 페이지가 키 없이 읽는다. 포인트 기록의 사본도 함께 맡아 둔다 ---- */
+(() => {
+  const S = makeEnv({ fresh: true });
+  const post = body => JSON.parse(S.env.doPost({ postData: { contents: JSON.stringify(body) } }).text);
+  const get = action => JSON.parse(S.env.doGet({ parameter: action ? { action } : {} }).text);
+  S.env.setup();
+  const key = S.props.ADMIN_KEY;
+  const drive = name => Object.keys(S.files).map(id => S.env.DriveApp.getFileById(id)).filter(f => f.getName() === name);
+
+  let r = get('oracle');
+  assert(r.ok && JSON.stringify(r.oracle) === JSON.stringify({ weekly: 0, players: [], updatedAt: '' }) && !('version' in r), 'oracle: an empty ranking before anything is saved');
+  r = post({ action: 'adminOracle', key });
+  assert(r.ok && r.state === null, 'oracle: no copy of the points before anything is saved');
+
+  const board = { updatedAt: 'ignored', weekly: 1000, secret: 'x', players: [
+    { name: '가나다', points: 1250, profit: 250, bets: 1, hits: 1, claimed: 1, discord: '100000000000000001', id: '11' },
+    null, 'x',
+    { name: 'x'.repeat(60), points: '-750.4', profit: -1750, bets: 2, hits: 0, claimed: 2 }] };
+  const state = { channel_id: 400, accounts: { '100000000000000001': { points: 1250 } }, books: [] };
+  r = post({ action: 'saveOracle', key: 'wrong', board, state });
+  assert(!r.ok && r.code === 'auth' && get('oracle').oracle.players.length === 0, 'oracle: saving needs the admin key');
+  r = post({ action: 'adminOracle', key: 'wrong' });
+  assert(!r.ok && r.code === 'auth', 'oracle: reading the copy needs the admin key');
+  r = post({ action: 'saveOracle', key, board: { players: 'x' }, state });
+  assert(!r.ok && get('oracle').oracle.players.length === 0 && post({ action: 'adminOracle', key }).state === null, 'oracle: a malformed ranking is refused and nothing is stored');
+  r = post({ action: 'saveOracle', key, board, state: 'text' });
+  assert(!r.ok && get('oracle').oracle.players.length === 0, 'oracle: a malformed copy is refused and nothing is stored');
+
+  r = post({ action: 'saveOracle', key, board, state });
+  assert(r.ok && r.players === 2 && /^\d{4}-/.test(r.updatedAt) && !('version' in r), 'oracle: saved');
+  r = get('oracle');
+  const text = JSON.stringify(r.oracle);
+  assert(r.ok && r.oracle.weekly === 1000 && r.oracle.updatedAt !== 'ignored' && r.oracle.players.length === 2
+    && JSON.stringify(r.oracle.players[0]) === JSON.stringify({ name: '가나다', points: 1250, profit: 250, bets: 1, hits: 1, claimed: 1 })
+    && r.oracle.players[1].name.length === 40 && r.oracle.players[1].points === -750 && r.oracle.players[1].profit === -1750,
+    'oracle: the public ranking keeps only the public fields (negative points are allowed)');
+  assert(!text.includes('100000000000000001') && !text.includes('secret') && !text.includes('discord') && !text.includes('channel_id'), 'oracle: no Discord IDs in the public ranking');
+  r = post({ action: 'adminOracle', key });
+  assert(r.ok && JSON.stringify(r.state) === JSON.stringify(state) && !('version' in r), 'oracle: the copy of the points comes back as it was sent (only with the key)');
+  assert(drive('인하우스_오라클_순위.json').length === 1 && drive('인하우스_오라클_포인트기록.json').length === 1
+    && !!S.props.ORACLE_FILE_ID && !!S.props.ORACLE_STATE_ID && S.props.ORACLE_FILE_ID !== S.props.ORACLE_STATE_ID, 'oracle: the ranking and the copy are kept in two Drive files');
+
+  // 다시 올리면 통째로 바뀐다. 사본 없이 순위만 올리면 사본은 그대로다
+  r = post({ action: 'saveOracle', key, board: { weekly: 1000, players: [{ name: '라', points: 10, profit: 0, bets: 0, hits: 0, claimed: 1 }] } });
+  assert(r.ok && get('oracle').oracle.players.length === 1 && get('oracle').oracle.players[0].name === '라'
+    && JSON.stringify(post({ action: 'adminOracle', key }).state) === JSON.stringify(state), 'oracle: saving again replaces the ranking; the copy stays when none is sent');
+  assert(drive('인하우스_오라클_순위.json').length === 1, 'oracle: the same file is reused');
+
+  // 캐시가 비어도 파일에서 읽는다. 파일을 읽지 못하면 빈 순위로 답하지 않는다
+  delete S.cache.oracle;
+  assert(get('oracle').oracle.players[0].name === '라' && 'oracle' in S.cache, 'oracle: read from the file when the cache is empty');
+  delete S.cache.oracle;
+  const real = S.env.DriveApp.getFileById;
+  S.env.DriveApp.getFileById = () => { throw new Error('Service error: Drive'); };
+  r = get('oracle');
+  assert(!r.ok && !('oracle' in S.cache), 'oracle: an unreadable file is an error, not an empty ranking');
+  S.env.DriveApp.getFileById = real;
+  assert(get('oracle').oracle.players.length === 1, 'oracle: back once Drive answers');
+
+  // 휴지통에 들어간 파일은 도로 꺼낸다
+  S.trashed.add(S.props.ORACLE_STATE_ID);
+  r = post({ action: 'adminOracle', key });
+  assert(r.ok && r.state.channel_id === 400 && !S.trashed.has(S.props.ORACLE_STATE_ID), 'oracle: a trashed copy is taken back out');
+
+  // 리그 관리자마다 준 키로도 올릴 수 있다(봇이 그 키를 쓸 수도 있다). 공개 상태는 달라지지 않는다
+  const staffKey = post({ action: 'adminStaffAdd', key, name: '봇' }).key;
+  assert(post({ action: 'saveOracle', key: staffKey, board: { players: [] } }).ok && get('oracle').oracle.players.length === 0, 'oracle: a staff key can save too');
+  const st = get('status');
+  assert(st.version === 17 && !('oracle' in st), 'oracle: the public status is unchanged (version 17)');
 })();

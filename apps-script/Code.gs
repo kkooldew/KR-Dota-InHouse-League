@@ -17,7 +17,7 @@
  * 코드를 고친 뒤에는 배포 → 배포 관리 → 수정(연필) → 버전: 새 버전 → 배포 를 눌러야 반영됩니다.
  */
 
-const SERVER_VERSION = 16;                         // 서버를 고칠 때마다 올린다. 상태 응답에 실려서 새 버전이 배포됐는지 밖에서 확인할 수 있다
+const SERVER_VERSION = 17;                         // 서버를 고칠 때마다 올린다. 상태 응답에 실려서 새 버전이 배포됐는지 밖에서 확인할 수 있다
 const SHEET_NAME = '선수등록';                             // 등록 탭 이름의 앞부분. 시즌마다 '선수등록 (시즌 이름)' 탭을 따로 쓴다
 // 칸을 더할 때는 맨 뒤에 붙이고 LAYOUT 을 올린다. 이미 있는 탭에는 ready_ 가 새 머리글을 채워 넣는다
 // 처리자·처리시각: 그 등록의 상태(승인·제외·대기)를 마지막으로 바꾼 리그 관리자와 그 시각 (버전 11)
@@ -32,6 +32,7 @@ const ROSTER_MAX = 60;
 const STEAM_TRIES = 4;                                     // 스팀 조회를 몇 번까지 시도할지
 const DRIVE_TRIES = 3;                                     // 드라이브 파일을 몇 번까지 다시 읽어 볼지
 const LEAGUE_MAX = 8000000;                                // 리그 기록의 최대 크기(글자 수)
+const ORACLE_MAX = 2000000;                                // 오라클 봇이 올리는 포인트 기록 사본의 최대 크기(글자 수)
 const SEASON_WORD = '시즌 변경';                            // 새 시즌을 시작할 때 리그 관리자가 직접 입력해야 하는 확인 문구
 const LINKED = '1';                                        // 승인한 선수를 선수단에 넣기 시작했다는 표시 (버전 10). ready_ 가 처음 한 번 맞춘다
 const OWNER_NAME = '주인';                                 // 주인 키(ADMIN_KEY)로 한 일에 남기는 이름
@@ -78,6 +79,7 @@ function doGet(e) {
   return respond_(() => {
     const action = (e && e.parameter && e.parameter.action) || 'status';
     if (action === 'records') return { records: publicRecords_() };
+    if (action === 'oracle') return { oracle: publicOracle_() };    // 오라클 봇의 포인트 순위 (oracle.html)
     return statusInfo_();
   });
 }
@@ -117,6 +119,8 @@ function doPost(e) {
       case 'saveLeague': requireAdmin_(body); return saveLeague_(body);
       case 'pushLineup': requireAdmin_(body); return pushLineup_(body);
       case 'adminLineup': requireAdmin_(body); return { lineup: getLineup_() };
+      case 'saveOracle': requireAdmin_(body); return saveOracle_(body);
+      case 'adminOracle': requireAdmin_(body); return oracleState_();
       default: fail_('알 수 없는 요청입니다');
     }
   });
@@ -1465,6 +1469,63 @@ function writePublic_(clean) {
   PropertiesService.getScriptProperties().setProperty('RECORDS_AT', at);
   putCache_('records', text);
   return { publishedAt: at, players: clean.players.length, matches: clean.matches.length };
+}
+
+/* =========================================================
+   오라클 봇의 포인트 순위 (버전 17)
+   ========================================================= */
+// 오라클 봇(승부 예측)이 정산할 때마다 올리는 포인트 순위. 순위 페이지(oracle.html)가 키 없이 읽는다.
+// 공개 기록처럼 내보내도 되는 칸만 남긴다(이름, 포인트, 손익, 건 횟수, 맞힌 횟수, 포인트를 받은 횟수). 디스코드 ID는 받아도 버린다.
+function sanitizeOracle_(b) {
+  if (!b || typeof b !== 'object' || !Array.isArray(b.players)) fail_('포인트 순위 형식이 잘못됐습니다');
+  const int = v => { const n = Math.round(Number(v)); return Number.isFinite(n) ? n : 0; };
+  return {
+    weekly: int(b.weekly),
+    players: b.players.slice(0, 1000).filter(p => !!p && typeof p === 'object').map(p => ({
+      name: String(p.name == null ? '' : p.name).slice(0, 40),
+      points: int(p.points), profit: int(p.profit), bets: int(p.bets), hits: int(p.hits), claimed: int(p.claimed)
+    }))
+  };
+}
+
+// 순위(board)는 걸러서 공개 파일과 캐시에 쓰고, 함께 온 포인트 기록(state)은 거르지 않고 비공개 파일에 사본으로 둔다.
+// 사본은 봇이 돌던 PC의 파일을 잃었을 때(또는 봇을 다른 PC로 옮겼을 때) 봇이 받아 가 되살리는 데 쓴다. 통째로 덮어쓰므로 다시 보내도 결과가 같다.
+function saveOracle_(body) {
+  const clean = sanitizeOracle_(body.board);
+  let backup = '';
+  if (body.state != null) {
+    if (typeof body.state !== 'object' || Array.isArray(body.state)) fail_('포인트 기록 형식이 잘못됐습니다');
+    backup = JSON.stringify(body.state);
+    if (backup.length > ORACLE_MAX) fail_('포인트 기록이 너무 큽니다');
+  }
+  return withLock_(() => {
+    clean.updatedAt = new Date().toISOString();
+    const text = JSON.stringify(clean);
+    driveFile_('ORACLE_FILE_ID', '인하우스_오라클_순위.json').setContent(text);
+    putCache_('oracle', text);
+    if (backup) driveFile_('ORACLE_STATE_ID', '인하우스_오라클_포인트기록.json').setContent(backup);
+    return { updatedAt: clean.updatedAt, players: clean.players.length };
+  });
+}
+
+// 순위 페이지가 읽는 포인트 순위. 캐시 → 파일. 아직 올라온 적이 없으면 빈 순위다.
+// 파일을 읽지 못하면 오류로 답한다(빈 순위를 돌려주면 페이지가 텅 비고 그것이 캐시에 남는다. 페이지는 보고 있던 순위를 그대로 둔다)
+function publicOracle_() {
+  const cached = CacheService.getScriptCache().get('oracle');
+  if (cached) return JSON.parse(cached);
+  const id = PropertiesService.getScriptProperties().getProperty('ORACLE_FILE_ID');
+  if (!id) return { weekly: 0, players: [], updatedAt: '' };
+  const text = readFile_(id);
+  putCache_('oracle', text);
+  return JSON.parse(text);
+}
+
+// 봇이 받아 가는 포인트 기록의 사본. 올라온 적이 없으면 null
+function oracleState_() {
+  const id = PropertiesService.getScriptProperties().getProperty('ORACLE_STATE_ID');
+  if (!id) return { state: null };
+  const text = readFile_(id);
+  return { state: text ? JSON.parse(text) : null };
 }
 
 /* =========================================================

@@ -1,0 +1,666 @@
+"""
+오라클 봇(승부 예측) 테스트: bot/oracle.py 를 가짜 디스코드 객체와 가짜 리그 서버로 돌려 본다 (실제 디스코드에는 연결하지 않는다).
+
+    python tests/oracle.test.py
+
+oracle.py 는 bot.py 를 불러오지 않으므로 그대로 불러와, 퍼그나봇이 넘겨주는 것(host)을 가짜로 넣어 준다.
+"""
+import asyncio
+import contextlib
+import importlib.util
+import io
+import json
+import shutil
+import sys
+import tempfile
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, Mock
+
+import discord
+
+SRC = Path(__file__).resolve().parent.parent / "bot" / "oracle.py"
+HERE = Path(tempfile.mkdtemp(prefix="inhouse-oracle-test-"))
+KST = timezone(timedelta(hours=9))
+failed = 0
+
+
+def check(cond, label):
+    global failed
+    if cond:
+        print("ok  ", label)
+    else:
+        failed += 1
+        print("FAIL", label)
+
+
+def load():
+    spec = importlib.util.spec_from_file_location("oraclemod", SRC)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+class Msg:
+    """가짜 메시지. 고치고 지운 것을 적어 둔다"""
+
+    def __init__(self, mid, text="", view=None):
+        self.id, self.text, self.view, self.edits, self.deleted = mid, text, view, [], False
+
+    async def edit(self, **kw):
+        self.edits.append(kw)
+        self.text, self.view = kw.get("content", self.text), kw.get("view")
+
+    async def delete(self):
+        self.deleted = True
+
+
+class Place:
+    """가짜 채널(또는 내전의 글). 올린 글을 차례로 적어 둔다"""
+
+    def __init__(self, world, cid):
+        self.world, self.id, self.sent, self.broken = world, cid, [], False
+
+    async def send(self, text, **kw):
+        if self.broken:
+            raise discord.Forbidden(Mock(status=403, reason="Forbidden"), "Missing Permissions")
+        self.world.count += 1
+        m = Msg(self.world.count, text, kw.get("view"))
+        self.sent.append(m)
+        self.world.messages[m.id] = m
+        return m
+
+    def get_partial_message(self, mid):
+        return self.world.messages[mid]
+
+    def texts(self):
+        return [m.text for m in self.sent]
+
+
+class World:
+    """가짜 디스코드와 가짜 리그 서버, 그리고 시계"""
+
+    def __init__(self, mod, path, at, server=True):
+        self.mod, self.count, self.messages, self.places = mod, 5000, {}, {}
+        self.at = at                      # 지금 시각 (mod.now 가 돌려준다)
+        self.players = set()              # 리그 선수 역할이 있는 사람들
+        self.nicks = {}                   # 디스코드 ID → 리그 닉네임
+        self.asked, self.fail, self.backup = [], False, None
+
+        async def can_play(user):
+            return user.id in self.players
+
+        async def ask(payload):
+            self.asked.append(payload)
+            if self.fail:
+                raise RuntimeError("서버 오류")
+            return {"ok": True, "state": self.backup} if payload["action"] == "adminOracle" else {"ok": True}
+
+        mod.now = lambda: self.at
+        mod.S = mod.State()
+        mod.setup(token="x", path=path, page="https://example.invalid/oracle.html", host=SimpleNamespace(
+            guild=discord.Object(id=1), admin_channel_id=100, signup_channel_id=200, can_play=can_play,
+            is_manager=lambda user: user.id == 1, nickname=lambda uid, username: self.nicks.get(uid), server=ask if server else None))
+        mod.S.client = SimpleNamespace(get_partial_messageable=self.place)
+        mod.S.ready = True
+
+    def place(self, cid):
+        if cid not in self.places:
+            self.places[cid] = Place(self, cid)
+        return self.places[cid]
+
+
+def user(uid, name=None):
+    return SimpleNamespace(id=uid, display_name=name or f"선수{uid}", name=f"u{uid}")
+
+
+def inter(channel_id, u):
+    i = Mock()
+    i.channel_id, i.user = channel_id, u
+    i.response = Mock()
+    i.response.send_message, i.response.edit_message, i.response.send_modal = AsyncMock(), AsyncMock(), AsyncMock()
+    i.response.is_done = Mock(return_value=False)
+    return i
+
+
+def said(i):
+    """그 요청에 한 답 (새로 보낸 답이거나, 버튼이 있던 글을 고친 것)"""
+    if i.response.send_message.call_args:
+        return i.response.send_message.call_args.args[0]
+    return i.response.edit_message.call_args.kwargs["content"] if i.response.edit_message.call_args else ""
+
+
+def view_of(i):
+    call = i.response.send_message.call_args or i.response.edit_message.call_args
+    return call.kwargs.get("view")
+
+
+def labels(view):
+    return [c.label for c in view.children] if view is not None else []
+
+
+def lineup(n, place=300, at=None):
+    """퍼그나봇이 짠 팀(편성). 뛰는 열 명은 디스코드 ID 100~109, 쉬는 사람은 110·111"""
+    ids = [f"p{k}" for k in range(10)]
+    return {"at": at if at is not None else 1000.5 + n, "ids": ids, "message_id": place, "place_id": place,
+            "who": {f"p{k}": 100 + k for k in range(12)}, "lanes": [], "result": None}
+
+
+async def main():
+    mod = load()
+    T0 = datetime(2026, 10, 13, 12, 0, 0, tzinfo=KST).timestamp()       # 화요일 낮 12시
+    MON = int(datetime(2026, 10, 12, 0, 0, 0, tzinfo=KST).timestamp())   # 그 주의 월요일 0시
+    WEEK = 7 * 86400
+    path = HERE / "oracle.json"
+
+    # ── 한 주의 시작: 월요일 0시 (한국 시간) ──
+    w = World(mod, path, T0)
+    check(mod.week_start() == MON and mod.week_start(MON) == MON and mod.week_start(MON - 1) == MON - WEEK and mod.week_start(MON + WEEK - 1) == MON
+          and mod.week_start(MON + WEEK) == MON + WEEK, "한 주는 월요일 0시(한국 시간)에 시작한다")
+    check(mod.enabled() and mod.num(1234567) == "1,234,567" and mod.num(-300) == "−300" and mod.signed(250) == "+250" and mod.signed(0) == "0"
+          and mod.signed(-40) == "−40", "숫자 적는 법")
+
+    # ── 포인트 받기: 리그 선수가 한 주에 한 번, 본인이 눌러야 받는다 ──
+    A, B, C, D, GUEST, ADMIN = user(11, "가"), user(12, "나"), user(13, "다"), user(14, "라"), user(99, "손님"), user(1, "운영자")
+    w.players = {11, 12, 13, 14, 110, 1} | set(range(100, 110))
+    i = inter(400, GUEST)
+    await mod.claim_points(i)
+    check(said(i) == mod.PLAYER_ONLY and i.response.send_message.call_args.kwargs["ephemeral"] is True and "99" not in mod.S.accounts,
+          "포인트 받기: 리그 선수가 아니면 받지 못한다 (본인에게만 알린다)")
+    i = inter(400, A)
+    await mod.claim_points(i)
+    check(said(i).startswith("✅ **1,000 포인트**를 받았어요. 보유 포인트는 **1,000**이에요.") and i.response.send_message.call_args.kwargs["ephemeral"] is True
+          and mod.S.accounts["11"] == {"points": 1000, "claimed": 1, "week": MON, "name": "가", "username": "u11", "nick": "", "bets": 0, "hits": 0, "profit": 0},
+          "포인트 받기: 누르면 1000 포인트를 받는다")
+    i = inter(400, A)
+    await mod.claim_points(i)
+    check(said(i).startswith(f"이번 주 포인트는 이미 받았어요. 다음 포인트는 <t:{MON + WEEK}:F>부터 받을 수 있어요.") and mod.S.accounts["11"]["points"] == 1000,
+          "포인트 받기: 한 주에 한 번만 받는다")
+    check(json.loads(path.read_text(encoding="utf-8"))["accounts"]["11"]["points"] == 1000 and mod.S.dirty, "받은 포인트를 파일에 적어 둔다")
+    w.at = MON + WEEK - 1
+    i = inter(400, A)
+    await mod.claim_points(i)
+    check(mod.S.accounts["11"]["points"] == 1000, "일요일 밤 11시 59분까지는 같은 주다")
+    w.at = MON + WEEK
+    i = inter(400, A)
+    await mod.claim_points(i)
+    check(mod.S.accounts["11"]["points"] == 2000 and mod.S.accounts["11"]["claimed"] == 2 and "보유 포인트는 **2,000**" in said(i),
+          "다음 월요일 0시부터 또 받을 수 있고, 포인트는 쌓인다")
+    w.at = MON + 3 * WEEK
+    i = inter(400, A)
+    await mod.claim_points(i)
+    check(mod.S.accounts["11"]["points"] == 3000 and mod.S.accounts["11"]["claimed"] == 3, "받지 않은 주의 포인트는 사라진다 (한 주를 건너뛰어도 한 번만 받는다)")
+
+    # 내 포인트 (/포인트 와 '내 포인트' 버튼)
+    i = inter(400, B)
+    await mod.cmd_points(i)
+    check(said(i) == "아직 포인트를 받은 적이 없어요. **포인트 받기**를 누르면 이번 주 1,000 포인트를 받아요." and labels(view_of(i)) == ["포인트 받기", "내 포인트"]
+          and i.response.send_message.call_args.kwargs["ephemeral"] is True, "/포인트: 받은 적이 없으면 받기 버튼을 보여 준다")
+    i = inter(400, A)
+    await mod.show_points(i)
+    check(said(i) == "🔮 보유 포인트는 **3,000**이에요.\n승부 예측 0번 가운데 0번 맞혔고, 손익은 0 포인트예요.\n"
+          f"이번 주 포인트는 받았어요. 다음 포인트는 <t:{MON + 4 * WEEK}:F>부터 받을 수 있어요.\n포인트 순위: <https://example.invalid/oracle.html>"
+          and view_of(i) is None, "/포인트: 보유 포인트와 전적, 순위 페이지. 이번 주 것을 받았으면 받기 버튼은 없다")
+    w.at += WEEK
+    i = inter(400, A)
+    await mod.show_points(i)
+    check("이번 주 포인트를 아직 받지 않았어요." in said(i) and labels(view_of(i)) == ["포인트 받기", "내 포인트"], "/포인트: 새 주가 되면 받기 버튼이 다시 보인다")
+    i = inter(400, GUEST)
+    await mod.cmd_points(i)
+    check(said(i) == mod.PLAYER_ONLY, "/포인트: 리그 선수가 아니면 쓰지 못한다")
+
+    # ── 매주 올리는 '포인트 받기' 글 ──
+    w = World(mod, path, T0)                   # 봇을 껐다 켠 것처럼: 파일에서 이어받는다
+    check(mod.S.loaded and mod.S.accounts["11"]["points"] == 3000 and mod.S.accounts["11"]["week"] == MON + 3 * WEEK, "봇을 껐다 켜도 포인트가 남는다")
+    mod.S.accounts = {}
+    w.players = {11, 12, 13, 14, 110, 1} | set(range(100, 110))
+    await mod.tick()
+    check(mod.S.round == {"start": MON, "message_id": 0, "channel_id": 0, "prev": None} and not w.places, "채널을 정하기 전에는 글을 올리지 않는다 (/포인트 로는 받을 수 있다)")
+    i = inter(100, B)
+    await mod.cmd_setup(i, None)
+    check(said(i) == "이 명령어를 사용할 권한이 없어요. 리그 관리자만 쓸 수 있는 명령어예요.", "/오라클설정: 리그 관리자만 쓴다")
+    i = inter(300, ADMIN)
+    await mod.cmd_setup(i, None)
+    check(said(i) == "이 명령어는 운영진 채널에서만 쓸 수 있어요.", "/오라클설정: 운영진 채널에서만 쓴다")
+    i = inter(100, ADMIN)
+    await mod.cmd_setup(i, None)
+    check(said(i).startswith("<@1>님, 오라클 봇의 설정이에요.\n'포인트 받기' 글을 올리는 채널: 정하지 않음") and "받은 적이 있는 사람: 0명" in said(i),
+          "/오라클설정: 비우고 쓰면 지금 설정을 보여 준다")
+    i = inter(100, ADMIN)
+    await mod.cmd_setup(i, SimpleNamespace(id=400))
+    post = w.place(400).sent[-1]
+    check(said(i) == "<@1>님이 '포인트 받기' 글을 올릴 채널을 <#400> 로 정했어요. 이번 주 글을 그 채널에 올려요." and mod.S.channel_id == 400
+          and len(w.place(400).sent) == 1 and post.text.startswith("🔮 **이번 주 포인트를 받으세요**\n리그 선수는 아래 **포인트 받기**를 눌러 **1,000 포인트**를 받을 수 있어요. "
+                                                                 f"한 주에 한 번, <t:{MON + WEEK}:F> 전까지 받을 수 있어요.")
+          and isinstance(post.view, mod.ClaimView) and post.view.is_persistent() and labels(post.view) == ["포인트 받기", "내 포인트"]
+          and mod.S.round["message_id"] == post.id and mod.S.round["channel_id"] == 400,
+          "/오라클설정 채널: 그 채널에 이번 주 '포인트 받기' 글과 버튼을 올린다 (봇을 껐다 켜도 눌리는 버튼)")
+    await mod.tick()
+    await mod.tick()
+    check(len(w.place(400).sent) == 1, "같은 주에는 글을 다시 올리지 않는다")
+    w.at = MON + WEEK + 5
+    await mod.tick()
+    check(len(w.place(400).sent) == 2 and post.deleted and mod.S.round["start"] == MON + WEEK and mod.S.round["message_id"] == w.place(400).sent[-1].id
+          and f"<t:{MON + 2 * WEEK}:F>" in w.place(400).sent[-1].text, "월요일 0시가 지나면 새 글을 올리고 앞의 글은 지운다 (글은 늘 하나)")
+    i = inter(100, ADMIN)
+    await mod.cmd_setup(i, SimpleNamespace(id=401))
+    check(len(w.place(401).sent) == 1 and w.place(400).sent[-1].deleted and mod.S.round["channel_id"] == 401, "채널을 바꾸면 새 채널에 올리고 앞의 글은 지운다")
+    w.at += WEEK
+    w.place(401).broken = True
+    with contextlib.redirect_stdout(io.StringIO()) as out:
+        await mod.tick()
+        await mod.tick()
+    check(mod.S.round["start"] == MON + 2 * WEEK and not mod.S.round["message_id"] and out.getvalue().count("글을 올리지 못했습니다") == 1,
+          "글을 올리지 못하면 조금 뒤에 다시 올려 본다 (10초마다 되풀이하지 않는다)")
+    w.place(401).broken = False
+    w.at += 601
+    await mod.tick()
+    check(mod.S.round["message_id"] == w.place(401).sent[-1].id and w.place(401).sent[0].deleted, "다시 올리면 지난 주의 글을 지운다")
+
+    # ── 승부 예측 열기: 퍼그나봇이 팀을 짜서 알리면 그 글 아래에 연다 ──
+    w = World(mod, path, T0)
+    mod.S.accounts, mod.S.books, mod.S.round, mod.S.channel_id = {}, [], None, 0
+    w.players = {11, 12, 13, 14, 110, 1} | set(range(100, 110))
+    for u, points in ((A, 1000), (B, 1000), (C, 1000), (D, 0), (user(105), 1000), (user(110), 1000)):
+        if points:
+            await mod.claim_points(inter(400, u))
+    entry = lineup(1)
+    await mod.on_lineup(entry)
+    book = mod.S.books[0]
+    end = int(T0 + 1200)
+    first = w.place(300).sent[0]
+    check(len(mod.S.books) == 1 and book["key"] == "300:1001500" and book["state"] == "open" and book["closes"] == T0 + 1200 and book["players"] == list(range(100, 110))
+          and book["place_id"] == 300, "팀이 짜이면 승부 예측을 연다 (20분 동안. 뛰는 열 명을 적어 둔다)")
+    check(first.text == "🔮 **승부 예측** — 이 경기에서 이길 팀에 포인트를 걸어 보세요.\n"
+          f"⏰ **<t:{end}:t>까지** 걸 수 있어요. (<t:{end}:R> 마감) 마감하면 배당률을 알려 드려요.\n"
+          "이 경기에 뛰는 선수는 걸 수 없어요. 포인트가 없으면 `/포인트` 로 이번 주 포인트를 먼저 받으세요.\n지금까지 **0명**이 걸었어요."
+          and isinstance(first.view, mod.BetView) and first.view.is_persistent() and labels(first.view) == ["래디언트", "다이어", "내 베팅"]
+          and [c.custom_id for c in first.view.children] == ["oracle:bet:r", "oracle:bet:d", "oracle:mine"] and book["message_id"] == first.id,
+          "그 글에 승부 예측 글과 버튼(래디언트·다이어·내 베팅)을 올린다")
+
+    # 진영 버튼 → 금액 버튼
+    i = inter(300, GUEST)
+    await mod.pick_side(i, "r")
+    check(said(i) == mod.PLAYER_ONLY, "베팅: 리그 선수가 아니면 걸 수 없다")
+    i = inter(300, user(105))
+    await mod.pick_side(i, "r")
+    check(said(i) == "이 경기에 뛰는 선수는 걸 수 없어요." and view_of(i) is None, "베팅: 그 경기에 뛰는 선수는 걸 수 없다")
+    i = inter(300, D)
+    await mod.pick_side(i, "r")
+    check(said(i).startswith("걸 수 있는 포인트가 없어요. `/포인트` 로") and "14" not in mod.S.accounts, "베팅: 포인트가 없으면 걸 수 없다")
+    i = inter(300, A)
+    await mod.pick_side(i, "r")
+    check(said(i) == "🟢 래디언트에 얼마를 걸까요? 걸 수 있는 포인트는 **1,000**이에요." and i.response.send_message.call_args.kwargs["ephemeral"] is True
+          and labels(view_of(i)) == ["100", "300", "500", "1,000", "전부 (1,000)", "직접 입력"], "베팅: 진영을 누르면 본인에게만 금액 버튼이 보인다")
+    i = inter(300, user(110))
+    await mod.pick_side(i, "d")
+    check(said(i).startswith("🔴 다이어에 얼마를 걸까요?"), "베팅: 그 판에서 쉬는 사람은 걸 수 있다")
+
+    # 금액 버튼 → 건다
+    key = book["key"]
+    i = inter(300, A)
+    await mod.put_amount(i, key, "r", 500)
+    check(said(i) == f"✅ 🟢 래디언트에 **500 포인트**를 걸었어요. 남은 포인트는 500이에요.\n<t:{end}:t>(<t:{end}:R>)에 마감해요. 그때까지 바꾸거나 취소할 수 있어요."
+          and labels(view_of(i)) == ["베팅 취소"] and mod.S.accounts["11"]["points"] == 500 and book["bets"]["11"] == {"side": "r", "amount": 500, "at": T0},
+          "베팅: 금액을 누르면 걸리고, 건 포인트는 바로 빠진다 (취소 버튼이 보인다)")
+    check(first.edits[-1]["content"].endswith("지금까지 **1명**이 걸었어요.") and isinstance(first.edits[-1]["view"], mod.BetView), "건 사람 수를 승부 예측 글에 바로 고친다")
+    i = inter(300, A)
+    await mod.pick_side(i, "d")
+    check(said(i) == "🔴 다이어에 얼마를 걸까요? 걸 수 있는 포인트는 **1,000**이에요.\n지금은 🟢 래디언트에 500 포인트를 걸어 두었어요. 새로 고르면 그것으로 바뀌어요.",
+          "베팅: 이미 걸었으면 바꿀 수 있다 (걸어 둔 포인트까지 다시 걸 수 있다)")
+    i = inter(300, A)
+    await mod.put_amount(i, key, "d", 1200)
+    check(said(i) == "포인트가 모자라요. 걸 수 있는 포인트는 **1,000**이에요." and view_of(i) is None and book["bets"]["11"]["amount"] == 500 and mod.S.accounts["11"]["points"] == 500,
+          "베팅: 가진 것보다 많이 걸 수 없다 (걸어 둔 것은 그대로)")
+    i = inter(300, A)
+    await mod.put_amount(i, key, "d", 0)
+    check(said(i) == "1 포인트 이상 걸어 주세요.", "베팅: 0은 걸 수 없다")
+    i = inter(300, A)
+    await mod.put_amount(i, key, "d", 800)
+    check(book["bets"]["11"]["side"] == "d" and book["bets"]["11"]["amount"] == 800 and mod.S.accounts["11"]["points"] == 200 and len(book["bets"]) == 1,
+          "베팅: 다시 걸면 앞의 것이 바뀐다 (한 경기에 한 번)")
+    i = inter(300, A)
+    await mod.show_mine(i)
+    check(said(i) == f"🔴 다이어에 **800 포인트**를 걸어 두었어요. <t:{end}:R> 마감하고, 그때까지 바꾸거나 취소할 수 있어요. 보유 포인트는 200이에요."
+          and labels(view_of(i)) == ["베팅 취소"], "내 베팅: 건 것과 취소 버튼을 본인에게 보여 준다")
+    i = inter(300, A)
+    await mod.cancel_bet(i, key)
+    check(said(i) == "건 포인트 800을 돌려받았어요. 보유 포인트는 1,000이에요." and "11" not in book["bets"] and mod.S.accounts["11"]["points"] == 1000
+          and first.edits[-1]["content"].endswith("지금까지 **0명**이 걸었어요."), "베팅 취소: 건 포인트를 돌려받는다")
+    i = inter(300, A)
+    await mod.cancel_bet(i, key)
+    check(said(i) == "이 경기에는 걸어 둔 포인트가 없어요.", "베팅 취소: 걸지 않았으면 알려 준다")
+    i = inter(300, B)
+    await mod.show_mine(i)
+    check(said(i) == "이 경기에는 걸지 않았어요. 보유 포인트는 1,000이에요." and view_of(i) is None, "내 베팅: 걸지 않았을 때")
+
+    # 직접 입력
+    side_view = mod.AmountView(key, "r", 1000)
+    i = inter(300, A)
+    await side_view.children[-1].callback(i)
+    modal = i.response.send_modal.call_args.args[0]
+    check(isinstance(modal, mod.AmountModal) and modal.title == "걸 포인트" and modal.amount.label == "걸 포인트 (1 ~ 1,000)", "직접 입력: 숫자를 적는 창이 뜬다")
+    modal.amount._value = "이백"
+    i = inter(300, A)
+    await modal.on_submit(i)
+    check(said(i) == "걸 포인트는 숫자로 적어 주세요. 진영 버튼을 다시 눌러 주세요." and "11" not in book["bets"], "직접 입력: 숫자가 아니면 걸지 않는다")
+    modal.amount._value = " 1,000 "
+    i = inter(300, A)
+    await modal.on_submit(i)
+    check(book["bets"]["11"] == {"side": "r", "amount": 1000, "at": T0} and mod.S.accounts["11"]["points"] == 0, "직접 입력: 적은 만큼 건다 (쉼표가 있어도 된다)")
+    i = inter(300, A)
+    await side_view.children[0].callback(i)
+    check(book["bets"]["11"]["amount"] == 100 and mod.S.accounts["11"]["points"] == 900 and said(i).startswith("✅ 🟢 래디언트에 **100 포인트**"), "금액 버튼을 누르면 그 금액으로 건다")
+    check(labels(mod.AmountView(key, "r", 250)) == ["100", "전부 (250)", "직접 입력"], "가진 포인트보다 큰 금액 버튼은 보이지 않는다")
+
+    # ── 20분 뒤 마감: 배당률과, 건 사람마다 이기면 얻고 지면 잃는 포인트 ──
+    await mod.put_amount(inter(300, A), key, "r", 500)
+    w.at += 60
+    await mod.put_amount(inter(300, B), key, "r", 100)
+    await mod.put_amount(inter(300, C), key, "d", 300)
+    check(mod.board()["players"] == [{"name": "가", "points": 1000, "profit": 0, "bets": 0, "hits": 0, "claimed": 1}, {"name": "나", "points": 1000, "profit": 0, "bets": 0, "hits": 0, "claimed": 1},
+                                     {"name": "다", "points": 1000, "profit": 0, "bets": 0, "hits": 0, "claimed": 1}, {"name": "선수105", "points": 1000, "profit": 0, "bets": 0, "hits": 0, "claimed": 1},
+                                     {"name": "선수110", "points": 1000, "profit": 0, "bets": 0, "hits": 0, "claimed": 1}],
+          "순위에는 걸어 둔 포인트도 보유 포인트로 넣는다 (경기가 끝나기 전에는 순위가 바뀌지 않는다)")
+    w.at = T0 + 1199
+    await mod.tick()
+    check(book["state"] == "open" and len(w.place(300).sent) == 1, "20분이 되기 전에는 마감하지 않는다")
+    w.at = T0 + 1200
+    i = inter(300, D)
+    await mod.pick_side(i, "r")
+    check(said(i) == "이 경기의 승부 예측은 마감됐어요.", "20분이 지나면, 마감 글이 올라오기 전이어도 걸 수 없다")
+    i = inter(300, B)
+    await mod.put_amount(i, key, "d", 50)
+    check(said(i) == "이 경기의 승부 예측은 마감됐어요." and book["bets"]["12"] == {"side": "r", "amount": 100, "at": T0 + 60}, "20분이 지나면 바꿀 수도 없다")
+    i = inter(300, B)
+    await mod.cancel_bet(i, key)
+    check(said(i) == "이 경기의 승부 예측은 마감돼서 취소할 수 없어요.", "20분이 지나면 취소할 수도 없다")
+    await mod.tick()
+    posts = w.place(300).texts()
+    check(book["state"] == "closed" and first.text == "🔮 **승부 예측** — 마감했어요. 3명이 걸었고, 배당률은 아래에 있어요." and first.view is None,
+          "20분이 지나면 마감한다 (버튼을 뗀다)")
+    check(len(posts) == 2 and posts[1] == "🔮 **승부 예측 마감** — 3명이 걸었어요.\n🟢 래디언트 **600** 포인트 (2명) · 배당 **1.50배**\n🔴 다이어 **300** 포인트 (1명) · 배당 **3.00배**\n"
+          "-# 건 포인트를 모두 모아, 이긴 쪽이 건 만큼 나눠 가져요. 소수점 아래는 버려요.\n\n🟢 래디언트에 건 사람\n<@11> 500 → 이기면 **+250** / 지면 −500\n<@12> 100 → 이기면 **+50** / 지면 −100\n\n"
+          "🔴 다이어에 건 사람\n<@13> 300 → 이기면 **+600** / 지면 −300",
+          "마감하면 배당률과, 건 사람마다 이기면 얻고 지면 잃는 포인트를 알린다 (많이 건 사람이 많이 딴다)")
+    i = inter(300, A)
+    await mod.show_mine(i)
+    check(said(i) == "🟢 래디언트에 **500 포인트**를 걸었어요. 이기면 **+250**, 지면 −500이에요. 경기 결과를 기다리고 있어요. 보유 포인트는 500이에요." and view_of(i) is None,
+          "내 베팅: 마감한 뒤에는 이기면·지면 얼마인지 보여 준다 (취소 버튼은 없다)")
+    await mod.tick()
+    check(len(w.place(300).sent) == 2, "마감은 한 번만 한다")
+
+    # ── 정산: /승리 로 결과가 기록되면 ──
+    w.asked.clear()
+    await mod.on_result(entry, "r")
+    acc = mod.S.accounts
+    check(book["state"] == "settled" and book["winner"] == "r" and book["paid"] == {"11": 750, "12": 150, "13": 0}
+          and (acc["11"]["points"], acc["12"]["points"], acc["13"]["points"]) == (1250, 1050, 700), "정산: 이긴 쪽이 건 만큼 나눠 갖는다 (500 → 750, 100 → 150)")
+    check((acc["11"]["bets"], acc["11"]["hits"], acc["11"]["profit"]) == (1, 1, 250) and (acc["13"]["bets"], acc["13"]["hits"], acc["13"]["profit"]) == (1, 0, -300),
+          "정산: 맞힌 횟수와 손익을 적어 둔다")
+    check(w.place(300).texts()[2] == "🔮 **승부 예측 결과** — 🟢 래디언트 승리! (배당 1.50배)\n\n🎉 **맞힌 사람**\n<@11> **+250** · 보유 1,250\n<@12> **+50** · 보유 1,050\n\n"
+          "💸 **틀린 사람**\n<@13> −300 · 보유 700\n\n📊 포인트 순위: <https://example.invalid/oracle.html>", "정산: 결과와 얻고 잃은 포인트를 그 글에 알린다")
+    i = inter(300, A)
+    await mod.show_mine(i)
+    check(said(i) == "🟢 래디언트에 **500 포인트**를 걸어 맞혔어요. **+250** 포인트를 얻었어요. 보유 포인트는 1,250이에요.", "내 베팅: 정산한 뒤")
+    i = inter(300, C)
+    await mod.show_mine(i)
+    check(said(i) == "🔴 다이어에 **300 포인트**를 걸어 틀렸어요. 300 포인트를 잃었어요. 보유 포인트는 700이에요.", "내 베팅: 틀렸을 때")
+    await mod.on_result(entry, "d")
+    check(book["winner"] == "r" and acc["11"]["points"] == 1250 and len(w.place(300).sent) == 3, "이미 정산한 판은 다시 정산하지 않는다")
+
+    # ── 순위를 리그 서버에 올리기 (순위 페이지가 읽는다) ──
+    w.nicks = {11: "가나다"}
+    w.at += 30
+    await mod.tick()
+    sent = w.asked[-1]
+    check(len(w.asked) == 1 and sent["action"] == "saveOracle" and sent["board"]["weekly"] == 1000 and sent["board"]["updatedAt"].endswith("Z")
+          and sent["board"]["players"][:3] == [{"name": "가나다", "points": 1250, "profit": 250, "bets": 1, "hits": 1, "claimed": 1},
+                                               {"name": "나", "points": 1050, "profit": 50, "bets": 1, "hits": 1, "claimed": 1},
+                                               {"name": "선수105", "points": 1000, "profit": 0, "bets": 0, "hits": 0, "claimed": 1}]
+          and sent["board"]["players"][-1] == {"name": "다", "points": 700, "profit": -300, "bets": 1, "hits": 0, "claimed": 1}
+          and all(set(row) == {"name", "points", "profit", "bets", "hits", "claimed"} for row in sent["board"]["players"]) and set(sent["board"]) == {"updatedAt", "weekly", "players"}
+          and not mod.S.dirty,
+          "정산한 뒤 포인트 순위를 리그 서버에 올린다 (보유 포인트 순. 이름은 리그 닉네임이고 모르면 서버 별명. 디스코드 ID는 싣지 않는다)")
+    check(sent["state"]["accounts"]["11"]["points"] == 1250 and sent["state"]["books"][0]["state"] == "settled", "포인트 기록의 사본도 함께 올린다 (이 PC의 파일을 잃어도 되살릴 수 있게)")
+    await mod.tick()
+    check(len(w.asked) == 1, "바뀐 것이 없으면 다시 올리지 않는다")
+
+    # ── 승리취소: 정산을 되돌린다. 그사이 딴 포인트를 써 버렸으면 0보다 적어질 수 있다 ──
+    entry2 = lineup(2, place=301)
+    await mod.on_lineup(entry2)
+    book2 = mod.S.books[1]
+    await mod.put_amount(inter(301, A), book2["key"], "r", 1250)     # 가: 딴 포인트까지 모두 건다
+    await mod.put_amount(inter(301, C), book2["key"], "d", 100)
+    w.at += 1200
+    await mod.tick()
+    await mod.on_result(entry2, "d")
+    check(acc["11"]["points"] == 0 and acc["13"]["points"] == 600 + 1350 and book2["paid"] == {"11": 0, "13": 1350}, "둘째 판: 가는 모두 잃고 다는 모두 가져갔다")
+    await mod.on_undo(entry)
+    check(book["state"] == "closed" and book["winner"] is None and book["paid"] == {} and (acc["11"]["points"], acc["12"]["points"], acc["13"]["points"]) == (-750, 900, 1950)
+          and (acc["11"]["bets"], acc["11"]["hits"], acc["11"]["profit"]) == (1, 0, -1250) and (acc["12"]["bets"], acc["12"]["hits"], acc["12"]["profit"]) == (0, 0, 0)
+          and (acc["13"]["bets"], acc["13"]["hits"], acc["13"]["profit"]) == (1, 1, 1250),
+          "승리취소: 나눠 준 포인트를 도로 가져온다. 이미 다른 판에 써 버렸으면 0보다 적어진다 (허용)")
+    check(w.place(300).texts()[-1] == "🔮 경기 결과가 취소돼서 승부 예측의 정산을 되돌렸어요. 결과가 다시 기록되면 그때 다시 정산해요.\n포인트가 0보다 적어진 사람: <@11> (−750)",
+          "승리취소: 되돌렸다고 알리고, 0보다 적어진 사람을 적는다")
+    i = inter(301, A)
+    await mod.pick_side(i, "r")
+    check(said(i) == "이 경기의 승부 예측은 마감됐어요.", "마감한 판에는 걸 수 없다")
+    await mod.on_undo(entry)
+    check(len(w.place(300).sent) == 4 and acc["11"]["points"] == -750, "되돌린 판은 다시 되돌리지 않는다")
+    await mod.on_result(entry, "d")
+    check(book["state"] == "settled" and book["winner"] == "d" and book["paid"] == {"11": 0, "12": 0, "13": 900}
+          and (acc["11"]["points"], acc["12"]["points"], acc["13"]["points"]) == (-750, 900, 2850)
+          and (acc["11"]["profit"], acc["12"]["profit"], acc["13"]["profit"]) == (-1750, -100, 1850) and acc["13"]["hits"] == 2,
+          "다시 /승리 하면(이번에는 다이어) 다시 정산한다")
+    check("🔴 다이어 승리! (배당 3.00배)" in w.place(300).texts()[-1] and "<@13> **+600** · 보유 2,850" in w.place(300).texts()[-1]
+          and "<@11> −500 · 보유 −750" in w.place(300).texts()[-1], "다시 정산한 결과를 알린다")
+    third = lineup(3, place=302)
+    await mod.on_lineup(third)
+    i = inter(302, A)
+    await mod.pick_side(i, "r")
+    check(said(i).startswith("걸 수 있는 포인트가 없어요."), "포인트가 0보다 적으면 걸 수 없다 (다음 주 포인트를 받으면 그만큼 메워진다)")
+    w.at = MON + WEEK + 10
+    await mod.claim_points(inter(400, A))
+    check(acc["11"]["points"] == 250, "0보다 적은 포인트는 다음 주에 받는 1000으로 메워진다")
+    w.at = T0 + 3000
+
+    # ── 한쪽에만 걸렸거나 아무도 걸지 않았을 때 ──
+    book3 = mod.S.books[2]
+    await mod.put_amount(inter(302, B), book3["key"], "r", 200)
+    await mod.put_amount(inter(302, C), book3["key"], "r", 50)
+    w.at = book3["closes"]
+    await mod.tick()
+    check(book3["state"] == "void" and acc["12"]["points"] == 900 and acc["13"]["points"] == 2850
+          and w.place(302).sent[0].text == "🔮 **승부 예측** — 마감했어요. 한쪽 팀에만 걸려서 성립하지 않았어요."
+          and w.place(302).texts()[1] == "🔮 승부 예측을 마감했어요. 🟢 래디언트에만 걸려서(2명, 250 포인트) 성립하지 않았어요. 건 포인트는 모두 돌려드렸어요.",
+          "한쪽 팀에만 걸렸으면 성립하지 않고, 건 포인트를 모두 돌려준다")
+    i = inter(302, B)
+    await mod.show_mine(i)
+    check(said(i) == "이 경기의 승부 예측은 성립하지 않아서, 건 포인트 200을 돌려받았어요. 보유 포인트는 900이에요.", "내 베팅: 성립하지 않았을 때")
+    await mod.on_result(third, "r")
+    check(book3["state"] == "void" and len(w.place(302).sent) == 2 and acc["12"]["points"] == 900, "성립하지 않은 판은 결과가 나와도 정산하지 않는다")
+    fourth = lineup(4, place=303)
+    await mod.on_lineup(fourth)
+    book4 = mod.S.books[3]
+    w.at = book4["closes"] + 1
+    await mod.tick()
+    check(book4["state"] == "void" and len(w.place(303).sent) == 1 and w.place(303).sent[0].text == "🔮 **승부 예측** — 마감했어요. 건 사람이 없었어요."
+          and w.place(303).sent[0].view is None, "아무도 걸지 않았으면 글만 고치고 따로 알리지 않는다")
+
+    # ── 20분이 되기 전에 결과가 나오면 마감부터 한다 ──
+    fifth = lineup(5, place=304)
+    await mod.on_lineup(fifth)
+    book5 = mod.S.books[4]
+    await mod.put_amount(inter(304, B), book5["key"], "r", 300)
+    await mod.put_amount(inter(304, C), book5["key"], "d", 900)
+    await mod.on_result(fifth, "r")
+    t5 = w.place(304).texts()
+    check(book5["state"] == "settled" and len(t5) == 3 and t5[0].startswith("🔮 **승부 예측** — 마감했어요. 2명이 걸었고") and t5[1].startswith("🔮 **승부 예측 마감**")
+          and t5[2].startswith("🔮 **승부 예측 결과** — 🟢 래디언트 승리! (배당 4.00배)") and acc["12"]["points"] == 900 - 300 + 1200,
+          "20분이 되기 전에 결과가 기록되면 마감하고 바로 정산한다")
+
+    # ── 경기가 없던 일이 되면 건 포인트를 돌려준다 ──
+    sixth = lineup(6, place=305)
+    await mod.on_lineup(sixth)
+    book6 = mod.S.books[5]
+    before = acc["12"]["points"], acc["13"]["points"]
+    await mod.put_amount(inter(305, B), book6["key"], "r", 300)
+    await mod.put_amount(inter(305, C), book6["key"], "d", 400)
+    await mod.on_void(sixth)
+    check(book6["state"] == "void" and (acc["12"]["points"], acc["13"]["points"]) == before
+          and w.place(305).sent[0].text == "🔮 **승부 예측** — 이 경기가 없던 일이 돼서 취소했어요." and w.place(305).sent[0].view is None
+          and w.place(305).texts()[1] == "🔮 이 경기가 없던 일이 돼서 승부 예측을 취소했어요. 건 포인트는 모두 돌려드렸어요.",
+          "받는 중에 경기가 없던 일이 되면(/취소·/재모집·다시 열기·경기 안 함) 건 포인트를 돌려준다")
+    await mod.on_void(sixth)
+    check(len(w.place(305).sent) == 2 and (acc["12"]["points"], acc["13"]["points"]) == before, "돌려준 판은 다시 돌려주지 않는다")
+    seventh = lineup(7, place=306)
+    await mod.on_lineup(seventh)
+    book7 = mod.S.books[6]
+    await mod.put_amount(inter(306, B), book7["key"], "r", 300)
+    await mod.put_amount(inter(306, C), book7["key"], "d", 400)
+    w.at = book7["closes"]
+    await mod.tick()
+    await mod.on_void(seventh)
+    check(book7["state"] == "void" and (acc["12"]["points"], acc["13"]["points"]) == before and len(w.place(306).sent) == 3
+          and w.place(306).texts()[-1].startswith("🔮 이 경기가 없던 일이 돼서 승부 예측을 취소했어요."), "마감한 뒤에 없던 일이 돼도 돌려준다")
+    eighth = lineup(8, place=307)
+    await mod.on_lineup(eighth)
+    book8 = mod.S.books[7]
+    await mod.on_void(eighth)
+    check(book8["state"] == "void" and len(w.place(307).sent) == 1 and w.place(307).sent[0].text.endswith("취소했어요."), "건 사람이 없던 판은 글만 고친다")
+    await mod.on_void(lineup(99))
+    await mod.on_result(lineup(99), "r")
+    await mod.on_undo(lineup(99))
+    check(len(mod.S.books) == 8, "승부 예측이 없는 편성은 그냥 넘어간다 (오라클을 켜기 전에 짠 팀)")
+
+    # ── 봇을 껐다 켜기: 꺼져 있던 사이에 20분이 지났으면 켜자마자 마감한다 ──
+    ninth = lineup(9, place=308)
+    await mod.on_lineup(ninth)
+    book9 = mod.S.books[8]
+    await mod.put_amount(inter(308, B), book9["key"], "r", 100)
+    await mod.put_amount(inter(308, C), book9["key"], "d", 100)
+    closes, saved_points = book9["closes"], (acc["12"]["points"], acc["13"]["points"])
+    old_places = w.places
+    w = World(mod, path, closes - 300)                                  # 15분쯤에 다시 켰다
+    w.places, w.players, w.count = old_places, {11, 12, 13, 14}, 9000
+    for p in w.places.values():
+        p.world = w
+        w.messages.update({m.id: m for m in p.sent})
+    book9 = mod.find_book(book9["key"])
+    check(mod.S.loaded and book9 is not None and book9["state"] == "open" and book9["bets"]["12"] == {"side": "r", "amount": 100, "at": closes - 1200}
+          and (mod.S.accounts["12"]["points"], mod.S.accounts["13"]["points"]) == saved_points and len(mod.S.books) == 9,
+          "봇을 껐다 켜도 받던 승부 예측과 건 포인트가 남는다")
+    await mod.tick()
+    i = inter(308, A)
+    await mod.put_amount(i, book9["key"], "r", 50)
+    check(book9["state"] == "open" and said(i).startswith("✅ 🟢 래디언트에 **50 포인트**"), "20분이 지나지 않았으면 켠 뒤에도 이어서 걸 수 있다")
+    w = World(mod, path, closes + 3600)                                 # 한 시간 뒤에 다시 켰다
+    w.places, w.count = old_places, 9500
+    for p in w.places.values():
+        p.world = w
+        w.messages.update({m.id: m for m in p.sent})
+    book9 = mod.find_book(book9["key"])
+    await mod.tick()
+    check(book9["state"] == "closed" and w.place(308).texts()[-1].startswith("🔮 **승부 예측 마감** — 3명이 걸었어요.") and w.place(308).sent[0].view is None,
+          "꺼져 있던 사이에 20분이 지났으면 켜자마자 마감한다")
+    # 오라클 봇이 로그인하기 전에 짜인 팀: 로그인한 뒤에 글을 올린다
+    mod.S.ready = False
+    tenth = lineup(10, place=309)
+    await mod.on_lineup(tenth)
+    book10 = mod.S.books[-1]
+    check(book10["state"] == "open" and book10["message_id"] == 0 and 309 not in w.places, "오라클 봇이 아직 로그인하지 않았으면 판만 열어 둔다")
+    mod.S.ready = True
+    await mod.tick()
+    check(book10["message_id"] == w.place(309).sent[0].id and isinstance(w.place(309).sent[0].view, mod.BetView), "로그인한 뒤에 승부 예측 글을 올린다")
+
+    # ── 결과가 기록되지 않은 채 이틀이 지나면 돌려준다. 끝난 판은 한 주 뒤에 잊는다 ──
+    held = mod.S.accounts["12"]["points"]
+    w.at = book9["opened"] + 2 * 86400 + 1
+    await mod.tick()
+    check(book9["state"] == "void" and mod.S.accounts["12"]["points"] == held + 100
+          and w.place(308).texts()[-1] == "🔮 결과가 기록되지 않은 채 이틀이 지나서 승부 예측을 취소했어요. 건 포인트는 모두 돌려드렸어요.",
+          "결과가 기록되지 않은 채 이틀이 지나면(퍼그나봇이 그 팀을 잊으면) 건 포인트를 돌려준다")
+    n = len(mod.S.books)
+    w.at += 7 * 86400 + 1
+    await mod.tick()
+    check(n == 10 and mod.S.books == [], "끝난 판은 한 주 뒤에 잊는다 (포인트와 전적은 그대로)")
+    check(mod.S.accounts["13"]["hits"] == 2 and mod.S.accounts["12"]["points"] == held + 100, "판을 잊어도 포인트와 전적은 남는다")
+
+    # ── 리그 서버에 올리지 못할 때, 서버 설정이 없을 때, 이 PC에 기록이 없을 때 ──
+    w.fail = True
+    mod.S.dirty = True
+    w.asked.clear()
+    with contextlib.redirect_stdout(io.StringIO()) as out:
+        await mod.tick()
+        await mod.tick()
+    check(len(w.asked) == 1 and mod.S.dirty and out.getvalue().count("포인트 순위를 리그 서버에 올리지 못했습니다") == 1,
+          "순위를 서버에 올리지 못하면 10분 뒤에 다시 올린다 (10초마다 되풀이하지 않는다)")
+    w.fail = False
+    w.at += 601
+    await mod.tick()
+    check(len(w.asked) == 2 and not mod.S.dirty, "10분 뒤에 다시 올린다")
+    saved = json.loads(path.read_text(encoding="utf-8"))
+    path.unlink()
+    w = World(mod, path, T0, server=False)
+    mod.S.dirty = True
+    await mod.restore()
+    await mod.tick()
+    check(not mod.S.accounts and mod.S.dirty, "리그 서버 설정이 없으면 순위를 올리지 않고, 사본도 받지 않는다")
+    path.unlink(missing_ok=True)
+    w = World(mod, path, T0)
+    w.backup = saved
+    check(not mod.S.loaded and not mod.S.accounts, "이 PC에 포인트 기록이 없다")
+    with contextlib.redirect_stdout(io.StringIO()) as out:
+        await mod.restore()
+    check(mod.S.accounts["13"]["hits"] == 2 and mod.S.accounts["11"]["claimed"] == 2 and path.exists() and "리그 서버의 사본을 받아 왔습니다. (5명)" in out.getvalue(),
+          "이 PC에 포인트 기록이 없으면 리그 서버에 올려 둔 사본을 받아 온다 (파일을 잃었거나 봇을 다른 PC로 옮겼을 때)")
+    w.backup = {"accounts": {"1": {"points": 5}}}
+    await mod.restore()
+    check("1" not in mod.S.accounts, "사본은 켤 때 한 번만 받아 온다")
+
+    # ── 오라클 봇을 쓰지 않을 때(토큰이 없을 때)는 아무 일도 하지 않는다 ──
+    path.unlink(missing_ok=True)
+    w = World(mod, path, T0)
+    mod.S.token = ""
+    await mod.on_lineup(lineup(1))
+    await mod.on_result(lineup(1), "r")
+    await mod.on_undo(lineup(1))
+    await mod.on_void(lineup(1))
+    check(not mod.enabled() and mod.S.books == [] and not w.places and mod.status_line() == "꺼짐 (config.json 에 oracle_token 을 넣으면 켜집니다)",
+          "오라클 봇의 토큰을 넣지 않았으면 퍼그나봇이 알려 줘도 아무 일도 하지 않는다")
+    mod.S.token = "x"
+    check(mod.status_line() == "켜는 중 (로그인하면 아래에 따로 알립니다)", "토큰을 넣었으면 켠다")
+
+    # ── 건 사람이 아주 많을 때: 마감 글을 나눠 올린다 ──
+    await mod.on_lineup(lineup(1, place=320))
+    big = mod.S.books[0]
+    for k in range(120):
+        uid = 100000000000000000 + k
+        mod.S.accounts[str(uid)] = {"points": 0, "claimed": 1, "week": MON, "name": f"선수{k}", "username": f"u{k}", "nick": "", "bets": 0, "hits": 0, "profit": 0}
+        big["bets"][str(uid)] = {"side": "rd"[k % 2], "amount": 100 + k, "at": T0 + k}
+    w.at = big["closes"]
+    await mod.tick()
+    parts = w.place(320).texts()[1:]
+    check(len(parts) > 1 and all(len(p) <= 2000 for p in parts) and sum(p.count("→ 이기면") for p in parts) == 120 and parts[0].startswith("🔮 **승부 예측 마감** — 120명이 걸었어요."),
+          f"건 사람이 아주 많으면 마감 글을 나눠 올린다 ({len(parts)}개, 가장 긴 것 {max(len(p) for p in parts)}자)")
+
+    # ── 명령어와 버튼의 모양 ──
+    bot = mod.OracleBot()
+    mod.add_commands(bot.tree, discord.Object(id=1))
+    cmds = {c.name: c for c in bot.tree.get_commands(guild=discord.Object(id=1))}
+    check(sorted(cmds) == ["오라클설정", "포인트"] and [p.display_name for p in cmds["오라클설정"].parameters] == ["채널"] and not cmds["오라클설정"].parameters[0].required
+          and not cmds["포인트"].parameters, "오라클 봇의 명령어: /포인트, /오라클설정 채널")
+    check(bot.intents.guilds and not bot.intents.members and not bot.intents.message_content and bot.allowed_mentions.everyone is False and bot.allowed_mentions.roles is False
+          and bot.allowed_mentions.users is False, "오라클 봇은 특권 인텐트를 쓰지 않고, 멘션 알림을 울리지 않는다")
+    await bot.close()
+
+    for task in asyncio.all_tasks() - {asyncio.current_task()}:
+        task.cancel()
+    shutil.rmtree(HERE, ignore_errors=True)
+    print(f"\n실패 {failed}건")
+    sys.exit(1 if failed else 0)
+
+
+asyncio.run(main())

@@ -10,7 +10,7 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Oswald:wght@400;500;600&family=Noto+Sans+KR:wght@400;500;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="assets/site.css">
-<link rel="stylesheet" href="assets/guide.css">
+<link rel="stylesheet" href="assets/guide.css?v=17">
 </head>
 <body>
 <header id="site-head"></header>
@@ -20,11 +20,11 @@
   <p class="g-eyebrow">리그 운영진 안내</p>
   <h1 class="page-title">리그 운영진 매뉴얼</h1>
   <p class="page-lead">디스코드에서 <strong>퍼그나봇</strong> 명령어로 내전을 열고, 진행하고, 결과를 기록하는 방법입니다. 선수 쪽에서 보이는 모습은 <a href="guide-player.html">리그 선수 매뉴얼</a>에 있습니다.</p>
-  <p class="g-date">2026년 10월 11일 기준입니다. 디스코드 대화 예시는 봇이 실제로 올리는 글 모양 그대로이고, 이름과 MMR은 지어낸 값입니다. 파란 글자는 디스코드 멘션이고, 왼쪽에 파란 줄이 있는 글은 명령어를 입력한 본인에게만 보이는 답입니다.</p>
+  <p class="g-date">2026년 10월 13일 기준입니다. 디스코드 대화 예시는 봇이 실제로 올리는 글 모양 그대로이고, 이름과 MMR은 지어낸 값입니다. 파란 글자는 디스코드 멘션이고, 왼쪽에 파란 줄이 있는 글은 명령어를 입력한 본인에게만 보이는 답입니다.</p>
 
   <div class="notice">
     <p><strong>리그 운영진은 운영진 채널 #💚퍼그나봇-콘솔을 쓸 수 있는 사람입니다.</strong> 따로 받는 키나 로그인은 없습니다.</p>
-    <p>선수 승인, 대타·자리 변경이 있었던 경기, 지난 경기 고치기는 <strong>리그 관리자</strong>의 일입니다. 무엇을 넘기면 되는지는 <a href="#handoff">12번</a>에 모았습니다.</p>
+    <p>선수 승인, 대타·자리 변경이 있었던 경기, 지난 경기 고치기는 <strong>리그 관리자</strong>의 일입니다. 무엇을 넘기면 되는지는 <a href="#handoff">13번</a>에 모았습니다.</p>
   </div>
 
   <ol class="g-flow">
@@ -70,8 +70,9 @@
     <a href="#multi">9. 내전 여러 개</a>
     <a href="#want">10. /내전하자 알림</a>
     <a href="#newplayer">11. 새 선수 등록 알림</a>
-    <a href="#handoff">12. 리그 관리자에게 넘길 일</a>
-    <a href="#faq">13. 자주 묻는 질문</a>
+    <a href="#oracle">12. 승부 예측(오라클 봇)</a>
+    <a href="#handoff">13. 리그 관리자에게 넘길 일</a>
+    <a href="#faq">14. 자주 묻는 질문</a>
   </nav>
 
   <!-- 1 -->
@@ -496,8 +497,42 @@
   </section>
 
   <!-- 12 -->
+  <section class="g-sec" id="oracle">
+    <h2><span class="n">12</span>승부 예측(오라클 봇)이 켜져 있을 때</h2>
+    <p>선수들이 내전의 승패에 포인트를 거는 놀이를 퍼그나봇과는 다른 봇인 <strong>오라클</strong>이 맡습니다(<a href="guide-player.html#oracle">리그 선수 매뉴얼 9번</a>). 리그 운영진이 따로 쓰는 명령어는 없습니다. 평소처럼 내전을 진행하면 오라클 봇이 따라 움직입니다.</p>
+    <div class="g-scroll">
+      <table class="g-table says">
+        <thead><tr><th>내전에서 생긴 일</th><th>오라클 봇이 하는 일</th></tr></thead>
+        <tbody>
+          <tr><td>마감되어 팀 편성이 올라옴</td><td>그 바로 아래에 승부 예측을 열고 20분 동안 받습니다. 20분이 지나면 마감하고 배당률을 올립니다.</td></tr>
+          <tr><td><code>/승리</code>로 이긴 팀을 기록</td><td>건 포인트를 정산해 그 글에 올립니다.</td></tr>
+          <tr><td><code>/승리취소</code></td><td>정산을 되돌립니다. 다시 <code>/승리</code>하면 다시 정산합니다.</td></tr>
+          <tr><td><code>/승리</code>의 <strong>경기 안 함</strong>, <code>/취소</code>, <code>/재모집</code>, 마감한 뒤의 <code>/연장</code></td><td>그 판이 없던 일이 됐으므로 건 포인트를 모두 돌려줍니다.</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <figure class="g-fig">
+      <figcaption><b>예시</b><code>/승리</code>로 래디언트의 승리를 기록했을 때, 퍼그나봇의 결과 글 아래에 올라오는 글</figcaption>
+      <div class="dc">
+        <div class="dc-title">10월 10일(토) 20:54 내전 모집</div>
+        <div class="dc-msg"><div class="dc-av oracle">오</div><div class="dc-body"><div class="dc-head"><b>오라클</b><i>앱</i><time>오후 10:05</time></div><div class="dc-text">🔮 <strong>승부 예측 결과</strong> — 🟢 래디언트 승리! (배당 1.50배)<br><br>🎉 <strong>맞힌 사람</strong><br><span class="at">@플레이어11</span> <strong>+250</strong> · 보유 1,250<br><span class="at">@플레이어12</span> <strong>+50</strong> · 보유 1,050<br><br>💸 <strong>틀린 사람</strong><br><span class="at">@플레이어13</span> −300 · 보유 700<br><br>📊 포인트 순위: <span class="link">https://…/포인트-순위-페이지</span></div></div></div>
+      </div>
+    </figure>
+    <ul>
+      <li><strong>이긴 팀을 정확히 골라 주세요.</strong> <code>/승리</code>로 고른 대로 포인트가 오갑니다. 잘못 골랐으면 바로 <code>/승리취소</code>를 한 뒤 다시 기록하면 정산도 고쳐집니다. 그사이 선수가 딴 포인트를 다른 경기에 걸어 잃었다면 그 선수의 포인트가 0보다 적어질 수 있습니다(다음 주에 받는 포인트로 메워집니다).</li>
+      <li>대타가 뛰어서 리그 관리자가 리그 매니저로 기록하는 판은 오라클 봇이 승패를 알 수 없습니다. 그 글에서 <code>/승리</code>의 <strong>경기 안 함</strong>으로 정리하면 건 포인트가 돌아갑니다.</li>
+      <li>결과를 기록하지 않은 채 이틀이 지나면 건 포인트가 저절로 돌아갑니다.</li>
+      <li>그 경기에 뛰는 선수는 걸 수 없습니다. 리그 운영진도 리그 선수처럼 포인트를 받고 걸 수 있습니다.</li>
+      <li>시즌이 끝난 뒤에 짠 팀에는 승부 예측이 열리지 않습니다.</li>
+      <li>봇을 돌리는 컴퓨터가 꺼져 있는 동안에는 걸 수 없고, 다시 켜졌을 때 20분이 지나 있으면 바로 마감합니다.</li>
+      <li>매주 올라오는 <strong>포인트 받기</strong> 글의 채널은 리그 관리자가 <strong>#💚퍼그나봇-콘솔</strong>에서 <code>/오라클설정</code>으로 정합니다.</li>
+    </ul>
+  </section>
+
+  <!-- 13 -->
   <section class="g-sec" id="handoff">
-    <h2><span class="n">12</span>리그 관리자에게 넘길 일</h2>
+    <h2><span class="n">13</span>리그 관리자에게 넘길 일</h2>
     <p>리그 운영진의 명령어로 풀 수 없는 일입니다. 봇이 <strong>리그 관리자에게 알려 주세요</strong>라고 답했을 때도 여기에 해당합니다.</p>
     <div class="g-scroll">
       <table class="g-table says">
@@ -516,9 +551,9 @@
     </div>
   </section>
 
-  <!-- 13 -->
+  <!-- 14 -->
   <section class="g-sec" id="faq">
-    <h2><span class="n">13</span>자주 묻는 질문</h2>
+    <h2><span class="n">14</span>자주 묻는 질문</h2>
 
     <h3>"이 명령어를 사용할 권한이 없어요. 리그 운영진만 쓸 수 있는 명령어예요."</h3>
     <p>봇이 나를 리그 운영진으로 보지 않는 것입니다. 디스코드에서 <strong>#💚퍼그나봇-콘솔</strong> 채널이 보이는지 확인하고, 보이지 않으면 운영자에게 리그 운영진 역할을 달라고 알려 주세요.</p>

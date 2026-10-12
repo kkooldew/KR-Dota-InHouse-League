@@ -36,6 +36,8 @@
 - 리그 관리자 페이지에서 시즌 종료 날짜를 정해 두면, 그날 0시 전에 시작한 경기까지만 결과를 기록한다 (끝난 시각이 그 뒤여도 그 경기는 기록한다)
   · 경기를 시작한 시각은 /시작 을 처음 쓴 때이고, 쓰지 않았으면 팀을 짠 때다. 시즌이 끝난 뒤의 내전은 열 수 있지만 결과는 기록하지 않는다
 - 진행 중인 모집과 역할 설정은 state.json 에 적어 두어, 봇을 껐다 켜도 이어짐
+- 오라클 봇(승부 예측)은 같은 폴더의 oracle.py 에 있다. 디스코드에서는 봇 계정을 하나 더 쓰지만 이 프로그램 안에서 함께 돈다
+  (config.json 에 oracle_token 을 넣었을 때만). 퍼그나봇은 팀을 짰을 때, 결과를 기록하거나 되돌렸을 때, 팀 편성이 없던 일이 됐을 때 오라클에게 알려 준다
 
 설정은 같은 폴더의 config.json 에서 바꿉니다. (config.example.json 을 복사해 만드세요)
 """
@@ -50,11 +52,14 @@ import shutil
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Optional
 
 import aiohttp
 import discord
 from discord import app_commands
+
+import oracle  # 오라클 봇(승부 예측). 같은 폴더의 oracle.py
 
 # ── 설정 불러오기 ─────────────────────────────────────────────
 CONFIG_PATH = Path(__file__).with_name("config.json")
@@ -80,6 +85,9 @@ AUTO_MATCH = bool(config.get("auto_match", True))  # 마감하면 팀을 짜서 
 NODE_PATH = str(config.get("node_path", "") or "node").strip()
 # 승인한 선수에게 줄 역할. 보통은 비워 두고 디스코드에서 /선수역할 로 정한다(그 값은 state.json 에 남는다)
 PLAYER_ROLE_ID = int(config.get("player_role_id", 0) or 0)
+# 오라클 봇(승부 예측)의 토큰. 넣어 두면 퍼그나봇과 함께 켜진다. 비워 두면 퍼그나봇만 돈다
+ORACLE_TOKEN = str(config.get("oracle_token", "") or "").strip()
+ORACLE_PAGE = str(config.get("oracle_page", "") or "").strip()  # 포인트 순위 페이지의 주소. 오라클 봇이 정산 글에 적는다
 ROLE_POLL_SECONDS = 300  # 등록 명단의 승인·제외를 이만큼마다 확인한다. 1분이었는데, 급할 것이 없어 구글 서버에 묻는 횟수를 줄였다(2026-10-11)
 ROLE_RETRY_SECONDS = 600  # 서버에서 찾지 못한 사람은 이만큼 지난 뒤에 다시 찾아본다
 ROLE_BATCH = 30  # 한 번에 찾아볼 사람 수. 디스코드에 몰아서 묻지 않게 나눠 한다
@@ -181,6 +189,8 @@ class InhouseBot(discord.Client):
         self.role_note = ""  # 마지막으로 운영진 채널에 알린 문제. 같은 문제를 확인할 때마다 다시 알리지 않으려고 적어 둔다
         self.role_lock: asyncio.Lock | None = None
         self.role_task: asyncio.Task | None = None
+        # 승인된 선수의 리그 닉네임 {등록할 때 적은 디스코드(소문자 사용자명이나 숫자 ID): 닉네임}. 오라클 봇의 포인트 순위에 적는다
+        self.nicknames: dict[str, str] = {}
         # /시작 에서 골라 둔 음성 채널 {"lobby": 채널 ID, "radiant": …, "dire": …}. 없는 것은 이름으로 찾는다
         self.voice: dict[str, int] = {}
         # 리그 관리자 역할. 0이면 정해 두지 않은 것이라 서버 관리자 권한이 있는 사람만 리그 관리자로 본다
@@ -243,6 +253,7 @@ class InhouseBot(discord.Client):
             print(f"모집 글에서 리그 선수 멘션(/내전생성): {await ping_status()}")
             print(f"내전하자(/내전하자): {await want_status()}")
             print(f"음성 채널 이동(/시작·/종료): {await voice_status()}")
+            print(f"오라클 봇(승부 예측): {oracle.status_line()}")
             self.role_task = asyncio.create_task(role_loop())
             self.want_task = asyncio.create_task(want_loop())
 
@@ -822,7 +833,8 @@ class ServerGlitch(RuntimeError):
 
 # 다시 보내도 결과가 같은 요청(읽기, 통째로 덮어쓰는 명단·편성). 답을 받지 못하면 조금 기다렸다가 몇 번 더 보낸다.
 # 리그 기록 올리기(saveLeague)는 넣지 않는다. 처리됐는지 모르는 채 다시 보내면 같은 경기가 두 번 기록될 수 있어서 change_league 가 따로 확인한다.
-REPEATABLE = {"adminList", "adminLeague", "adminLeagueRev", "adminRoster", "adminLineup", "pushRoster", "pushLineup", "ping", "adminSetPrefs"}
+REPEATABLE = {"adminList", "adminLeague", "adminLeagueRev", "adminRoster", "adminLineup", "pushRoster", "pushLineup", "ping", "adminSetPrefs",
+              "saveOracle", "adminOracle"}
 SERVER_TRIES = 3  # 한 요청을 몇 번까지 보낼지
 SERVER_WAIT = 3  # 다시 보내기 전에 기다리는 시간(초). 두 번째는 그 두 배
 
@@ -1026,7 +1038,7 @@ async def auto_match(rec: Recruitment) -> None:
     await post(rec, text, quiet=True)  # 방금 명단 공지로 알림이 갔으니 한 번 더 울리지 않는다
     lanes = [{"role": l["role"], "r": l["r"]["id"], "d": l["d"]["id"]} for l in result["lanes"]]
     rec.lineup = True
-    bot.lineups.append({
+    entry = {
         "at": time.time(),
         "ids": [l[side] for l in lanes for side in ("r", "d")],
         "message_id": rec.message.id if rec.message else 0,
@@ -1035,7 +1047,8 @@ async def auto_match(rec: Recruitment) -> None:
         "who": who,
         "season": bot.season_no,  # 팀을 짠 때의 시즌 번호. 그 뒤에 새 시즌이 시작되면 이 판의 결과는 새 시즌에 기록하지 않는다
         "result": None,  # /승리 로 기록하면 {"winner", "match_id"}
-    })
+    }
+    bot.lineups.append(entry)
     note = (f"경기가 끝나면 {where}에서 `/승리` 로 이긴 팀을 골라 결과를 기록하세요. MMR이 정산되고 순위 페이지에 반영됩니다.\n"
             "대타가 뛰었거나 자리를 바꿔 뛰었다면 `/승리` 로 기록하지 말고 리그 관리자에게 알려 주세요. "
             "리그 관리자가 리그 매니저의 **봇이 짠 팀 불러오기**로 편성을 올린 뒤 고쳐서 기록합니다.")
@@ -1043,6 +1056,9 @@ async def auto_match(rec: Recruitment) -> None:
         await post(rec, f"{OFFSEASON_NOTE} (시즌 종료: <t:{int(bot.season_end)}:f>)", quiet=True)
         note = (f"시즌이 종료돼서(<t:{int(bot.season_end)}:f>) 이 경기의 결과는 기록되지 않습니다. "
                 f"경기가 끝나면 {where}에서 `/승리` 를 입력해 이 판을 정리해 주세요(기록하지 않고 정리만 합니다).")
+    else:
+        # 팀 편성 바로 아래에 오라클 봇이 승부 예측을 연다. 시즌이 끝난 뒤의 경기는 결과를 기록하지 않으므로 열지 않는다
+        await oracle.on_lineup(entry)
     try:
         await call_server({"action": "pushLineup", "lineup": {
             "post": getattr(rec.message, "jump_url", ""), "lanes": lanes, "bench": [p["id"] for p in result["bench"]],
@@ -1061,7 +1077,10 @@ async def drop_lineup(rec: Recruitment) -> None:
     message_id = rec.message.id if rec.message else 0
     # 서버에는 가장 나중에 짠 팀 하나만 올라가 있다. 그것이 이 내전의 것일 때만 비운다(다른 내전의 팀을 지우지 않게)
     newest = bool(bot.lineups) and bot.lineups[-1].get("message_id") == message_id
+    gone = [x for x in bot.lineups if x.get("message_id") == message_id]
     bot.lineups = [x for x in bot.lineups if x.get("message_id") != message_id]
+    for entry in gone:  # 그 판에 걸어 둔 포인트를 돌려준다 (오라클 봇)
+        await oracle.on_void(entry)
     if not newest:
         return
     try:
@@ -1128,6 +1147,7 @@ async def clear_entry(entry: dict) -> None:
         if g.message is not None and g.message.id == entry.get("message_id"):
             g.lineup = False
     save_state()
+    await oracle.on_void(entry)  # 그 판에 걸어 둔 포인트를 돌려준다 (오라클 봇)
     if newest:  # 서버에 올려 둔 편성이 이 판의 것이다. 매니저가 열리지 않은 판을 불러오지 않게 비운다
         try:
             await call_server({"action": "pushLineup", "lineup": None})
@@ -1395,6 +1415,9 @@ async def sync_roles(force: bool = False) -> dict:
         return out
     async with bot.role_lock:
         data = await call_server({"action": "adminList"})
+        # 오라클 봇의 포인트 순위에 적을 리그 닉네임 (등록할 때 적은 디스코드 사용자명이나 숫자 ID로 찾는다)
+        bot.nicknames = {str(p.get("discord") or "").strip().lstrip("@").lower(): str(p["nickname"]) for p in data.get("players") or []
+                         if p.get("status") == "승인" and p.get("discord") and p.get("nickname")}
         note_season(data)  # 지금 시즌의 종료 시각. 시즌이 끝난 뒤에 여는 내전에 미리 알리려고 5분마다 받아 둔다
         guild = await get_guild()
         role = guild.get_role(bot.player_role_id)
@@ -2086,6 +2109,7 @@ async def record_win(interaction: discord.Interaction, team: str) -> None:
         save_state()
         text = f"{actor}님이 경기 결과를 기록했어요.\n" + result_text(winner, result["changes"], entry.get("who") or {})
         await send_to(entry["place_id"], text)
+        await oracle.on_result(entry, winner)  # 오라클 봇이 승부 예측을 정산한다
         if winner != team:
             more = ("\n⚠️ 이 판은 앞서 입력한 대로 이미 기록돼 있었어요(그때는 서버의 답을 받지 못했습니다). 지금 고른 팀과 다르니, "
                     "바꾸려면 `/승리취소` 로 되돌린 뒤 다시 기록하세요." + more)
@@ -2145,6 +2169,7 @@ async def undo_win(interaction: discord.Interaction) -> None:
         entry["result"] = None
         save_state()
         await send_to(entry["place_id"], f"{actor}님이 경기 결과 기록을 취소했어요. MMR과 전적을 기록하기 전으로 되돌렸어요.")
+        await oracle.on_undo(entry)  # 오라클 봇이 승부 예측의 정산을 되돌린다
     await answer(interaction, f"{actor}님이 결과 기록을 취소하고 MMR을 되돌렸어요. 다시 기록하려면 `/승리` 를 쓰세요.")
 
 
@@ -2718,5 +2743,40 @@ async def on_app_command_error(interaction: discord.Interaction, error: app_comm
         await interaction.response.send_message(msg, ephemeral=True)
 
 
+# ── 오라클 봇 (승부 예측) ──────────────────────────────────────
+# 디스코드에서는 봇 계정을 하나 더 쓰지만 같은 프로그램 안에서 돈다(oracle.py). 여기서는 오라클이 퍼그나봇에게서 받아 쓰는 것을 넘겨준다.
+def league_nickname(uid: int, username: str) -> str | None:
+    """그 디스코드 계정으로 승인된 선수의 리그 닉네임. 모르면 None"""
+    return bot.nicknames.get(str(uid)) or bot.nicknames.get(str(username or "").lower()) or None
+
+
+oracle.setup(
+    token=ORACLE_TOKEN, page=ORACLE_PAGE, path=Path(__file__).with_name("oracle.json"),
+    host=SimpleNamespace(
+        guild=GUILD, admin_channel_id=ADMIN_CHANNEL_ID, signup_channel_id=SIGNUP_CHANNEL_ID,
+        can_play=lambda user: can_want(user),   # 리그 선수 이상인가 (포인트를 받고 걸 수 있는 사람)
+        is_manager=lambda user: is_manager(user),
+        nickname=league_nickname,
+        server=(lambda payload: call_server(payload)) if SYNC_URL and SYNC_KEY else None,  # 포인트 순위를 올릴 리그 서버
+    ),
+)
+
+
+async def run_all() -> None:
+    """퍼그나봇을 켠다. 오라클 봇의 토큰이 있으면 같은 프로그램 안에서 함께 켠다(디스코드에서는 봇이 둘로 보인다).
+    오라클 봇이 로그인하지 못해도 퍼그나봇은 그대로 돈다."""
+    async with bot:
+        side = asyncio.create_task(oracle.run()) if oracle.enabled() else None
+        try:
+            await bot.start(TOKEN)
+        finally:
+            if side is not None:
+                side.cancel()
+
+
 if __name__ == "__main__":
-    bot.run(TOKEN)
+    discord.utils.setup_logging(root=False)  # bot.run 이 하던 것과 같은 기록 설정
+    try:
+        asyncio.run(run_all())
+    except KeyboardInterrupt:
+        pass
