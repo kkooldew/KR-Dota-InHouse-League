@@ -1214,7 +1214,7 @@ assert(props.ADMIN_KEY === key, 'running setup again keeps the admin key');
     'dates: a day starts at 0:00 Korean time; days that do not exist are not dates');
 
   let st = status();
-  assert(st.open === true && st.regClose === '' && st.seasonEnd === '' && st.seasonEnded === false && st.version === 17 && !('registered' in st),
+  assert(st.open === true && st.regClose === '' && st.seasonEnd === '' && st.seasonEnded === false && st.version === 18 && !('registered' in st),
     'dates: nothing set at first (the public status carries both dates)');
 
   // 모집 종료 날짜
@@ -1355,5 +1355,34 @@ assert(props.ADMIN_KEY === key, 'running setup again keeps the admin key');
   const staffKey = post({ action: 'adminStaffAdd', key, name: '봇' }).key;
   assert(post({ action: 'saveOracle', key: staffKey, board: { players: [] } }).ok && get('oracle').oracle.players.length === 0, 'oracle: a staff key can save too');
   const st = get('status');
-  assert(st.version === 17 && !('oracle' in st), 'oracle: the public status is unchanged (version 17)');
+  assert(st.version === 18 && !('oracle' in st) && !('oracleOn' in st) && !('oracleSeen' in st), 'oracle: the public status is unchanged');
+
+  // 켜고 끄기 (버전 18): 주인이 리그 관리자 페이지에서 켜고 끈다. 처음에는 꺼져 있다
+  const logs = () => (S.sheets['운영 기록'] ? S.sheets['운영 기록'].grid.slice(1).map(r => r[2] + '|' + r[3]) : []);
+  r = post({ action: 'ping', key });
+  assert(r.ok && r.oracleOn === false && r.oracleSeen === '', 'oracle switch: off at first, and the bot has never checked in');
+  r = post({ action: 'adminOracle', key });
+  assert(r.ok && r.oracleOn === false && r.state.channel_id === 400 && !('ORACLE_SEEN' in S.props), 'oracle switch: the copy comes with the switch (reading the copy is not a check-in)');
+  r = post({ action: 'adminConfig', key: staffKey, oracle: true });
+  assert(!r.ok && r.code === 'owner' && post({ action: 'ping', key }).oracleOn === false, 'oracle switch: only the owner key can turn it on');
+  r = post({ action: 'adminConfig', key: staffKey, oracle: true, open: false });
+  assert(!r.ok && r.code === 'owner' && S.props.REG_OPEN !== 'false', 'oracle switch: a refused request changes nothing else');
+  r = post({ action: 'adminConfig', key, oracle: true });
+  assert(r.ok && r.oracleOn === true && S.props.ORACLE_ON === 'true' && logs().filter(l => l === '주인|오라클 봇 켜기').length === 1, 'oracle switch: the owner turns it on (logged)');
+  r = post({ action: 'adminConfig', key, oracle: true });
+  assert(r.ok && r.oracleOn === true && logs().filter(l => l === '주인|오라클 봇 켜기').length === 1, 'oracle switch: turning it on again is not logged twice');
+  r = post({ action: 'adminConfig', key, open: true });
+  assert(r.ok && r.oracleOn === true, 'oracle switch: other settings leave it alone');
+  // 봇이 받는 값: 5분마다 확인하러 오고(brief), 팀을 짜기 직전에 받는 리그 기록과 순위를 올린 답에도 실린다
+  r = post({ action: 'adminOracle', key: staffKey, brief: true });
+  assert(r.ok && r.oracleOn === true && !('state' in r) && !('version' in r) && /^\d{4}-/.test(S.props.ORACLE_SEEN), 'oracle switch: the bot checks in briefly and is told the switch');
+  assert(post({ action: 'ping', key }).oracleSeen === S.props.ORACLE_SEEN, 'oracle switch: the admin page is told when the bot last checked in');
+  assert(post({ action: 'adminLeague', key }).oracleOn === true && post({ action: 'saveOracle', key, board: { players: [] } }).oracleOn === true,
+    'oracle switch: the league and the save answer carry the switch too');
+  assert(!post({ action: 'adminOracle', key: 'wrong', brief: true }).ok, 'oracle switch: checking in needs a key');
+  r = post({ action: 'adminConfig', key, oracle: false });
+  assert(r.ok && r.oracleOn === false && S.props.ORACLE_ON === 'false' && logs().some(l => l === '주인|오라클 봇 끄기')
+    && post({ action: 'adminOracle', key, brief: true }).oracleOn === false && post({ action: 'adminLeague', key }).oracleOn === false, 'oracle switch: the owner turns it off (logged)');
+  r = post({ action: 'adminConfig', key, oracle: 'yes' });
+  assert(r.ok && r.oracleOn === false, 'oracle switch: a value that is not true or false is ignored');
 })();

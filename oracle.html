@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>승부 예측 포인트 순위 | 도타 2 인하우스 리그</title>
-<meta name="description" content="도타 2 인하우스 리그 승부 예측 포인트 순위">
+<title>승부의 신 랭킹 | 도타 2 인하우스 리그</title>
+<meta name="description" content="도타 2 인하우스 리그 승부 예측 포인트 랭킹">
 <meta name="robots" content="noindex">
 <meta name="theme-color" content="#141a20">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -14,9 +14,8 @@
 <style>
 .status{font-size:13px;color:var(--bone-dim);display:flex;flex-wrap:wrap;gap:4px 16px;align-items:center;margin-bottom:6px}
 .status .warn{color:var(--dire)}
-.lead{margin:18px 0 20px;font-size:19px;line-height:1.5;max-width:60ch}
-.lead strong{font-weight:700}
-.rule{margin:0 0 14px;font-size:12.5px;color:var(--bone-dim);max-width:76ch}
+.rule{margin:14px 0 18px;padding:0 0 0 18px;font-size:13.5px;line-height:1.75;color:var(--bone-dim)}
+.swipe{margin:-8px 0 12px;font-size:12.5px;color:var(--bone-dim)}
 .empty-box{border:1px dashed var(--line);border-radius:4px;padding:28px 24px;max-width:640px}
 .empty-box h2{margin:0 0 6px;font-size:18px}
 .empty-box p{margin:0;color:var(--bone-dim)}
@@ -55,8 +54,7 @@ th[aria-sort="descending"] .sort::after{content:'▼';font-size:9px;opacity:1}
 
 .narrow-only{display:none}
 @media (max-width:640px){
-  .lead{font-size:17px}
-  .narrow-only{display:inline}
+  .narrow-only{display:block}
   .board td{padding:10px 7px}
   .board th{padding:0 7px 2px}
 }
@@ -66,15 +64,16 @@ th[aria-sort="descending"] .sort::after{content:'▼';font-size:9px;opacity:1}
 <header id="site-head"></header>
 
 <main class="wrap">
-  <h1 class="page-title">승부 예측 포인트 순위</h1>
+  <h1 class="page-title">승부의 신 랭킹</h1>
   <div class="status" id="status" aria-live="polite"></div>
 
   <div id="main" hidden>
-    <p class="lead" id="lead"></p>
-    <p class="rule">리그 선수는 디스코드의 오라클 봇에게서 한 주에 한 번 <span id="weekly">1,000</span> 포인트를 받아, 내전의 승부 예측에서 이길 팀에 겁니다.
-      순위는 보유 포인트가 많은 순서로 매기고, 포인트가 같으면 공동 순위입니다. 아직 결과가 나오지 않은 경기에 걸어 둔 포인트도 보유 포인트에 들어 있습니다.
-      포인트를 한 번이라도 받은 사람만 나옵니다. 표의 머리글을 누르면 그 항목으로 정렬하고, 한 번 더 누르면 순서가 뒤집힙니다.
-      <span class="narrow-only">표를 옆으로 밀면 나머지 항목이 보입니다.</span></p>
+    <ul class="rule">
+      <li>일주일에 한 번, 월요일부터 오라클 봇을 통해 <span id="weekly">1,000</span> 포인트를 받을 수 있습니다.</li>
+      <li>내전 팀 편성 후 20분 동안 승부 예측에 참여할 수 있습니다.</li>
+      <li>본인이 참전하는 매치의 승부 예측에는 참여할 수 없습니다.</li>
+    </ul>
+    <p class="swipe narrow-only">표를 옆으로 밀면 나머지 항목이 보입니다.</p>
     <div class="scroll">
       <table class="board by-rank" id="board">
         <thead>
@@ -94,7 +93,7 @@ th[aria-sort="descending"] .sort::after{content:'▼';font-size:9px;opacity:1}
   </div>
 
   <section class="empty-box" id="empty">
-    <h2 id="emptyTitle">순위를 불러오는 중입니다</h2>
+    <h2 id="emptyTitle">랭킹을 불러오는 중입니다</h2>
     <p id="emptyText"></p>
   </section>
 </main>
@@ -149,19 +148,8 @@ function renderStatus(){
   const parts = ['<span>' + model.players.length + '명</span>'];
   const at = Date.parse(model.updatedAt);
   if(Number.isFinite(at)) parts.push('<span>마지막으로 바뀐 때 ' + esc(TIME.format(new Date(at))) + '</span>');
-  if(stale) parts.push('<span class="warn">지금은 서버에서 새 순위를 받지 못하고 있습니다. 보이는 것은 마지막으로 받은 순위입니다.</span>');
+  if(stale) parts.push('<span class="warn">지금은 서버에서 새 랭킹을 받지 못하고 있습니다. 보이는 것은 마지막으로 받은 랭킹입니다.</span>');
   $('#status').innerHTML = parts.join('');
-}
-
-function renderLead(){
-  const top = model.players.filter(p => p.rank === 1);
-  let html = '';
-  if(top.length === 1) html = '<strong>' + esc(top[0].name) + '</strong> 선수가 ' + num(top[0].points) + ' 포인트로 선두입니다.';
-  else if(top.length > 1){
-    const names = top.slice(0, 3).map(p => '<strong>' + esc(p.name) + '</strong>').join(', ');
-    html = names + (top.length > 3 ? ' 외 ' + (top.length - 3) + '명' : '') + ' 선수가 ' + num(top[0].points) + ' 포인트로 함께 선두입니다.';
-  }
-  $('#lead').innerHTML = html;
 }
 
 function renderBoard(){
@@ -186,14 +174,13 @@ function renderBoard(){
 
 function renderAll(){
   if(!model.players.length){
-    showEmpty('아직 포인트를 받은 사람이 없습니다', '디스코드에서 오라클 봇의 포인트 받기를 누르면 이 순위에 이름이 올라옵니다.');
+    showEmpty('아직 포인트를 받은 사람이 없습니다', '디스코드에서 오라클 봇의 포인트 받기를 누르면 이 랭킹에 이름이 올라옵니다.');
     return;
   }
   $('#empty').hidden = true;
   $('#main').hidden = false;
   if(model.weekly > 0) $('#weekly').textContent = NUM.format(model.weekly);
   renderStatus();
-  renderLead();
   renderBoard();
 }
 
@@ -210,7 +197,7 @@ async function fetchBoard(){
   if(!api.ready) throw new Error('리그 서버에 연결돼 있지 않습니다.');
   const j = await api.get('oracle');
   // 예전 서버(버전 16까지)는 이 요청을 몰라 공개 상태를 대신 돌려준다
-  if(!(j.oracle && Array.isArray(j.oracle.players))) throw new Error('포인트 순위가 아직 준비되지 않았습니다. 잠시 후 다시 열어 주세요.');
+  if(!(j.oracle && Array.isArray(j.oracle.players))) throw new Error('랭킹이 아직 준비되지 않았습니다. 잠시 후 다시 열어 주세요.');
   return JSON.stringify(j.oracle);
 }
 
@@ -226,7 +213,7 @@ async function load(){
     }else if(model.players.length) renderStatus();
   }catch(err){
     if(model && model.players.length){ stale = true; renderStatus(); }
-    else if(!model) showEmpty('순위를 불러오지 못했습니다', err.message || '잠시 후 다시 시도해 주세요.');
+    else if(!model) showEmpty('랭킹을 불러오지 못했습니다', err.message || '잠시 후 다시 시도해 주세요.');
   }
   if(!timer) timer = setInterval(() => { if(document.visibilityState === 'visible') load(); }, REFRESH * 1000);
 }

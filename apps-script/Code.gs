@@ -17,7 +17,7 @@
  * 코드를 고친 뒤에는 배포 → 배포 관리 → 수정(연필) → 버전: 새 버전 → 배포 를 눌러야 반영됩니다.
  */
 
-const SERVER_VERSION = 17;                         // 서버를 고칠 때마다 올린다. 상태 응답에 실려서 새 버전이 배포됐는지 밖에서 확인할 수 있다
+const SERVER_VERSION = 18;                         // 서버를 고칠 때마다 올린다. 상태 응답에 실려서 새 버전이 배포됐는지 밖에서 확인할 수 있다
 const SHEET_NAME = '선수등록';                             // 등록 탭 이름의 앞부분. 시즌마다 '선수등록 (시즌 이름)' 탭을 따로 쓴다
 // 칸을 더할 때는 맨 뒤에 붙이고 LAYOUT 을 올린다. 이미 있는 탭에는 ready_ 가 새 머리글을 채워 넣는다
 // 처리자·처리시각: 그 등록의 상태(승인·제외·대기)를 마지막으로 바꾼 리그 관리자와 그 시각 (버전 11)
@@ -120,7 +120,7 @@ function doPost(e) {
       case 'pushLineup': requireAdmin_(body); return pushLineup_(body);
       case 'adminLineup': requireAdmin_(body); return { lineup: getLineup_() };
       case 'saveOracle': requireAdmin_(body); return saveOracle_(body);
-      case 'adminOracle': requireAdmin_(body); return oracleState_();
+      case 'adminOracle': requireAdmin_(body); return oracleState_(body);
       default: fail_('알 수 없는 요청입니다');
     }
   });
@@ -265,6 +265,9 @@ function adminStatus_() {
     registered: Math.max(0, getSheet_().getLastRow() - 1),
     pastSeasons: seasons_().slice(0, -1).map(s => s.name),
     alert: !!PropertiesService.getScriptProperties().getProperty('ALERT_WEBHOOK'),   // 새 등록 알림이 켜져 있는지만. 웹후크 주소는 돌려주지 않는다
+    // 오라클 봇(승부 예측)을 켜 두었는지와, 그 봇이 마지막으로 이 값을 확인하러 온 때(온 적이 없으면 빈 값) (버전 18)
+    oracleOn: oracleOn_(),
+    oracleSeen: PropertiesService.getScriptProperties().getProperty('ORACLE_SEEN') || '',
     role: ACTOR && !ACTOR.owner ? 'staff' : 'owner',
     name: ACTOR ? ACTOR.name : OWNER_NAME
   });
@@ -278,6 +281,9 @@ function setConfig_(body) {
   // 시즌 종료 날짜는 어느 경기까지 순위에 넣을지를 정하는 일이라, 새 시즌 시작처럼 주인 키로만 바꾼다
   if (seasonEnd !== null && !(ACTOR && ACTOR.owner))
     fail_('시즌 종료 날짜는 주인 키로만 바꿀 수 있습니다. 주인 키를 가진 리그 관리자에게 부탁해 주세요.', 'owner');
+  // 오라클 봇(승부 예측)을 켜고 끄는 것도 주인 키로만 한다 (운영자가 2026-10-13에 정함)
+  if (typeof body.oracle === 'boolean' && !(ACTOR && ACTOR.owner))
+    fail_('오라클 봇은 주인 키로만 켜고 끌 수 있습니다. 주인 키를 가진 리그 관리자에게 부탁해 주세요.', 'owner');
   if (typeof body.open === 'boolean') {
     const was = regOpen_(props);
     props.setProperty('REG_OPEN', String(body.open));
@@ -303,6 +309,11 @@ function setConfig_(body) {
     if (old !== now) logAlone_('시즌 이름 고침', now, old + ' → ' + now);
   }
   if (typeof body.webhook === 'string') setAlert_(body.webhook.trim());
+  if (typeof body.oracle === 'boolean') {
+    const was = oracleOn_();
+    props.setProperty('ORACLE_ON', String(body.oracle));
+    if (was !== body.oracle) logAlone_(body.oracle ? '오라클 봇 켜기' : '오라클 봇 끄기', '', '');
+  }
   return adminStatus_();
 }
 
@@ -1474,6 +1485,13 @@ function writePublic_(clean) {
 /* =========================================================
    오라클 봇의 포인트 순위 (버전 17)
    ========================================================= */
+// 오라클 봇(승부 예측)을 켜 두었는가 (버전 18). 주인이 리그 관리자 페이지에서 켜고 끈다(adminConfig {oracle}). 처음에는 꺼져 있다.
+// 봇은 이 값을 5분마다 읽으러 오고(adminOracle {brief}), 팀을 짜기 직전에 받는 리그 기록에서도 받는다.
+// 꺼져 있으면 봇은 새 승부 예측을 열지 않고 포인트 받기와 걸기를 받지 않는다(이미 받던 판은 끝까지 처리한다).
+function oracleOn_() {
+  return PropertiesService.getScriptProperties().getProperty('ORACLE_ON') === 'true';
+}
+
 // 오라클 봇(승부 예측)이 정산할 때마다 올리는 포인트 순위. 순위 페이지(oracle.html)가 키 없이 읽는다.
 // 공개 기록처럼 내보내도 되는 칸만 남긴다(이름, 포인트, 손익, 건 횟수, 맞힌 횟수, 포인트를 받은 횟수). 디스코드 ID는 받아도 버린다.
 function sanitizeOracle_(b) {
@@ -1504,7 +1522,7 @@ function saveOracle_(body) {
     driveFile_('ORACLE_FILE_ID', '인하우스_오라클_순위.json').setContent(text);
     putCache_('oracle', text);
     if (backup) driveFile_('ORACLE_STATE_ID', '인하우스_오라클_포인트기록.json').setContent(backup);
-    return { updatedAt: clean.updatedAt, players: clean.players.length };
+    return { updatedAt: clean.updatedAt, players: clean.players.length, oracleOn: oracleOn_() };
   });
 }
 
@@ -1521,11 +1539,18 @@ function publicOracle_() {
 }
 
 // 봇이 받아 가는 포인트 기록의 사본. 올라온 적이 없으면 null
-function oracleState_() {
-  const id = PropertiesService.getScriptProperties().getProperty('ORACLE_STATE_ID');
-  if (!id) return { state: null };
+// brief 면 사본 없이 켜 두었는지만 알려 준다: 오라클 봇이 5분마다 이렇게 확인하러 온다. 마지막으로 온 때를 적어 두어,
+// 리그 관리자 페이지가 오라클 봇이 붙어 있는지 보여 줄 수 있게 한다
+function oracleState_(body) {
+  const props = PropertiesService.getScriptProperties();
+  if (body && body.brief === true) {
+    props.setProperty('ORACLE_SEEN', new Date().toISOString());
+    return { oracleOn: oracleOn_() };
+  }
+  const id = props.getProperty('ORACLE_STATE_ID');
+  if (!id) return { state: null, oracleOn: oracleOn_() };
   const text = readFile_(id);
-  return { state: text ? JSON.parse(text) : null };
+  return { state: text ? JSON.parse(text) : null, oracleOn: oracleOn_() };
 }
 
 /* =========================================================
@@ -1559,7 +1584,8 @@ function getLeague_() {
   // 시즌 번호와 시즌 종료 시각(밀리초, 없으면 0)은 봇이 본다: 그 시각 전에 시작한 경기만 이 시즌에 기록한다 (버전 16)
   const list = seasons_(), end = seasonEnd_(list);
   return { league: text ? JSON.parse(text) : null, rev, leagueAt: text ? (props.getProperty('LEAGUE_AT') || '') : '',
-    seasonNo: list.length - 1, seasonEnd: end.date, seasonEndAt: end.at };
+    seasonNo: list.length - 1, seasonEnd: end.date, seasonEndAt: end.at,
+    oracleOn: oracleOn_() };      // 오라클 봇을 켜 두었는지. 봇이 팀을 짜기 직전에 받아, 그 판에 승부 예측을 열지 정한다 (버전 18)
 }
 
 // 서버가 직접 고치려고 읽는 리그 기록. 한 번도 올라온 적이 없으면 null 이다.

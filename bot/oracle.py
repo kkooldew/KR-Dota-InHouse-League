@@ -12,7 +12,9 @@
   건 포인트를 모두 모아 이긴 쪽이 건 만큼 나눠 갖는다(많이 건 사람이 많이 딴다). 한쪽에만 걸렸으면 모두 돌려준다.
 - 퍼그나봇의 /승리 로 결과가 기록되면 정산한다. /승리취소 면 정산을 되돌리고(그사이 딴 포인트를 써 버렸으면 0보다 적어질 수 있다),
   다시 /승리 하면 다시 정산한다. 경기가 없던 일이 되면(/취소·/재모집·다시 열기·경기 안 함) 건 포인트를 돌려준다.
-- 포인트를 받은 적이 있는 사람들의 순위를 리그 서버에 올린다(saveOracle, 서버 버전 17). oracle.html 이 그것을 보여 준다.
+- 포인트를 받은 적이 있는 사람들의 순위를 리그 서버에 올린다(saveOracle, 서버 버전 17). oracle.html(승부의 신 랭킹)이 그것을 보여 준다.
+- 주인이 리그 관리자 페이지에서 켜고 끈다(서버 버전 18, 운영자가 2026-10-13에 요청). 처음에는 꺼져 있고, 켜 두었는지는 리그 서버에 5분마다 물어본다.
+  꺼져 있으면 새 승부 예측을 열지 않고 포인트 받기와 걸기를 받지 않는다. 이미 받던 판은 끝까지 처리한다(마감, 정산, 돌려주기).
 
 이 파일은 bot.py 를 불러오지 않는다(bot.py 가 이 파일을 불러와 setup 으로 필요한 것을 넘겨준다). 그래서 따로 시험할 수 있다(tests/oracle.test.py).
 """
@@ -38,11 +40,13 @@ KEEP_SECONDS = 7 * 86400  # 끝난 판을 이만큼 기억한다
 POST_RETRY = 600          # 올리지 못한 글을 이만큼 뒤에 다시 올려 본다
 PUBLISH_GAP = 20          # 순위를 서버에 올린 뒤 이만큼은 다시 올리지 않는다 (포인트 받기가 몰릴 때 한 번에 올리려고)
 PUBLISH_RETRY = 600       # 서버에 올리지 못했으면 이만큼 뒤에 다시 올린다
+SWITCH_POLL = 300         # 주인이 켜 두었는지를 리그 서버에 이만큼마다 물어본다
 AMOUNTS = (100, 300, 500, 1000)  # 금액 버튼
 MESSAGE_LIMIT = 1900      # 디스코드 메시지는 2000자까지라 조금 남겨 두고 나눈다
 SIDES = {"r": "🟢 래디언트", "d": "🔴 다이어"}
 QUIET = discord.AllowedMentions.none()  # 오라클 봇의 글은 멘션 알림을 울리지 않는다
 PLAYER_ONLY = "리그 선수만 쓸 수 있어요. 선수 등록을 하고 승인을 받으면 쓸 수 있어요."
+RESTING = "지금은 오라클 봇이 쉬고 있어요. 다시 켜지면 포인트를 받고 걸 수 있어요."  # 주인이 꺼 둔 동안의 답
 
 
 class State:
@@ -50,11 +54,13 @@ class State:
 
     def __init__(self) -> None:
         self.token = ""                 # 오라클 봇의 토큰 (config.json 의 oracle_token)
-        self.page = ""                  # 포인트 순위 페이지의 주소 (config.json 의 oracle_page). 정산 글에 적는다
+        self.page = ""                  # 승부의 신 랭킹(포인트 순위) 페이지의 주소 (config.json 의 oracle_page). 정산 글에 적는다
         self.path: Path | None = None   # 상태 파일
         self.host = None                # 퍼그나봇이 넘겨준 것들 (setup)
         self.client = None              # 오라클 봇의 디스코드 연결
         self.ready = False              # 로그인해서 글을 올릴 수 있는지
+        self.on = False                 # 주인이 리그 관리자 페이지에서 켜 두었는지 (리그 서버가 알려 준다. 알기 전에는 꺼진 것으로 둔다)
+        self.asked = 0.0                # 켜 두었는지를 마지막으로 물어본(또는 들은) 시각
         self.loaded = False             # 상태 파일을 읽었는지 (못 읽었으면 켤 때 서버의 사본을 받아 본다)
         self.lock = asyncio.Lock()      # 마감·정산·되돌리기의 글이 뒤섞이지 않게 한 번에 하나씩 한다
         self.task: asyncio.Task | None = None
@@ -106,7 +112,7 @@ def signed(n: int) -> str:
 
 # ── 상태 파일 ─────────────────────────────────────────────────
 def snapshot() -> dict:
-    return {"channel_id": S.channel_id, "round": S.round, "accounts": S.accounts, "books": S.books, "dirty": S.dirty}
+    return {"on": S.on, "channel_id": S.channel_id, "round": S.round, "accounts": S.accounts, "books": S.books, "dirty": S.dirty}
 
 
 def save() -> None:
@@ -133,6 +139,7 @@ def whole(v, default: int = 0) -> int:
 
 def adopt(data: dict) -> None:
     """파일(또는 서버의 사본)에서 읽은 상태를 받아들인다. 모양이 맞지 않는 것은 버린다"""
+    S.on = data.get("on") is True  # 마지막으로 알던 값. 켠 뒤 곧 리그 서버에 다시 물어본다
     S.channel_id = whole(data.get("channel_id"))
     r = data.get("round")
     S.round = ({"start": whole(r.get("start")), "message_id": whole(r.get("message_id")), "channel_id": whole(r.get("channel_id")),
@@ -172,6 +179,36 @@ def load() -> bool:
         return False
     adopt(data)
     return True
+
+
+# ── 켜고 끄기 (주인이 리그 관리자 페이지에서) ───────────────────
+def hear(value) -> None:
+    """리그 서버가 알려 준 값: 주인이 오라클 봇을 켜 두었는지. 퍼그나봇이 팀을 짜기 직전에 받는 리그 기록에도 실려 온다"""
+    if not isinstance(value, bool):
+        return
+    S.asked = now()
+    if value != S.on:
+        S.on = value
+        save()
+        print(f"[{datetime.fromtimestamp(now(), KST):%m-%d %H:%M}] 오라클 봇: 리그 관리자 페이지에서 "
+              + ("켰습니다. 승부 예측을 받습니다." if value else "껐습니다. 새 승부 예측을 열지 않습니다(받던 판은 끝까지 처리합니다)."))
+
+
+async def check_switch(force: bool = False) -> None:
+    """주인이 오라클 봇을 켜 두었는지 리그 서버에 물어본다(5분마다). 서버는 이때 봇이 다녀간 시각을 적어 두어 리그 관리자 페이지에 보여 준다.
+    답을 받지 못하면 알고 있던 대로 둔다"""
+    if S.host is None or S.host.server is None or (not force and now() - S.asked < SWITCH_POLL):
+        return
+    S.asked = now()
+    try:
+        got = await S.host.server({"action": "adminOracle", "brief": True})
+    except Exception as e:
+        note(f"오라클: 리그 서버에서 켜 두었는지 확인하지 못했습니다. 알고 있던 대로 둡니다. ({e})")
+        return
+    if isinstance(got.get("oracleOn"), bool):
+        hear(got["oracleOn"])
+    else:  # 예전 서버(버전 17까지)는 이 값을 모른다
+        note("오라클: 리그 서버가 오라클 봇을 켜 두었는지 알려 주지 않습니다(서버 버전 18부터). Code.gs 를 새 버전으로 배포하기 전에는 꺼진 채로 둡니다.")
 
 
 # ── 포인트 ────────────────────────────────────────────────────
@@ -226,14 +263,15 @@ def points_text(uid: int) -> str:
     """내 포인트 (/포인트 와 '내 포인트' 버튼)"""
     acc = S.accounts.get(str(uid))
     if not acc or not acc["claimed"]:
-        return f"아직 포인트를 받은 적이 없어요. **포인트 받기**를 누르면 이번 주 {WEEKLY_POINTS:,} 포인트를 받아요."
+        return f"아직 포인트를 받은 적이 없어요. **포인트 받기**를 누르면 이번 주 {WEEKLY_POINTS:,} 포인트를 받아요." if S.on else RESTING
     week, out = week_start(), staked(uid)
     lines = [f"🔮 보유 포인트는 **{num(acc['points'])}**이에요." + (f" 걸어 둔 포인트 {out:,}은 뺀 값이에요." if out else ""),
              f"승부 예측 {acc['bets']}번 가운데 {acc['hits']}번 맞혔고, 손익은 {signed(acc['profit'])} 포인트예요.",
-             (f"이번 주 포인트는 받았어요. 다음 포인트는 <t:{week + 7 * 86400}:F>부터 받을 수 있어요." if acc["week"] == week
+             (RESTING if not S.on
+              else f"이번 주 포인트는 받았어요. 다음 포인트는 <t:{week + 7 * 86400}:F>부터 받을 수 있어요." if acc["week"] == week
               else "이번 주 포인트를 아직 받지 않았어요. **포인트 받기**를 눌러 받으세요.")]
     if S.page:
-        lines.append(f"포인트 순위: <{S.page}>")
+        lines.append(f"승부의 신 랭킹: <{S.page}>")
     return "\n".join(lines)
 
 
@@ -427,7 +465,7 @@ def result_text(book: dict) -> str:
     lost = [f"<@{uid}> −{b['amount']:,} · 보유 {num(points_of(int(uid)))}" for uid, b in rows if b["side"] != w]
     lines += ["", "🎉 **맞힌 사람**"] + won + ["", "💸 **틀린 사람**"] + lost
     if S.page:
-        lines += ["", f"📊 포인트 순위: <{S.page}>"]
+        lines += ["", f"📊 승부의 신 랭킹: <{S.page}>"]
     return "\n".join(lines)
 
 
@@ -552,8 +590,8 @@ async def call_off(book: dict, why: str) -> None:
 # ── 퍼그나봇이 알려 주는 일들 ───────────────────────────────────
 # 퍼그나봇의 흐름(마감, /승리 등)을 멈추면 안 되므로, 여기서 생긴 문제는 창에 찍고 넘어간다.
 async def on_lineup(entry: dict) -> None:
-    """퍼그나봇이 팀을 짜서 알렸다. 그 글 아래에 승부 예측을 연다"""
-    if not enabled():
+    """퍼그나봇이 팀을 짜서 알렸다. 그 글 아래에 승부 예측을 연다 (주인이 꺼 두었으면 열지 않는다)"""
+    if not enabled() or not S.on:
         return
     try:
         who = entry.get("who") or {}
@@ -633,7 +671,7 @@ def roll_round() -> bool:
 async def post_round(force: bool = False) -> None:
     """이번 주의 '포인트 받기' 글을 정해 둔 채널에 올린다. 앞의 글은 지워서 글은 늘 하나다. force 면 이미 올렸어도 새로 올린다(채널을 바꿨을 때)"""
     r = S.round
-    if not S.ready or not S.channel_id or r is None:
+    if not S.ready or not S.on or not S.channel_id or r is None:
         return
     if not force and ((r["message_id"] and r["channel_id"] == S.channel_id) or now() - r.get("tried", 0) < POST_RETRY):
         return
@@ -699,7 +737,9 @@ async def restore() -> None:
 
 # ── 주기적으로 확인 ────────────────────────────────────────────
 async def tick() -> None:
-    """마감할 판을 마감하고, 새 주가 시작됐으면 '포인트 받기' 글을 올리고, 바뀐 순위를 서버에 올린다"""
+    """마감할 판을 마감하고, 새 주가 시작됐으면 '포인트 받기' 글을 올리고, 바뀐 순위를 서버에 올린다.
+    주인이 꺼 둔 동안에도 받던 판은 여기서 끝까지 처리한다"""
+    await check_switch()
     roll_round()
     await post_round()
     for book in list(S.books):
@@ -739,6 +779,9 @@ async def claim_points(interaction: discord.Interaction) -> None:
     if not await S.host.can_play(interaction.user):
         await reply(interaction, PLAYER_ONLY)
         return
+    if not S.on:
+        await reply(interaction, RESTING)
+        return
     _, text = claim(interaction.user.id, interaction.user)
     await reply(interaction, text)
 
@@ -749,7 +792,7 @@ async def show_points(interaction: discord.Interaction) -> None:
         await reply(interaction, PLAYER_ONLY)
         return
     acc = S.accounts.get(str(interaction.user.id))
-    waiting = not acc or acc["week"] != week_start()
+    waiting = S.on and (not acc or acc["week"] != week_start())
     await reply(interaction, points_text(interaction.user.id), ClaimView() if waiting else None)
 
 
@@ -758,6 +801,9 @@ async def pick_side(interaction: discord.Interaction, side: str) -> None:
     uid = interaction.user.id
     if not await S.host.can_play(interaction.user):
         await reply(interaction, PLAYER_ONLY)
+        return
+    if not S.on:
+        await reply(interaction, RESTING)
         return
     book = book_at(interaction.channel_id, live=True)
     why = bet_block(book, uid)
@@ -779,6 +825,9 @@ async def put_amount(interaction: discord.Interaction, key: str, side: str, amou
     """금액 버튼(또는 직접 입력): 건다. 금액을 고르던 글을 결과로 바꾼다"""
     if not await S.host.can_play(interaction.user):
         await interaction.response.edit_message(content=PLAYER_ONLY, view=None)
+        return
+    if not S.on:
+        await interaction.response.edit_message(content=RESTING, view=None)
         return
     book = find_book(key)
     ok, text = place(book, interaction.user.id, side, amount, interaction.user)
@@ -927,15 +976,18 @@ async def cmd_setup(interaction: discord.Interaction, channel: Optional[discord.
         return
     actor = f"<@{interaction.user.id}>"
     if channel is None:
-        where = f"<#{S.channel_id}>" if S.channel_id else "정하지 않음 (정하면 그 채널에 이번 주 글을 바로 올려요)"
+        await interaction.response.defer()
+        await check_switch(force=True)  # 리그 관리자 페이지에서 방금 켜고 껐으면 여기서 바로 반영된다
+        where = f"<#{S.channel_id}>" if S.channel_id else "정하지 않음 (정하면 그 채널에 이번 주 글을 올려요)"
         got = sum(1 for a in S.accounts.values() if a["claimed"])
-        await interaction.response.send_message(f"{actor}님, 오라클 봇의 설정이에요.\n'포인트 받기' 글을 올리는 채널: {where}\n"
-                                                f"포인트를 받은 적이 있는 사람: {got}명", allowed_mentions=QUIET)
+        await interaction.followup.send(f"{actor}님, 오라클 봇의 설정이에요.\n"
+                                        f"승부 예측: {'**켜짐**' if S.on else '**꺼짐**'} (주인이 리그 관리자 페이지에서 켜고 꺼요. 바꾸면 5분 안에 반영돼요)\n"
+                                        f"'포인트 받기' 글을 올리는 채널: {where}\n포인트를 받은 적이 있는 사람: {got}명", allowed_mentions=QUIET)
         return
     S.channel_id = channel.id
     save()
-    await interaction.response.send_message(f"{actor}님이 '포인트 받기' 글을 올릴 채널을 <#{channel.id}> 로 정했어요. 이번 주 글을 그 채널에 올려요.",
-                                            allowed_mentions=QUIET)
+    await interaction.response.send_message(f"{actor}님이 '포인트 받기' 글을 올릴 채널을 <#{channel.id}> 로 정했어요. "
+                                            + ("이번 주 글을 그 채널에 올려요." if S.on else "오라클 봇이 켜지면 그 채널에 올려요."), allowed_mentions=QUIET)
     roll_round()
     await post_round(force=True)
 
@@ -960,6 +1012,7 @@ class OracleBot(discord.Client):
             return
         self.started = True
         await restore()
+        await check_switch(force=True)  # 주인이 켜 두었는지부터 물어본다
         S.ready = True
         for line in status():
             print(line)
@@ -991,7 +1044,9 @@ def status() -> list[str]:
         return f" [확인 필요] 오라클 봇에 없는 권한: {', '.join(lack)}" if lack else " - 권한 확인"
 
     signup = guild.get_channel(S.host.signup_channel_id)
-    lines = ["오라클 승부 예측(팀 편성 아래에 올립니다): " + (
+    lines = ["오라클 봇: " + ("켜짐 (승부 예측을 받습니다)" if S.on
+                           else "꺼짐 (주인이 리그 관리자 페이지에서 오라클 봇을 켜면 5분 안에 승부 예측을 받습니다)"),
+             "오라클 승부 예측(팀 편성 아래에 올립니다): " + (
         f"#{signup.name}" + missing(signup, {"view_channel": "채널 보기", "send_messages_in_threads": "스레드에서 메시지 보내기"}
                                     if isinstance(signup, discord.ForumChannel) else {"view_channel": "채널 보기", "send_messages": "메시지 보내기"})
         if signup is not None else "[확인 필요] 오라클 봇이 참여 신청 채널을 볼 수 없습니다. 그 채널에 오라클 봇을 넣어 주세요.")]
@@ -1000,7 +1055,7 @@ def status() -> list[str]:
         f"#{channel.name}" + missing(channel, {"view_channel": "채널 보기", "send_messages": "메시지 보내기"}) if channel is not None
         else "[확인 필요] 정해 둔 채널을 찾지 못했습니다. `/오라클설정` 으로 다시 정해 주세요." if S.channel_id
         else "채널을 정하지 않음 (리그 관리자가 운영진 채널에서 `/오라클설정` 으로 정하면 올립니다. `/포인트` 로는 지금도 받을 수 있습니다)"))
-    lines.append("오라클 포인트 순위: " + ((S.page or "페이지 주소를 정하지 않음 (config.json 의 oracle_page)")
+    lines.append("오라클 승부의 신 랭킹: " + ((S.page or "페이지 주소를 정하지 않음 (config.json 의 oracle_page)")
                                     + ("" if S.host.server is not None else " [확인 필요] 리그 서버 설정(sync_url, sync_key)이 없어 순위를 올리지 못합니다")))
     return lines
 

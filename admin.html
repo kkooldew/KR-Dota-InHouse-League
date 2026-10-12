@@ -174,6 +174,15 @@ details.by-file[open] summary{margin-bottom:10px}
       </div>
       <p class="season-note" id="alertNote" hidden>새 선수 등록이 들어오면 디스코드 채널에 바로 알립니다. 알림을 받을 채널에서 <b>채널 편집 → 연동 → 웹후크 → 새 웹후크</b>를 만들고 <b>웹후크 URL 복사</b>로 받은 주소를 넣어 주세요.
         이 주소를 아는 사람은 그 채널에 글을 올릴 수 있으니 다른 사람에게 보여 주지 마세요. 주인 키로만 바꿀 수 있습니다.</p>
+      <div class="season-row" id="oracleRow" hidden>
+        <span class="dim" style="font-size:13.5px">오라클 봇</span>
+        <span class="pill" id="oraclePill"></span>
+        <button class="btn sm" type="button" id="btnOracle"></button>
+        <span class="dim" id="oracleState" style="font-size:12.5px"></span>
+      </div>
+      <p class="season-note" id="oracleNote" hidden>오라클 봇은 내전의 <b>승부 예측</b>(포인트 걸기)을 맡는 봇입니다. 켜고 끄는 것은 <b>5분 안에</b> 봇에 반영됩니다.
+        끄면 새 승부 예측이 열리지 않고 포인트 받기와 걸기가 멈춥니다. 이미 받고 있거나 결과를 기다리는 판은 끝까지 처리합니다(마감, 정산, 돌려주기).
+        주인 키로만 바꿀 수 있습니다. <a href="oracle.html">승부의 신 랭킹 보기</a></p>
     </section>
 
     <section class="panel">
@@ -390,6 +399,15 @@ details.by-file[open] summary{margin-bottom:10px}
     $('#alertState').textContent = status.alert ? '켜져 있습니다.' : '꺼져 있습니다.';
     $('#btnAlert').textContent = status.alert ? '주소 바꾸기' : '알림 켜기';
     $('#btnAlertOff').hidden = !status.alert;
+    // 오라클 봇(서버 버전 18): 주인 키로만 켜고 끈다. 봇은 이 값을 5분마다 읽으러 오고, 서버는 봇이 마지막으로 다녀간 때를 알려 준다
+    const canOracle = owner && (status.version || 0) >= 18;
+    $('#oracleRow').hidden = !canOracle; $('#oracleNote').hidden = !canOracle;
+    $('#oraclePill').textContent = status.oracleOn ? '켜짐' : '꺼짐';
+    $('#oraclePill').className = 'pill ' + (status.oracleOn ? 'on' : 'off');
+    $('#btnOracle').textContent = status.oracleOn ? '오라클 봇 끄기' : '오라클 봇 켜기';
+    $('#oracleState').textContent = status.oracleSeen
+      ? '오라클 봇이 마지막으로 확인하러 온 때는 ' + fmt(status.oracleSeen) + '입니다.'
+      : '오라클 봇이 아직 접속한 적이 없습니다. 봇을 돌리는 컴퓨터의 config.json 에 oracle_token 을 넣고 봇을 다시 켜야 합니다.';
     if(hasStaff() && owner && !staffSeen){ staffSeen = true; loadStaff(); }
     const auto = autoLink(), box = $('#byFile');
     $('#autoLink').hidden = !auto; $('#linkHint').hidden = !auto; $('#fileWhen').hidden = !auto;
@@ -432,6 +450,18 @@ details.by-file[open] summary{margin-bottom:10px}
     if(!next && !confirm('선수 등록을 닫을까요? 닫는 동안에는 새로 등록하거나 정보를 고칠 수 없습니다.')) return;
     try{ status = await adminPost({action: 'adminConfig', open: next}); renderStatus(); toast(next ? '등록을 열었습니다' : '등록을 닫았습니다'); }
     catch(err){ toast(err.message); }
+  });
+  /* ---------- 오라클 봇(승부 예측) 켜고 끄기: 주인 키로만 ---------- */
+  $('#btnOracle').addEventListener('click', async () => {
+    const next = !status.oracleOn;
+    if(!next && !confirm('오라클 봇을 끌까요? 새 승부 예측이 열리지 않고, 포인트 받기와 걸기가 멈춥니다. 이미 받고 있는 판은 끝까지 처리합니다.')) return;
+    $('#btnOracle').disabled = true;
+    try{
+      status = await adminPost({action: 'adminConfig', oracle: next});
+      renderStatus();
+      toast(next ? '오라클 봇을 켰습니다. 5분 안에 봇에 반영됩니다.' : '오라클 봇을 껐습니다. 5분 안에 봇에 반영됩니다.', 5000);
+    }catch(err){ toast(err.message); }
+    finally{ $('#btnOracle').disabled = false; }
   });
   /* ---------- 날짜로 닫기: 모집 종료 날짜와 시즌 종료 날짜 (그날 0시에 저절로 닫힌다) ---------- */
   // field 는 서버에 보내는 이름(regClose | seasonEnd). day 가 빈 값이면 날짜를 지운다

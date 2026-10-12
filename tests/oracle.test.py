@@ -87,11 +87,18 @@ class World:
         self.players = set()              # 리그 선수 역할이 있는 사람들
         self.nicks = {}                   # 디스코드 ID → 리그 닉네임
         self.asked, self.fail, self.backup = [], False, None
+        self.switch = True                # 주인이 리그 관리자 페이지에서 오라클 봇을 켜 두었는지. None 이면 그 값을 모르는 예전 서버처럼 군다
+        self.polls, self.deaf = 0, False  # 봇이 켜 두었는지 물어본 횟수. deaf 면 그 물음에 답하지 않는다
 
         async def can_play(user):
             return user.id in self.players
 
         async def ask(payload):
+            if payload["action"] == "adminOracle" and payload.get("brief"):   # 켜 두었는지 5분마다 물어본다
+                self.polls += 1
+                if self.deaf:
+                    raise RuntimeError("서버가 답하지 않음")
+                return {"ok": True} if self.switch is None else {"ok": True, "oracleOn": self.switch}
             self.asked.append(payload)
             if self.fail:
                 raise RuntimeError("서버 오류")
@@ -104,6 +111,7 @@ class World:
             is_manager=lambda user: user.id == 1, nickname=lambda uid, username: self.nicks.get(uid), server=ask if server else None))
         mod.S.client = SimpleNamespace(get_partial_messageable=self.place)
         mod.S.ready = True
+        mod.S.on = True                   # 주인이 켜 둔 상태에서 본다 (꺼 둔 경우는 따로 본다)
 
     def place(self, cid):
         if cid not in self.places:
@@ -120,7 +128,10 @@ def inter(channel_id, u):
     i.channel_id, i.user = channel_id, u
     i.response = Mock()
     i.response.send_message, i.response.edit_message, i.response.send_modal = AsyncMock(), AsyncMock(), AsyncMock()
+    i.response.defer = AsyncMock()
     i.response.is_done = Mock(return_value=False)
+    i.followup = Mock()
+    i.followup.send = AsyncMock()
     return i
 
 
@@ -128,6 +139,8 @@ def said(i):
     """그 요청에 한 답 (새로 보낸 답이거나, 버튼이 있던 글을 고친 것)"""
     if i.response.send_message.call_args:
         return i.response.send_message.call_args.args[0]
+    if i.followup.send.call_args:
+        return i.followup.send.call_args.args[0]
     return i.response.edit_message.call_args.kwargs["content"] if i.response.edit_message.call_args else ""
 
 
@@ -200,8 +213,8 @@ async def main():
     i = inter(400, A)
     await mod.show_points(i)
     check(said(i) == "🔮 보유 포인트는 **3,000**이에요.\n승부 예측 0번 가운데 0번 맞혔고, 손익은 0 포인트예요.\n"
-          f"이번 주 포인트는 받았어요. 다음 포인트는 <t:{MON + 4 * WEEK}:F>부터 받을 수 있어요.\n포인트 순위: <https://example.invalid/oracle.html>"
-          and view_of(i) is None, "/포인트: 보유 포인트와 전적, 순위 페이지. 이번 주 것을 받았으면 받기 버튼은 없다")
+          f"이번 주 포인트는 받았어요. 다음 포인트는 <t:{MON + 4 * WEEK}:F>부터 받을 수 있어요.\n승부의 신 랭킹: <https://example.invalid/oracle.html>"
+          and view_of(i) is None, "/포인트: 보유 포인트와 전적, 랭킹 페이지. 이번 주 것을 받았으면 받기 버튼은 없다")
     w.at += WEEK
     i = inter(400, A)
     await mod.show_points(i)
@@ -225,8 +238,9 @@ async def main():
     check(said(i) == "이 명령어는 운영진 채널에서만 쓸 수 있어요.", "/오라클설정: 운영진 채널에서만 쓴다")
     i = inter(100, ADMIN)
     await mod.cmd_setup(i, None)
-    check(said(i).startswith("<@1>님, 오라클 봇의 설정이에요.\n'포인트 받기' 글을 올리는 채널: 정하지 않음") and "받은 적이 있는 사람: 0명" in said(i),
-          "/오라클설정: 비우고 쓰면 지금 설정을 보여 준다")
+    check(said(i) == "<@1>님, 오라클 봇의 설정이에요.\n승부 예측: **켜짐** (주인이 리그 관리자 페이지에서 켜고 꺼요. 바꾸면 5분 안에 반영돼요)\n"
+          "'포인트 받기' 글을 올리는 채널: 정하지 않음 (정하면 그 채널에 이번 주 글을 올려요)\n포인트를 받은 적이 있는 사람: 0명",
+          "/오라클설정: 비우고 쓰면 지금 설정을 보여 준다 (켜져 있는지도)")
     i = inter(100, ADMIN)
     await mod.cmd_setup(i, SimpleNamespace(id=400))
     post = w.place(400).sent[-1]
@@ -400,7 +414,7 @@ async def main():
     check((acc["11"]["bets"], acc["11"]["hits"], acc["11"]["profit"]) == (1, 1, 250) and (acc["13"]["bets"], acc["13"]["hits"], acc["13"]["profit"]) == (1, 0, -300),
           "정산: 맞힌 횟수와 손익을 적어 둔다")
     check(w.place(300).texts()[2] == "🔮 **승부 예측 결과** — 🟢 래디언트 승리! (배당 1.50배)\n\n🎉 **맞힌 사람**\n<@11> **+250** · 보유 1,250\n<@12> **+50** · 보유 1,050\n\n"
-          "💸 **틀린 사람**\n<@13> −300 · 보유 700\n\n📊 포인트 순위: <https://example.invalid/oracle.html>", "정산: 결과와 얻고 잃은 포인트를 그 글에 알린다")
+          "💸 **틀린 사람**\n<@13> −300 · 보유 700\n\n📊 승부의 신 랭킹: <https://example.invalid/oracle.html>", "정산: 결과와 얻고 잃은 포인트를 그 글에 알린다")
     i = inter(300, A)
     await mod.show_mine(i)
     check(said(i) == "🟢 래디언트에 **500 포인트**를 걸어 맞혔어요. **+250** 포인트를 얻었어요. 보유 포인트는 1,250이에요.", "내 베팅: 정산한 뒤")
@@ -619,6 +633,104 @@ async def main():
     w.backup = {"accounts": {"1": {"points": 5}}}
     await mod.restore()
     check("1" not in mod.S.accounts, "사본은 켤 때 한 번만 받아 온다")
+
+    # ── 켜고 끄기: 주인이 리그 관리자 페이지에서 켜고 끈다. 봇은 리그 서버에 5분마다 물어본다 ──
+    path.unlink(missing_ok=True)
+    w = World(mod, path, T0)
+    w.players = {11, 12, 13}
+    mod.S.on = False                                           # 처음에는 꺼져 있다 (리그 서버에 물어보기 전)
+    check(mod.status_line() == "켜는 중 (로그인하면 아래에 따로 알립니다)", "토큰이 있으면 오라클 봇은 로그인한다 (승부 예측을 받는지는 주인이 켜 두었는지에 달렸다)")
+    w.switch = False
+    await mod.tick()
+    check(w.polls == 1 and not mod.S.on, "켤 때 리그 서버에 주인이 켜 두었는지 물어본다. 꺼 두었으면 꺼진 채로 있다")
+    i = inter(100, ADMIN)
+    await mod.cmd_setup(i, SimpleNamespace(id=400))
+    check(said(i) == "<@1>님이 '포인트 받기' 글을 올릴 채널을 <#400> 로 정했어요. 오라클 봇이 켜지면 그 채널에 올려요." and 400 not in w.places,
+          "꺼져 있는 동안: '포인트 받기' 글을 올리지 않는다")
+    i = inter(400, A)
+    await mod.claim_points(i)
+    check(said(i) == mod.RESTING == "지금은 오라클 봇이 쉬고 있어요. 다시 켜지면 포인트를 받고 걸 수 있어요." and "11" not in mod.S.accounts, "꺼져 있는 동안: 포인트를 받을 수 없다")
+    i = inter(400, A)
+    await mod.cmd_points(i)
+    check(said(i) == mod.RESTING and view_of(i) is None, "꺼져 있는 동안: /포인트 도 쉬고 있다고 알린다 (받기 버튼이 없다)")
+    await mod.on_lineup(lineup(1))
+    check(mod.S.books == [] and 300 not in w.places, "꺼져 있는 동안: 팀이 짜여도 승부 예측을 열지 않는다")
+    await mod.tick()
+    check(w.polls == 1, "5분이 되기 전에는 다시 묻지 않는다")
+    w.switch = True
+    w.at += 300
+    with contextlib.redirect_stdout(io.StringIO()) as out:
+        await mod.tick()
+    check(w.polls == 2 and mod.S.on and "리그 관리자 페이지에서 켰습니다" in out.getvalue() and len(w.place(400).sent) == 1
+          and json.loads(path.read_text(encoding="utf-8"))["on"] is True, "주인이 켜면 5분 안에 알아채고, 그때 이번 주 '포인트 받기' 글을 올린다")
+    await mod.claim_points(inter(400, A))
+    await mod.claim_points(inter(400, B))
+    await mod.claim_points(inter(400, C))
+    game = lineup(1)
+    await mod.on_lineup(game)
+    held = mod.S.books[0]
+    await mod.put_amount(inter(300, A), held["key"], "r", 400)
+    await mod.put_amount(inter(300, B), held["key"], "d", 100)
+    check(held["state"] == "open" and len(held["bets"]) == 2, "켜져 있으면 승부 예측을 연다")
+    # 받는 중에 주인이 껐다: 새로 걸 수는 없지만 받던 판은 끝까지 처리한다
+    w.switch = False
+    i = inter(100, ADMIN)
+    with contextlib.redirect_stdout(io.StringIO()) as out:
+        await mod.cmd_setup(i, None)
+    check(not mod.S.on and "승부 예측: **꺼짐**" in said(i) and "리그 관리자 페이지에서 껐습니다" in out.getvalue() and w.polls == 3,
+          "/오라클설정 을 비우고 쓰면 그 자리에서 다시 물어본다 (방금 끈 것이 바로 반영된다)")
+    i = inter(300, C)
+    await mod.pick_side(i, "r")
+    check(said(i) == mod.RESTING and view_of(i) is None, "꺼져 있는 동안: 진영 버튼을 눌러도 걸 수 없다")
+    i = inter(300, C)
+    await mod.put_amount(i, held["key"], "r", 100)
+    check(said(i) == mod.RESTING and "13" not in held["bets"] and mod.S.accounts["13"]["points"] == 1000, "꺼져 있는 동안: 금액 버튼을 눌러도 걸리지 않는다")
+    i = inter(400, A)
+    await mod.show_points(i)
+    check(said(i) == "🔮 보유 포인트는 **600**이에요. 걸어 둔 포인트 400은 뺀 값이에요.\n승부 예측 0번 가운데 0번 맞혔고, 손익은 0 포인트예요.\n" + mod.RESTING
+          + "\n승부의 신 랭킹: <https://example.invalid/oracle.html>" and view_of(i) is None, "꺼져 있는 동안: 내 포인트는 볼 수 있다")
+    w.at = held["closes"]
+    await mod.tick()
+    check(held["state"] == "closed" and w.place(300).texts()[-1].startswith("🔮 **승부 예측 마감** — 2명이 걸었어요."), "꺼진 뒤에도 받던 판은 20분에 마감한다")
+    await mod.on_result(game, "d")
+    check(held["state"] == "settled" and mod.S.accounts["12"]["points"] == 1400 and mod.S.accounts["11"]["points"] == 600
+          and w.place(300).texts()[-1].startswith("🔮 **승부 예측 결과** — 🔴 다이어 승리!"), "꺼진 뒤에도 받던 판은 결과가 나오면 정산한다")
+    await mod.on_lineup(lineup(2, place=301))
+    check(len(mod.S.books) == 1, "꺼진 뒤에 짜인 팀에는 승부 예측을 열지 않는다")
+    w.at = MON + WEEK + 5
+    n = len(w.place(400).sent)
+    await mod.tick()
+    check(len(w.place(400).sent) == n and mod.S.round["start"] == MON + WEEK, "꺼져 있는 동안에는 새 주가 돼도 '포인트 받기' 글을 올리지 않는다")
+    # 퍼그나봇이 팀을 짜기 직전에 받는 리그 기록에도 그 값이 실려 온다
+    with contextlib.redirect_stdout(io.StringIO()):
+        mod.hear(True)
+    check(mod.S.on and mod.S.asked == w.at, "리그 기록에 실려 온 값으로도 켜진다 (그 판부터 승부 예측을 연다)")
+    mod.hear(None)
+    mod.hear("true")
+    check(mod.S.on, "그 값을 주지 않는 답은 건드리지 않는다")
+    # 서버가 답하지 않을 때와, 그 값을 모르는 예전 서버
+    w.deaf, w.switch = True, False
+    w.at += 300
+    with contextlib.redirect_stdout(io.StringIO()) as out:
+        await mod.tick()
+        w.at += 300
+        await mod.tick()
+    check(mod.S.on and out.getvalue().count("켜 두었는지 확인하지 못했습니다") == 1, "리그 서버가 답하지 않으면 알고 있던 대로 둔다 (같은 안내를 되풀이하지 않는다)")
+    w.deaf, w.switch = False, None
+    w.at += 300
+    with contextlib.redirect_stdout(io.StringIO()) as out:
+        await mod.tick()
+    check(mod.S.on and "서버 버전 18부터" in out.getvalue(), "그 값을 모르는 예전 서버의 답으로는 바꾸지 않는다")
+    old = World(mod, path, T0)                                 # 봇을 껐다 켠 것처럼: 마지막으로 알던 값을 파일에서 읽는다
+    check(json.loads(path.read_text(encoding="utf-8"))["on"] is True, "켜져 있는지를 파일에 적어 둔다")
+    mod.S = mod.State()
+    mod.setup(token="x", path=path, host=old.mod.S.host if False else SimpleNamespace(guild=discord.Object(id=1), admin_channel_id=100, signup_channel_id=200,
+                                                                                    can_play=None, is_manager=None, nickname=lambda uid, username: None, server=None))
+    check(mod.S.on is True, "봇을 껐다 켜면 마지막으로 알던 값에서 시작한다 (곧 리그 서버에 다시 물어본다)")
+    path.unlink()
+    mod.S = mod.State()
+    mod.setup(token="x", path=path, host=None)
+    check(mod.S.on is False, "기록이 없는 처음에는 꺼진 것으로 시작한다 (리그 서버가 켜 두었다고 알려 줄 때까지)")
 
     # ── 오라클 봇을 쓰지 않을 때(토큰이 없을 때)는 아무 일도 하지 않는다 ──
     path.unlink(missing_ok=True)

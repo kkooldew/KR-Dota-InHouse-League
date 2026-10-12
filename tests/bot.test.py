@@ -2422,6 +2422,9 @@ async def main():
         def enabled(self):
             return True
 
+        def hear(self, value):   # 리그 기록의 답에 실려 오는 '켜 두었는지'
+            pass
+
         async def on_lineup(self, entry):
             place = await mod.get_channel(entry["place_id"])   # 그 내전의 글
             told.append(("lineup", entry, len(mod.bot.lineups), [c.args[0] for c in place.send.call_args_list]))
@@ -2463,6 +2466,15 @@ async def main():
     await run(mod.record_win, 300, ADMIN, "r")
     check(told == [("void", entry)], "오라클: 시즌 종료 뒤에 시작한 경기라 결과를 기록하지 않고 치우면, 없던 일이 됐다고 알려 준다")
     mod.oracle = real_oracle
+    # 주인이 리그 관리자 페이지에서 오라클 봇을 켜 두었는지는 리그 기록의 답에 실려 온다 (서버 버전 18). 팀을 짜기 직전에 받아 오라클에게 알린다
+    with contextlib.redirect_stdout(io.StringIO()):
+        mod.note_season({"seasonNo": 3, "oracleOn": True})
+    on = mod.oracle.S.on
+    mod.note_season({"seasonNo": 3})
+    kept = mod.oracle.S.on
+    with contextlib.redirect_stdout(io.StringIO()):
+        mod.note_season({"oracleOn": False})
+    check(on is True and kept is True and mod.oracle.S.on is False, "오라클: 리그 기록의 답에 실린 '켜 두었는지'를 오라클에게 알린다 (그 값이 없는 답은 건드리지 않는다)")
     mod.SYNC_URL, mod.SYNC_KEY = "", ""
 
     # ── 운영진 명령어로 봇이 하는 답은 모두 그 명령어를 쓴 운영진의 멘션으로 시작한다 (이 파일에서 돌린 모든 명령어를 본다) ──

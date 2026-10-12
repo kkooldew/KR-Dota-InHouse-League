@@ -14,7 +14,7 @@
 .status{font-size:13px;color:var(--bone-dim);display:flex;flex-wrap:wrap;gap:4px 16px;align-items:center;margin-bottom:6px}
 .status .warn{color:var(--dire)}
 .lead{margin:18px 0 24px;font-size:19px;line-height:1.5;max-width:60ch}
-.lead strong{font-weight:700}
+.lead[hidden] + .tabs{margin-top:16px}
 .search{background:var(--ink-2);border:1px solid var(--line);border-radius:3px;padding:7px 10px;min-width:0;flex:1 1 160px;max-width:240px}
 .empty-box{border:1px dashed var(--line);border-radius:4px;padding:28px 24px;max-width:640px}
 .empty-box h2{margin:0 0 6px;font-size:18px}
@@ -330,20 +330,11 @@ function renderAll(){
   renderMatches();
 }
 
+// 누가 선두인지는 적지 않는다(운영자가 2026-10-13에 빼 달라고 함). 아직 치른 경기가 없을 때의 안내만 남긴다
 function renderLead(){
-  const top = ranked(model.players).filter(x => x.rank === 1).map(x => x.p);
-  let html;
-  if(!top.length){
-    html = '아직 치른 경기가 없습니다. 첫 경기 결과가 올라오면 순위가 생깁니다.';
-  }else if(top.length === 1){
-    const p = top[0];
-    html = '<strong>' + esc(p.name) + '</strong> 선수가 ' + p.wins + '승 ' + p.losses + '패로 선두입니다.';
-  }else{
-    const names = top.slice(0, 3).map(p => '<strong>' + esc(p.name) + '</strong>').join(', ');
-    const rest = top.length > 3 ? ' 외 ' + (top.length - 3) + '명' : '';
-    html = names + rest + ' 선수가 ' + top[0].wins + '승 ' + top[0].losses + '패로 공동 선두입니다.';
-  }
-  $('#lead').innerHTML = html;
+  const none = !ranked(model.players).some(x => x.rank === 1);
+  $('#lead').hidden = !none;
+  $('#lead').textContent = none ? '아직 치른 경기가 없습니다. 첫 경기 결과가 올라오면 순위가 생깁니다.' : '';
 }
 
 function renderStatus(){
