@@ -70,7 +70,7 @@ class State:
         self.lock = asyncio.Lock()      # 마감·정산·되돌리기의 글이 뒤섞이지 않게 한 번에 하나씩 한다
         self.task: asyncio.Task | None = None
         self.channel_id = 0             # 매주 '포인트 받기' 글을 올리는 채널 (/오라클설정)
-        self.round: dict | None = None  # 이번 주 {"start": 주가 시작한 시각, "message_id", "channel_id", "prev": 지울 앞 글 [채널, 글]}
+        self.round: dict | None = None  # 이번 주 {"start": 주가 시작한 시각, "message_id", "channel_id", "stale": 지워야 할 앞의 글들 [[채널, 글], …]}
         self.accounts: dict[str, dict] = {}  # 디스코드 ID(글자) → {"points", "claimed", "week", "name", "username", "nick", "bets", "hits", "profit", "played", "earned"}
         self.books: list[dict] = []     # 승부 예측 한 판씩 (open → closed → settled, 또는 void)
         self.dirty = False              # 서버에 올려야 할 바뀐 순위가 있는지
@@ -157,7 +157,8 @@ def adopt(data: dict) -> None:
     S.channel_id = whole(data.get("channel_id"))
     r = data.get("round")
     S.round = ({"start": whole(r.get("start")), "message_id": whole(r.get("message_id")), "channel_id": whole(r.get("channel_id")),
-                "prev": r.get("prev") if isinstance(r.get("prev"), list) and len(r.get("prev")) == 2 else None}
+                "stale": [[whole(x[0]), whole(x[1])] for x in (r.get("stale") if isinstance(r.get("stale"), list) else [])
+                          if isinstance(x, list) and len(x) == 2 and whole(x[0]) and whole(x[1])]}
                if isinstance(r, dict) and whole(r.get("start")) else None)
     accounts = data.get("accounts") if isinstance(data.get("accounts"), dict) else {}
     books = data.get("books") if isinstance(data.get("books"), list) else []
@@ -283,8 +284,9 @@ def claim(uid: int, user=None) -> tuple[bool, str]:
 
 
 def claim_place() -> str:
-    """이번 주 포인트를 받는 곳을 가리키는 말: /오라클설정 으로 정한 채널('포인트 받기' 글이 있는 곳). 정해 두지 않았으면 /포인트"""
-    return f"<#{S.channel_id}> 채널의 **포인트 받기**로" if S.channel_id else "`/포인트` 로"
+    """이번 주 포인트를 받는 곳을 가리키는 말: /오라클설정 으로 정한 채널('포인트 받기' 글이 있는 곳).
+    포인트는 그 글의 버튼으로만 받는다(/포인트 명령어는 운영자가 2026-10-13에 없애 달라고 했다)"""
+    return f"<#{S.channel_id}> 채널의 **포인트 받기**로" if S.channel_id else "오라클 봇의 **포인트 받기** 글에서"
 
 
 def no_points() -> str:
@@ -293,7 +295,7 @@ def no_points() -> str:
 
 
 def points_text(uid: int) -> str:
-    """내 포인트 (/포인트 와 '내 포인트' 버튼)"""
+    """내 포인트 ('내 포인트' 버튼)"""
     acc = S.accounts.get(str(uid))
     if not acc or not (acc["claimed"] or acc["played"] or acc["points"]):
         return f"아직 포인트를 받은 적이 없어요. **포인트 받기**를 누르면 이번 주 {WEEKLY_POINTS:,} 포인트를 받아요." if S.on else RESTING
@@ -623,13 +625,20 @@ async def edit(place_id: int, message_id: int, text: str, view: discord.ui.View 
         return False
 
 
-async def remove(place_id: int, message_id: int) -> None:
-    if not S.ready or not place_id or not message_id:
-        return
+async def remove(place_id: int, message_id: int) -> bool:
+    """올려 둔 글을 지운다. 지웠거나 이미 없으면 True, 지우지 못했으면 False"""
+    if not place_id or not message_id:
+        return True
+    if not S.ready:
+        return False
     try:
         await S.client.get_partial_messageable(int(place_id)).get_partial_message(int(message_id)).delete()
+    except discord.NotFound:  # 누가 이미 지웠다
+        return True
     except discord.HTTPException as e:
-        print(f"오라클: 앞의 글을 지우지 못했습니다: {e}")
+        note(f"오라클: 앞의 글을 지우지 못했습니다. 조금 뒤에 다시 지워 봅니다. ({e})")
+        return False
+    return True
 
 
 async def announce_open(book: dict) -> None:
@@ -762,29 +771,41 @@ def roll_round() -> bool:
     if S.round is not None and S.round["start"] == week:
         return False
     old = S.round
-    S.round = {"start": week, "message_id": 0, "channel_id": 0,
-               "prev": [old["channel_id"], old["message_id"]] if old and old.get("message_id") else None}
+    stale = list(old["stale"]) if old else []  # 아직 지우지 못한 글은 이어서 적어 둔다 (꺼 둔 채로 몇 주가 지나도 잊지 않게)
+    if old and old["message_id"]:
+        stale.append([old["channel_id"], old["message_id"]])
+    S.round = {"start": week, "message_id": 0, "channel_id": 0, "stale": stale}
     save()
     return True
 
 
 async def post_round(force: bool = False) -> None:
-    """이번 주의 '포인트 받기' 글을 정해 둔 채널에 올린다. 앞의 글은 지워서 글은 늘 하나다. force 면 이미 올렸어도 새로 올린다(채널을 바꿨을 때)"""
+    """이번 주의 '포인트 받기' 글을 정해 둔 채널에 올리고 앞의 글은 지운다. 그 채널에 누를 수 있는 받기 버튼이 하나만 남게 한다
+    (운영자가 2026-10-13에 요청). 새 글을 올린 뒤에 지우므로, 올리지 못하면 앞의 글이 남는다. 지우지 못한 글은 적어 둔 채 조금 뒤에 다시 지운다.
+    새 글로 올리는 까닭: 월요일마다 그 채널에 안 읽은 표시가 떠서 새 주가 시작된 것이 보인다(있던 글의 날짜만 고치면 뜨지 않는다).
+    force 면 이미 올렸어도 새로 올린다(채널을 바꿨을 때)"""
     r = S.round
     if not S.ready or not S.on or not S.channel_id or r is None:
         return
-    if not force and ((r["message_id"] and r["channel_id"] == S.channel_id) or now() - r.get("tried", 0) < POST_RETRY):
-        return
-    posted = await send(S.channel_id, round_text(), ClaimView())
-    if not posted:
-        r["tried"] = now()  # 조금 뒤에 다시 올려 본다
-        return
-    gone = [x for x in (r.get("prev"), [r["channel_id"], r["message_id"]] if r["message_id"] else None) if x]
-    r.update(message_id=posted, channel_id=S.channel_id, prev=None)
-    r.pop("tried", None)
-    save()
-    for channel_id, message_id in gone:
-        await remove(channel_id, message_id)
+    if force or not (r["message_id"] and r["channel_id"] == S.channel_id):
+        if not force and now() - r.get("tried", 0) < POST_RETRY:
+            return
+        posted = await send(S.channel_id, round_text(), ClaimView())
+        if not posted:
+            r["tried"] = now()  # 조금 뒤에 다시 올려 본다
+            return
+        if r["message_id"]:
+            r["stale"].append([r["channel_id"], r["message_id"]])
+        r.update(message_id=posted, channel_id=S.channel_id)
+        r.pop("tried", None)
+        r.pop("swept", None)  # 앞의 글은 바로 지운다
+        save()
+    if r["stale"] and now() - r.get("swept", 0) >= POST_RETRY:
+        r["swept"] = now()
+        left = [x for x in r["stale"] if not await remove(x[0], x[1])]
+        if left != r["stale"]:
+            r["stale"] = left
+            save()
 
 
 # ── 포인트 순위를 리그 서버에 올리기 ────────────────────────────
@@ -887,13 +908,11 @@ async def claim_points(interaction: discord.Interaction) -> None:
 
 
 async def show_points(interaction: discord.Interaction) -> None:
-    """/포인트 와 '내 포인트' 버튼: 내 포인트를 본다. 이번 주 포인트를 아직 받지 않았으면 받기 버튼을 함께 보여 준다"""
+    """'내 포인트' 버튼: 내 포인트를 본다. 받기 버튼은 여기에 달지 않는다(받는 버튼은 '포인트 받기' 글의 하나뿐이다)"""
     if not await S.host.can_play(interaction.user):
         await reply(interaction, PLAYER_ONLY)
         return
-    acc = S.accounts.get(str(interaction.user.id))
-    waiting = S.on and (not acc or acc["week"] != week_start())
-    await reply(interaction, points_text(interaction.user.id), ClaimView() if waiting else None)
+    await reply(interaction, points_text(interaction.user.id))
 
 
 async def pick_side(interaction: discord.Interaction, side: str) -> None:
@@ -1060,10 +1079,6 @@ class MineView(Buttons):
         self.add_item(CancelButton(key))
 
 
-async def cmd_points(interaction: discord.Interaction) -> None:
-    await show_points(interaction)
-
-
 @app_commands.rename(channel="채널")
 @app_commands.describe(channel="매주 '포인트 받기' 글을 올릴 채널. 비우면 지금 설정을 보여 줍니다")
 async def cmd_setup(interaction: discord.Interaction, channel: Optional[discord.TextChannel] = None) -> None:
@@ -1122,8 +1137,7 @@ class OracleBot(discord.Client):
 
 
 def add_commands(tree: app_commands.CommandTree, guild) -> None:
-    """오라클 봇의 명령어 둘을 등록한다"""
-    tree.command(name="포인트", description="내 포인트를 보고, 이번 주 포인트를 받습니다 (리그 선수)", guild=guild)(cmd_points)
+    """오라클 봇의 명령어를 등록한다 (/오라클설정 하나. 포인트는 버튼으로만 받고 본다)"""
     tree.command(name="오라클설정", description="매주 '포인트 받기' 글을 올릴 채널을 정합니다 (리그 관리자 전용)", guild=guild)(cmd_setup)
     tree.error(on_command_error)
 
@@ -1157,7 +1171,7 @@ def status() -> list[str]:
     lines.append("오라클 '포인트 받기' 글: " + (
         f"#{channel.name}" + missing(channel, {"view_channel": "채널 보기", "send_messages": "메시지 보내기"}) if channel is not None
         else "[확인 필요] 정해 둔 채널을 찾지 못했습니다. `/오라클설정` 으로 다시 정해 주세요." if S.channel_id
-        else "채널을 정하지 않음 (리그 관리자가 운영진 채널에서 `/오라클설정` 으로 정하면 올립니다. `/포인트` 로는 지금도 받을 수 있습니다)"))
+        else "[확인 필요] 채널을 정하지 않았습니다. 리그 관리자가 운영진 채널에서 `/오라클설정` 으로 정해야 글이 올라오고, 그 글의 버튼으로만 포인트를 받을 수 있습니다"))
     lines.append("오라클 승부의 신 랭킹: " + ((S.page or "페이지 주소를 정하지 않음 (config.json 의 oracle_page)")
                                     + ("" if S.host.server is not None else " [확인 필요] 리그 서버 설정(sync_url, sync_key)이 없어 순위를 올리지 못합니다")))
     return lines

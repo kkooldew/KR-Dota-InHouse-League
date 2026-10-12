@@ -47,12 +47,19 @@ class Msg:
 
     def __init__(self, mid, text="", view=None):
         self.id, self.text, self.view, self.edits, self.deleted = mid, text, view, [], False
+        self.stuck, self.missing, self.tries = False, False, 0     # stuck: 지우지 못한다. missing: 이미 지워졌다. tries: 지우려 한 횟수
 
     async def edit(self, **kw):
         self.edits.append(kw)
         self.text, self.view = kw.get("content", self.text), kw.get("view")
 
     async def delete(self):
+        self.tries += 1
+        if self.missing:
+            self.deleted = True
+            raise discord.NotFound(Mock(status=404, reason="Not Found"), "Unknown Message")
+        if self.stuck:
+            raise discord.HTTPException(Mock(status=500, reason="Server Error"), "서버 오류")
         self.deleted = True
 
 
@@ -209,23 +216,23 @@ async def main():
     await mod.claim_points(i)
     check(mod.S.accounts["11"]["points"] == 3000 and mod.S.accounts["11"]["claimed"] == 3, "받지 않은 주의 포인트는 사라진다 (한 주를 건너뛰어도 한 번만 받는다)")
 
-    # 내 포인트 (/포인트 와 '내 포인트' 버튼)
+    # 내 포인트 ('내 포인트' 버튼). 받기 버튼은 '포인트 받기' 글에만 있다
     i = inter(400, B)
-    await mod.cmd_points(i)
-    check(said(i) == "아직 포인트를 받은 적이 없어요. **포인트 받기**를 누르면 이번 주 1,000 포인트를 받아요." and labels(view_of(i)) == ["포인트 받기", "내 포인트"]
-          and i.response.send_message.call_args.kwargs["ephemeral"] is True, "/포인트: 받은 적이 없으면 받기 버튼을 보여 준다")
+    await mod.show_points(i)
+    check(said(i) == "아직 포인트를 받은 적이 없어요. **포인트 받기**를 누르면 이번 주 1,000 포인트를 받아요." and view_of(i) is None
+          and i.response.send_message.call_args.kwargs["ephemeral"] is True, "내 포인트: 받은 적이 없으면 그렇게 알려 준다 (본인에게만. 받기 버튼을 따로 달지 않는다)")
     i = inter(400, A)
     await mod.show_points(i)
     check(said(i) == "🔮 보유 포인트는 **3,000**이에요.\n승부 예측 0번 가운데 0번 맞혔고, 손익은 0 포인트예요.\n"
           f"이번 주 포인트는 받았어요. 다음 포인트는 <t:{MON + 4 * WEEK}:F>부터 받을 수 있어요.\n승부의 신 랭킹: <https://example.invalid/oracle.html>"
-          and view_of(i) is None, "/포인트: 보유 포인트와 전적, 랭킹 페이지. 이번 주 것을 받았으면 받기 버튼은 없다")
+          and view_of(i) is None, "내 포인트: 보유 포인트와 전적, 랭킹 페이지")
     w.at += WEEK
     i = inter(400, A)
     await mod.show_points(i)
-    check("이번 주 포인트를 아직 받지 않았어요." in said(i) and labels(view_of(i)) == ["포인트 받기", "내 포인트"], "/포인트: 새 주가 되면 받기 버튼이 다시 보인다")
+    check("이번 주 포인트를 아직 받지 않았어요. **포인트 받기**를 눌러 받으세요." in said(i) and view_of(i) is None, "내 포인트: 새 주가 되면 아직 받지 않았다고 알려 준다")
     i = inter(400, GUEST)
-    await mod.cmd_points(i)
-    check(said(i) == mod.PLAYER_ONLY, "/포인트: 리그 선수가 아니면 쓰지 못한다")
+    await mod.show_points(i)
+    check(said(i) == mod.PLAYER_ONLY, "내 포인트: 리그 선수가 아니면 보지 못한다")
 
     # ── 매주 올리는 '포인트 받기' 글 ──
     w = World(mod, path, T0)                   # 봇을 껐다 켠 것처럼: 파일에서 이어받는다
@@ -233,7 +240,7 @@ async def main():
     mod.S.accounts = {}
     w.players = {11, 12, 13, 14, 110, 1} | set(range(100, 110))
     await mod.tick()
-    check(mod.S.round == {"start": MON, "message_id": 0, "channel_id": 0, "prev": None} and not w.places, "채널을 정하기 전에는 글을 올리지 않는다 (/포인트 로는 받을 수 있다)")
+    check(mod.S.round == {"start": MON, "message_id": 0, "channel_id": 0, "stale": []} and not w.places, "채널을 정하기 전에는 글을 올리지 않는다")
     i = inter(100, B)
     await mod.cmd_setup(i, None)
     check(said(i) == "이 명령어를 사용할 권한이 없어요. 리그 관리자만 쓸 수 있는 명령어예요.", "/오라클설정: 리그 관리자만 쓴다")
@@ -277,6 +284,46 @@ async def main():
     await mod.tick()
     check(mod.S.round["message_id"] == w.place(401).sent[-1].id and w.place(401).sent[0].deleted, "다시 올리면 지난 주의 글을 지운다")
 
+    # 그 채널에 누를 수 있는 받기 버튼은 하나뿐이다: 앞의 글을 지우지 못하면 적어 두었다가 다시 지운다
+    def buttons(cid):
+        return [m for m in w.place(cid).sent if not m.deleted and isinstance(m.view, mod.ClaimView)]
+    check(len(buttons(401)) == 1 and mod.S.round["stale"] == [], "채널에 '포인트 받기' 글은 하나뿐이다")
+    last = w.place(401).sent[-1]
+    last.stuck = True
+    w.at += WEEK
+    with contextlib.redirect_stdout(io.StringIO()) as out:
+        await mod.tick()
+        await mod.tick()
+    check(len(buttons(401)) == 2 and mod.S.round["stale"] == [[401, last.id]] and last.tries == 1 and out.getvalue().count("앞의 글을 지우지 못했습니다") == 1,
+          "앞의 글을 지우지 못하면 적어 둔다 (10초마다 되풀이해 지우지 않는다)")
+    check(json.loads(path.read_text(encoding="utf-8"))["round"]["stale"] == [[401, last.id]], "지우지 못한 글은 파일에도 적어 둔다 (봇을 껐다 켜도 잊지 않는다)")
+    last.stuck = False
+    w.at += 601
+    await mod.tick()
+    check(last.deleted and len(buttons(401)) == 1 and mod.S.round["stale"] == [], "조금 뒤에 다시 지운다")
+    # 주인이 꺼 둔 채로 여러 주가 지나도, 다시 켜면 예전 글을 잊지 않고 지운다
+    first = buttons(401)[0]
+    w.switch = False
+    w.at += 3 * WEEK
+    with contextlib.redirect_stdout(io.StringIO()):
+        await mod.tick()
+    await mod.tick()
+    check(buttons(401) == [first] and mod.S.round["stale"] == [[401, first.id]] and not mod.S.round["message_id"], "꺼 둔 동안에는 새 글을 올리지 않고 앞의 글을 그대로 둔다")
+    w.at += WEEK
+    await mod.tick()
+    w.switch = True
+    w.at += 300
+    with contextlib.redirect_stdout(io.StringIO()):
+        await mod.tick()
+    check(first.deleted and len(buttons(401)) == 1 and buttons(401)[0].id == mod.S.round["message_id"] and mod.S.round["stale"] == [],
+          "꺼 둔 채로 여러 주가 지난 뒤에 켜도 새 글을 올리고 예전 글은 지운다 (버튼은 하나)")
+    gone = buttons(401)[0]
+    gone.missing = True                                             # 누가 그 글을 손으로 지웠다
+    w.at += WEEK
+    await mod.tick()
+    check(len(buttons(401)) == 1 and buttons(401)[0] is not gone and mod.S.round["stale"] == [] and gone.tries == 1,
+          "이미 지워진 글은 지운 것으로 친다 (되풀이해 지우려 하지 않는다)")
+
     # ── 승부 예측 열기: 퍼그나봇이 팀을 짜서 알리면 그 글 아래에 연다 ──
     w = World(mod, path, T0)
     mod.S.accounts, mod.S.books, mod.S.round, mod.S.channel_id = {}, [], None, 0
@@ -293,13 +340,13 @@ async def main():
           and book["place_id"] == 300, "팀이 짜이면 승부 예측을 연다 (20분 동안. 뛰는 열 명을 적어 둔다)")
     check(first.text == "🔮 **승부 예측** — 이 경기에서 이길 팀에 포인트를 걸어 보세요.\n"
           f"⏰ **<t:{end}:t>까지** 걸 수 있어요. (<t:{end}:R> 마감) 마감하면 배당률을 알려 드려요.\n"
-          "이 경기에 뛰는 선수는 걸 수 없어요. 포인트가 없으면 `/포인트` 로 이번 주 포인트를 먼저 받으세요.\n지금까지 **0명**이 걸었어요."
+          "이 경기에 뛰는 선수는 걸 수 없어요. 포인트가 없으면 오라클 봇의 **포인트 받기** 글에서 이번 주 포인트를 먼저 받으세요.\n지금까지 **0명**이 걸었어요."
           and isinstance(first.view, mod.BetView) and first.view.is_persistent() and labels(first.view) == ["래디언트", "다이어", "내 베팅"]
           and [c.custom_id for c in first.view.children] == ["oracle:bet:r", "oracle:bet:d", "oracle:mine"] and book["message_id"] == first.id,
           "그 글에 승부 예측 글과 버튼(래디언트·다이어·내 베팅)을 올린다")
     mod.S.channel_id = 400                     # /오라클설정 으로 '포인트 받기' 글의 채널을 정해 두었으면 그 채널을 알려 준다
     check("이 경기에 뛰는 선수는 걸 수 없어요. 포인트가 없으면 <#400> 채널의 **포인트 받기**로 이번 주 포인트를 먼저 받으세요.\n" in mod.open_text(book)
-          and "/포인트" not in mod.open_text(book), "승부 예측 글: 포인트가 없으면 '포인트 받기' 글이 있는 채널에서 받으라고 알린다 (/포인트 가 아니라)")
+          and "/포인트" not in mod.open_text(book), "승부 예측 글: 포인트가 없으면 '포인트 받기' 글이 있는 채널에서 받으라고 알린다")
 
     # 진영 버튼 → 금액 버튼
     i = inter(300, GUEST)
@@ -317,8 +364,8 @@ async def main():
     mod.S.channel_id = 0
     i = inter(300, D)
     await mod.pick_side(i, "r")
-    check(said(i) == "걸 수 있는 포인트가 없어요. `/포인트` 로 이번 주 포인트를 받았는지 확인해 보세요." and "14" not in mod.S.accounts,
-          "베팅: 채널을 정해 두지 않았으면 /포인트 를 알려 준다")
+    check(said(i) == "걸 수 있는 포인트가 없어요. 오라클 봇의 **포인트 받기** 글에서 이번 주 포인트를 받았는지 확인해 보세요." and "14" not in mod.S.accounts,
+          "베팅: 채널을 정해 두지 않았으면 '포인트 받기' 글에서 받으라고만 알린다 (/포인트 명령어는 없다)")
     i = inter(300, A)
     await mod.pick_side(i, "r")
     check(said(i) == "🟢 래디언트에 얼마를 걸까요? 걸 수 있는 포인트는 **1,000**이에요." and i.response.send_message.call_args.kwargs["ephemeral"] is True
@@ -667,8 +714,8 @@ async def main():
     await mod.claim_points(i)
     check(said(i) == mod.RESTING == "지금은 오라클 봇이 쉬고 있어요. 다시 켜지면 포인트를 받고 걸 수 있어요." and "11" not in mod.S.accounts, "꺼져 있는 동안: 포인트를 받을 수 없다")
     i = inter(400, A)
-    await mod.cmd_points(i)
-    check(said(i) == mod.RESTING and view_of(i) is None, "꺼져 있는 동안: /포인트 도 쉬고 있다고 알린다 (받기 버튼이 없다)")
+    await mod.show_points(i)
+    check(said(i) == mod.RESTING and view_of(i) is None, "꺼져 있는 동안: 내 포인트도 쉬고 있다고 알린다")
     await mod.on_lineup(lineup(1))
     check(mod.S.books == [] and 300 not in w.places, "꺼져 있는 동안: 팀이 짜여도 승부 예측을 열지 않는다")
     await mod.tick()
@@ -764,7 +811,7 @@ async def main():
     check(w.place(300).sent[0].text == "🔮 **승부 예측** — 이 경기에서 이길 팀에 포인트를 걸어 보세요.\n"
           f"⏰ **<t:{end}:t>까지** 걸 수 있어요. (<t:{end}:R> 마감) 마감하면 배당률을 알려 드려요.\n"
           "이 경기에 뛰는 선수는 걸 수 없어요. 대신 결과가 기록되면 참가 포인트로 **100 포인트**를 받아요.\n"
-          "포인트가 없으면 `/포인트` 로 이번 주 포인트를 먼저 받으세요.\n지금까지 **0명**이 걸었어요.",
+          "포인트가 없으면 오라클 봇의 **포인트 받기** 글에서 이번 주 포인트를 먼저 받으세요.\n지금까지 **0명**이 걸었어요.",
           "참가 포인트: 승부 예측 글에서, 걸 수 없는 선수에게 참가 포인트를 받는다고 알려 준다")
     i = inter(300, user(105))
     await mod.pick_side(i, "r")
@@ -790,7 +837,7 @@ async def main():
     await mod.show_points(i)
     check(said(i) == "🔮 보유 포인트는 **100**이에요.\n승부 예측 0번 가운데 0번 맞혔고, 손익은 0 포인트예요.\n"
           "이번 주 포인트를 아직 받지 않았어요. **포인트 받기**를 눌러 받으세요.\n승부의 신 랭킹에는 **포인트 받기**를 한 번이라도 누른 뒤부터 이름이 올라가요.\n"
-          "승부의 신 랭킹: <https://example.invalid/oracle.html>" and labels(view_of(i)) == ["포인트 받기", "내 포인트"],
+          "승부의 신 랭킹: <https://example.invalid/oracle.html>" and view_of(i) is None,
           "참가 포인트: 포인트 받기를 누른 적이 없는 선수도 내 포인트를 볼 수 있다 (랭킹에는 포인트 받기를 누른 뒤부터 나온다고 알린다)")
     await mod.claim_points(inter(400, user(100)))
     check(acc["100"]["points"] == 1100 and any(r["name"] == "선수100" and r["points"] == 1100 for r in mod.board()["players"]),
@@ -929,8 +976,8 @@ async def main():
     bot = mod.OracleBot()
     mod.add_commands(bot.tree, discord.Object(id=1))
     cmds = {c.name: c for c in bot.tree.get_commands(guild=discord.Object(id=1))}
-    check(sorted(cmds) == ["오라클설정", "포인트"] and [p.display_name for p in cmds["오라클설정"].parameters] == ["채널"] and not cmds["오라클설정"].parameters[0].required
-          and not cmds["포인트"].parameters, "오라클 봇의 명령어: /포인트, /오라클설정 채널")
+    check(sorted(cmds) == ["오라클설정"] and [p.display_name for p in cmds["오라클설정"].parameters] == ["채널"] and not cmds["오라클설정"].parameters[0].required
+          and not hasattr(mod, "cmd_points"), "오라클 봇의 명령어: /오라클설정 채널 하나뿐이다 (/포인트 는 없다. 포인트는 버튼으로만 받는다)")
     check(bot.intents.guilds and not bot.intents.members and not bot.intents.message_content and bot.allowed_mentions.everyone is False and bot.allowed_mentions.roles is False
           and bot.allowed_mentions.users is False, "오라클 봇은 특권 인텐트를 쓰지 않고, 멘션 알림을 울리지 않는다")
     await bot.close()
