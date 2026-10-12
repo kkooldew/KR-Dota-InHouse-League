@@ -2163,6 +2163,114 @@ async def main():
     await run(mod.cancel, 300, ADMIN)
     mod.bot.player_role_id = 0
 
+    # ── 모집 글에서 리그 선수 부르기 (운영자가 2026-10-12에 요청): /내전생성 으로 글을 만들면 그 글에서 리그 선수 역할을 멘션한다 ──
+    PING = "<@1>: <@&55> 내전 모집이 열렸어요! 여기에서 `/참여` 로 신청하세요."
+    PROLE.mentionable = False
+    pings = lambda mock: [c for c in mock.call_args_list if getattr(c.kwargs.get("allowed_mentions"), "roles", False)]   # 역할의 알림을 허용한 글
+
+    async def opened(setup=None, forum=True, can_ping=False):
+        """새 가짜 서버에서 리그 선수 역할(55)을 정해 둔 채 /내전생성 을 한 번 한다. can_ping 은 봇에 모든 역할을 멘션하는 권한이 있는지.
+        돌려주는 값: (가짜 서버, 리그 운영진에게 한 답)"""
+        world = World(mod, forum=forum)
+        hall(can_ping=can_ping)
+        mod.bot.player_role_id = 55
+        world.signup.permissions_for = Mock(return_value=Mock(mention_everyone=can_ping))
+        if setup:
+            setup(world)
+        t, _ = await run(mod.create_inhouse, 100, ADMIN)
+        return world, t
+
+    w, t = await opened(can_ping=True)
+    sent = w.thread.send.call_args_list
+    check(len(sent) == 1 and sent[0].args[0] == PING and [r.id for r in sent[0].kwargs["allowed_mentions"].roles] == [55]
+          and sent[0].kwargs["allowed_mentions"].users is False and sent[0].kwargs["allowed_mentions"].everyone is False,
+          "/내전생성: 모집 글에서 리그 선수 역할을 멘션한다 (그 역할의 알림만 울리고, 모집을 연 리그 운영진에게는 울리지 않는다)")
+    kw = w.signup.create_thread.call_args.kwargs
+    check("<@&" not in kw["content"] and kw["allowed_mentions"].roles is False and "⚠️" not in t and t.startswith("<@1>님이 모집을 시작했어요! "),
+          "본문에는 역할 멘션을 넣지 않고 글을 하나 더 올린다 (본문은 참여자가 바뀔 때마다 고치는 글이다). 문제가 없으면 답은 전과 같다")
+    await run(mod.join, 300, player(701))
+    await run(mod.extend, 300, ADMIN)
+    await run(mod.restart, 300, ADMIN)
+    await run(mod.close_now, 300, ADMIN)
+    await run(mod.extend, 300, ADMIN)
+    check(len(pings(w.thread.send)) == 1 and w.message.edit.await_count and all("<@&" not in c.kwargs["content"] for c in w.message.edit.call_args_list),
+          "연장·재모집·마감한 뒤 다시 열기에서는 다시 부르지 않는다 (글을 만들 때 한 번만)")
+    await run(mod.cancel, 300, ADMIN)
+
+    state = []
+
+    def watch(world):
+        async def send(*args, **kwargs):
+            saved = json.loads(mod.STATE_PATH.read_text(encoding="utf-8")) if mod.STATE_PATH.exists() else {}
+            state.append((len(mod.bot.games), len(saved.get("games") or []), mod.bot.current is not None and mod.bot.current.task is not None))
+
+        world.thread.send = AsyncMock(side_effect=send)
+
+    await opened(setup=watch, can_ping=True)
+    check(state == [(1, 1, True)], "선수들을 부르기 전에 모집을 등록해 둔다 (알림을 받고 바로 /참여 를 입력해도 받는다)")
+
+    w = World(mod, forum=True)
+    t, _ = await run(mod.create_inhouse, 100, ADMIN)
+    check(not w.thread.send.await_count and "⚠️" not in t, "리그 선수 역할을 정해 두지 않았으면(/선수역할 을 끈 동안) 전처럼 아무도 부르지 않는다")
+
+    def gone(world):
+        mod.bot.player_role_id = 77                           # 지워진 역할
+
+    w, t = await opened(setup=gone)
+    check(not w.thread.send.await_count and "\n⚠️ 정해 둔 리그 선수 역할을 찾지 못해 모집 글에서 선수들을 멘션하지 못했어요. 리그 관리자에게 알려 주세요" in t
+          and mod.bot.current is not None and not mod.bot.current.closed, "정해 둔 역할이 지워졌으면 부르지 않고 리그 운영진에게 알린다 (모집은 그대로 열린다)")
+
+    w, t = await opened()
+    check(len(pings(w.thread.send)) == 1 and "\n⚠️ 봇이 **리그 선수** 역할을 멘션해도 알림이 울리지 않아요." in t and "모든 역할 멘션하기" in t,
+          "멘션해도 알림이 울리지 않는 역할이면 고치는 법을 리그 운영진에게 알린다 (글은 올린다)")
+    PROLE.mentionable = True
+    w, t = await opened()
+    check(len(pings(w.thread.send)) == 1 and "⚠️" not in t, "누구나 멘션할 수 있게 해 둔 역할이면 봇에 그 권한이 없어도 문제없다")
+    PROLE.mentionable = False
+
+    def broken(world):
+        world.thread.send = AsyncMock(side_effect=discord.Forbidden(Mock(status=403, reason="Forbidden"), "Missing Permissions"))
+
+    with contextlib.redirect_stdout(io.StringIO()) as out:
+        w, t = await opened(setup=broken, can_ping=True)
+    check(t.startswith("<@1>님이 모집을 시작했어요! ") and "\n⚠️ 모집 글에서 리그 선수 역할을 멘션하지 못했어요. 선수들에게 알림이 가지 않았어요." in t
+          and mod.bot.current is not None and not mod.bot.current.closed and "멘션하지 못했습니다" in out.getvalue(),
+          "멘션하는 글을 올리지 못해도 모집은 그대로 열리고, 리그 운영진에게 알린다")
+
+    def crowd(n):
+        def fill(world):
+            mod.bot.role_seen = {f"s:{k}": {"status": "승인", "discord": f"u{k}", "ok": True, "tried": 0} for k in range(n)}
+            mod.bot.role_seen.update({"s:x": {"status": "제외", "discord": "x", "ok": True, "tried": 0},      # 제외한 등록
+                                      "s:y": {"status": "승인", "discord": "y", "ok": False, "tried": 0}})     # 디스코드 서버에서 찾지 못한 선수
+
+        return fill
+
+    w, t = await opened(setup=crowd(99), can_ping=True)
+    check(mod.role_holders() == 99 and "⚠️" not in t, "역할이 있는 선수가 99명까지는 알리지 않는다 (제외한 등록과 서버에서 찾지 못한 선수는 세지 않는다)")
+    w, t = await opened(setup=crowd(100), can_ping=True)
+    check(len(pings(w.thread.send)) == 1 and "\n⚠️ 리그 선수 역할이 있는 선수가 100명이에요. 디스코드는 글(스레드) 안에서 100명 이상인 역할을 멘션하면 알림을 보내지 않아서, "
+          "모집 글의 멘션이 선수들에게 가지 않을 수 있어요. 리그 관리자에게 알려 주세요." in t,
+          "역할이 있는 선수가 100명 이상이면 글 안의 멘션으로는 알림이 가지 않을 수 있다고 알린다 (디스코드의 제한)")
+
+    w, t = await opened(forum=False, can_ping=True)
+    check(w.signup.send.await_count == 2 and len(pings(w.signup.send)) == 1 and w.texts(w.signup.send)[-1] == PING and "⚠️" not in t,
+          "일반 채널: 공지 아래에 글을 하나 더 올려 리그 선수 역할을 멘션한다")
+
+    # 켤 때 창에 찍는 상태
+    w = World(mod, forum=True)
+    check((await mod.ping_status()).startswith("꺼짐 (리그 선수 역할을 정해 두지 않았습니다."), "켤 때 확인: 리그 선수 역할을 정해 두지 않았으면 멘션하지 않는다")
+    hall()
+    mod.bot.player_role_id = 55
+    mod.bot.role_seen = {"s:1": {"status": "승인", "discord": "a", "ok": True, "tried": 0}, "s:2": {"status": "승인", "discord": "b", "ok": True, "tried": 0}}
+    w.signup.permissions_for = Mock(return_value=Mock(mention_everyone=True))
+    check(await mod.ping_status() == "@리그 선수 (봇이 역할을 확인한 선수 2명) - 권한 확인", "켤 때 확인: 모집 글에서 멘션할 역할과 봇이 역할을 확인한 선수 수")
+    w.signup.permissions_for = Mock(return_value=Mock(mention_everyone=False))
+    check("[확인 필요] 봇이 **리그 선수** 역할을 멘션해도 알림이 울리지 않아요." in await mod.ping_status(), "켤 때 확인: 멘션해도 알림이 울리지 않을 때")
+    mod.bot.player_role_id = 77
+    check((await mod.ping_status()).startswith("[확인 필요] 정해 둔 리그 선수 역할을 찾지 못했습니다."), "켤 때 확인: 리그 선수 역할이 지워졌을 때")
+    mod.bot.player_role_id, mod.bot.role_seen = 0, {}
+    PROLE.mentionable = True
+
     # ── 시즌 종료 (서버 버전 16, 운영자가 2026-10-11에 정함): 시즌 종료 시각 전에 시작한 경기까지만 기록한다. 끝난 시각이 그 뒤여도 그 경기는 기록한다 ──
     mod.run_matchmaker = fake_matchmaker
     mod.SYNC_URL, mod.SYNC_KEY = "https://example.invalid/exec", "k"

@@ -44,7 +44,7 @@
     <table class="g-table cmds">
         <thead><tr><th>명령어</th><th>어디서</th><th>하는 일</th></tr></thead>
       <tbody>
-        <tr><td><code>/내전생성</code></td><td>#💚퍼그나봇-콘솔</td><td>내전 모집을 엽니다. 마감 시각을 적을 수 있습니다.</td></tr>
+        <tr><td><code>/내전생성</code></td><td>#💚퍼그나봇-콘솔</td><td>내전 모집을 열고, 모집 글에서 리그 선수들을 불러 알립니다. 마감 시각을 적을 수 있습니다.</td></tr>
         <tr><td><code>/마감</code></td><td>그 내전의 글</td><td>지금까지 모인 인원으로 바로 마감합니다.</td></tr>
         <tr><td><code>/연장</code></td><td>그 내전의 글</td><td>마감을 5분 뒤로 미룹니다. 마감한 뒤에도 다시 열 수 있습니다.</td></tr>
         <tr><td><code>/재모집</code></td><td>그 내전의 글</td><td>참여 신청을 모두 취소로 돌리고 5분 동안 처음부터 다시 받습니다.</td></tr>
@@ -89,7 +89,7 @@
   <!-- 2 -->
   <section class="g-sec" id="create">
     <h2><span class="n">2</span>내전 열기: <code>/내전생성</code> <span class="g-where">#💚퍼그나봇-콘솔</span></h2>
-    <p>입력하면 봇이 <strong>#⚔️게임-참가신청</strong> 포럼에 모집 글을 만들고, 그 글의 링크를 알려 줍니다.</p>
+    <p>입력하면 봇이 <strong>#⚔️게임-참가신청</strong> 포럼에 모집 글을 만들고, 그 글의 링크를 알려 줍니다. 모집 글에서는 <strong>리그 선수</strong> 역할을 멘션해 선수들에게 알림을 보냅니다.</p>
 
     <figure class="g-fig">
       <figcaption><b>예시</b>마감 시각을 적지 않고 열었을 때</figcaption>
@@ -100,6 +100,23 @@
       </div>
       <p class="after">링크를 눌러 모집 글로 들어갑니다. 이 뒤의 명령어는 모두 그 글에서 입력합니다.</p>
     </figure>
+
+    <h3>선수들에게 가는 알림</h3>
+    <p>모집 글을 만들면 봇이 그 글에 글을 하나 더 올려 <strong>리그 선수</strong> 역할을 멘션합니다. 리그 선수 역할이 있는 사람 모두에게 디스코드 알림이 갑니다.</p>
+    <figure class="g-fig">
+      <figcaption><b>예시</b>방금 만든 모집 글</figcaption>
+      <div class="dc">
+        <div class="dc-title">10월 10일(토) 20:54 내전 모집<small>#⚔️게임-참가신청 포럼의 글 · 모집 중</small></div>
+        <div class="dc-msg"><div class="dc-av">퍼</div><div class="dc-body"><div class="dc-head"><b>퍼그나봇</b><i>앱</i><time>오후 8:54</time></div><div class="dc-text"><span class="at">@운영진1</span>님이 내전 모집을 열었어요.<br>🎮 <strong>도타 2 내전 모집!</strong><br>지금부터 내전 참여자를 모집합니다. 마감 후 명단이 공지되면 로비로 모여 주세요.<br><br>⏰ <strong><span class="ts">오후 9:00</span>까지</strong> 참여 신청을 받아요. (<span class="ts">6분 후</span> 마감)<br>👉 여기에서 <code>/참여</code> 를 입력하세요. 취소는 <code>/참여취소</code><br>👥 참여자 (0명): 아직 없음</div></div></div>
+        <div class="dc-msg"><div class="dc-av">퍼</div><div class="dc-body"><div class="dc-head"><b>퍼그나봇</b><i>앱</i><time>오후 8:54</time></div><div class="dc-text"><span class="at">@운영진1</span>: <span class="role">@리그 선수</span> 내전 모집이 열렸어요! 여기에서 <code>/참여</code> 로 신청하세요.</div></div></div>
+      </div>
+      <p class="after">위가 모집 글의 본문이고, 아래가 선수들을 부르는 글입니다.</p>
+    </figure>
+    <ul>
+      <li>글을 만들 때 <strong>한 번만</strong> 부릅니다. <code>/연장</code>이나 <code>/재모집</code>으로 다시 열 때는 다시 부르지 않습니다.</li>
+      <li>내전을 열 때마다 리그 선수 모두에게 알림이 갑니다. 열었다가 바로 취소해도 알림은 이미 간 뒤입니다.</li>
+      <li>디스코드는 글 안에서 멘션한 역할의 사람들을 그 글에 참여시킵니다. 그래서 선수들의 채널 목록에 그 글이 보이게 됩니다.</li>
+    </ul>
 
     <h3>마감 시각</h3>
     <ul>
@@ -117,6 +134,17 @@
     <h3>열 때 봇이 덧붙이는 경고</h3>
     <p>결과를 기록하지 않은 판이 남아 있으면 <code>/내전생성</code>의 답 아래에 <strong>⚠️ 결과를 아직 기록하지 않은 판이 있어요: # …</strong>가 붙습니다. 그 판에서 뛴 선수는 새 내전에 참여할 수 없으니, 끝난 판이면 그 글에서 <code>/승리</code>로 기록하고 열리지 않은 판이면 <code>/승리</code>의 <strong>경기 안 함</strong>으로 정리합니다(<a href="#win">7번</a>).</p>
     <p>시즌 종료 시각이 지난 뒤에 열면 <strong>⚠️ 시즌이 종료됐어요(…). 이 내전의 결과는 순위에 기록되지 않아요.</strong>가 붙고, 모집 글에도 같은 안내가 적힙니다. 내전은 그대로 진행할 수 있습니다(<a href="#win">7번</a>의 "시즌 종료 날짜와 결과 기록").</p>
+    <p>선수들을 부르는 데 문제가 있으면 <code>/내전생성</code>의 답 아래에 ⚠️와 함께 까닭이 붙습니다. 어느 경우든 모집은 그대로 열려 있으니 내전은 진행하고, 리그 관리자에게 봇의 답을 알려 주세요.</p>
+    <div class="g-scroll">
+      <table class="g-table says">
+        <thead><tr><th>답에 붙은 안내</th><th>뜻</th></tr></thead>
+        <tbody>
+          <tr><td>봇이 <strong>리그 선수</strong> 역할을 멘션해도 알림이 울리지 않아요 …</td><td>부르는 글은 올라갔지만 알림이 울리지 않았습니다. 디스코드 서버의 역할 설정을 고쳐야 합니다(고치는 법이 안내에 적혀 있습니다).</td></tr>
+          <tr><td>리그 선수 역할이 있는 선수가 100명이에요 …</td><td>디스코드는 글 안에서 100명 이상인 역할을 멘션하면 알림을 보내지 않습니다. 선수들에게 알리는 방법을 바꿔야 합니다.</td></tr>
+          <tr><td>정해 둔 리그 선수 역할을 찾지 못해 …<br>모집 글에서 리그 선수 역할을 멘션하지 못했어요 …</td><td>선수들을 부르지 못했습니다.</td></tr>
+        </tbody>
+      </table>
+    </div>
   </section>
 
   <!-- 3 -->
@@ -478,6 +506,7 @@
           <tr><td>선수 등록의 승인·제외, 등록 정보 고치기</td><td>누구의 등록인지</td></tr>
           <tr><td>참가자가 선수단에 없다고 나옴</td><td>봇이 적어 준 참가자들</td></tr>
           <tr><td>팀이 자동으로 짜이지 않음</td><td>어느 내전의 글인지</td></tr>
+          <tr><td><code>/내전생성</code>의 답에 선수들을 부르는 데 문제가 있다는 ⚠️가 붙음</td><td>봇의 답 그대로</td></tr>
           <tr><td>대타가 뛰었거나 자리를 바꿔 뛴 경기</td><td>누가 누구 대신, 어느 자리에서 뛰었는지와 이긴 팀</td></tr>
           <tr><td><code>/승리</code>·<code>/승리취소</code>가 실패함</td><td>어느 내전의 글인지와 봇의 답</td></tr>
           <tr><td>며칠 지난 경기의 결과를 고쳐야 함</td><td>어느 경기인지와 바른 결과</td></tr>

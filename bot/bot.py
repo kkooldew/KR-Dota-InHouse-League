@@ -105,6 +105,9 @@ DEADLINE_EXAMPLE = "`2026-10-07-21-30` (연-월-일-시-분, 한국 시간, 24�
 MESSAGE_LIMIT = 1900  # 디스코드 메시지는 2000자까지라 조금 남겨 두고 나눈다
 THREAD_ARCHIVED = 50083  # 디스코드 오류 번호: 보관된(접힌) 스레드에는 글을 올리거나 고칠 수 없다
 OFFSEASON_NOTE = "ℹ️ 시즌이 종료되어 이 내전의 결과는 순위에 기록되지 않습니다."  # 시즌이 끝난 뒤의 내전에 붙이는 안내
+# 디스코드는 글(스레드) 안에서 멘션한 역할의 인원이 이 수보다 적을 때만 그 사람들을 글에 넣고 알림을 보낸다 (디스코드 도움말의 Threads FAQ:
+# "These roles must have less than 100 members each"). 모집 글에서 리그 선수 역할을 부를 때 이 수를 넘었는지 본다
+ROLE_PING_LIMIT = 100
 
 
 # ── 모집 상태 ────────────────────────────────────────────────
@@ -237,6 +240,7 @@ class InhouseBot(discord.Client):
                     print(f"꺼지기 전의 상태를 이어받지 못해 새로 시작합니다. ({e!r})")
             print(f"리그 선수 역할 자동 부여: {await role_status()}")
             print(f"리그 관리자(/선수역할 을 쓸 수 있는 사람): {await manager_status()}")
+            print(f"모집 글에서 리그 선수 멘션(/내전생성): {await ping_status()}")
             print(f"내전하자(/내전하자): {await want_status()}")
             print(f"음성 채널 이동(/시작·/종료): {await voice_status()}")
             self.role_task = asyncio.create_task(role_loop())
@@ -1291,6 +1295,75 @@ async def role_status() -> str:
     return f"[확인 필요] {problem}" if problem else f"켜짐 (@{role.name})"
 
 
+# ── 모집 글에서 리그 선수 부르기 ─────────────────────────────────
+# /내전생성 으로 모집 글을 만들면 그 글에서 리그 선수 역할을 멘션해 선수들에게 알린다 (운영자가 2026-10-12에 요청).
+def silent_ping(guild: discord.Guild, role: discord.Role, channel=None) -> str:
+    """봇이 이 역할을 멘션해도 알림이 울리지 않는 까닭. 울리면 빈 글.
+    누구나 멘션할 수 있게 해 둔 역할이 아니면, 봇에 모든 역할을 멘션하는 권한이 있어야 알림이 울린다. channel 을 주면 그 채널에서의 권한으로 본다."""
+    me = guild.me
+    if me is None or role.mentionable:
+        return ""
+    perms = channel.permissions_for(me) if channel is not None else me.guild_permissions
+    if perms.mention_everyone:
+        return ""
+    return (f"봇이 **{role.name}** 역할을 멘션해도 알림이 울리지 않아요. 서버 설정 → 역할에서 그 역할의 "
+            "**누구나 이 역할을 멘션할 수 있도록 허용**을 켜거나, 봇의 역할에 **@everyone, @here, 모든 역할 멘션하기**를 켜 주세요.")
+
+
+def role_holders() -> int:
+    """리그 선수 역할이 있는 것을 봇이 확인한 승인 선수의 수(봇이 역할을 줬거나 이미 갖고 있던 사람). 리그 관리자가 손으로 준 사람은 세지 못한다"""
+    return sum(1 for v in bot.role_seen.values() if v.get("status") == "승인" and v.get("ok"))
+
+
+def crowded_role() -> str:
+    """리그 선수 역할의 인원이 많아, 글 안에서 멘션해도 디스코드가 알림을 보내지 않는 까닭. 괜찮으면 빈 글 (ROLE_PING_LIMIT 의 설명)"""
+    count = role_holders()
+    if count < ROLE_PING_LIMIT:
+        return ""
+    return (f"리그 선수 역할이 있는 선수가 {count}명이에요. 디스코드는 글(스레드) 안에서 {ROLE_PING_LIMIT}명 이상인 역할을 멘션하면 알림을 보내지 않아서, "
+            "모집 글의 멘션이 선수들에게 가지 않을 수 있어요. 리그 관리자에게 알려 주세요.")
+
+
+async def ping_status() -> str:
+    """모집 글에서 리그 선수 역할을 멘션하는 설정을 한 줄로 (켤 때 창에 찍는다)"""
+    if not bot.player_role_id:
+        return "꺼짐 (리그 선수 역할을 정해 두지 않았습니다. `/선수역할` 로 정하면 모집 글에서 그 역할을 멘션합니다)"
+    try:
+        guild = await get_guild()
+        signup = await get_channel(SIGNUP_CHANNEL_ID)
+    except discord.HTTPException as e:
+        return f"[확인 필요] 디스코드 서버를 확인하지 못했습니다 ({e})"
+    role = guild.get_role(bot.player_role_id)
+    if role is None:
+        return "[확인 필요] 정해 둔 리그 선수 역할을 찾지 못했습니다. `/선수역할` 로 다시 정해 주세요."
+    problem = silent_ping(guild, role, signup) or crowded_role()
+    return f"@{role.name} (봇이 역할을 확인한 선수 {role_holders()}명)" + (f" [확인 필요] {problem}" if problem else " - 권한 확인")
+
+
+async def call_players(rec: Recruitment, actor: str) -> str:
+    """방금 만든 모집 글에서 리그 선수 역할(/선수역할 로 정한 역할)을 멘션해 선수들에게 알린다. actor 는 모집을 연 리그 운영진의 멘션이다.
+    본문에 넣지 않고 그 글에 글을 하나 더 올린다: 본문은 누가 /참여 할 때마다 고치는 글이라, 고치면서 멘션이 풀릴 수 있다(받은 멘션함에서 사라진다).
+    봇의 다른 글은 역할 알림을 막아 두었으므로 이 글에만 그 역할의 알림을 허용한다. 모집을 연 리그 운영진에게는 알림이 가지 않는다.
+    리그 선수 역할을 정해 두지 않았으면 전처럼 아무도 부르지 않는다. 부르지 못해도 모집은 그대로 진행한다.
+    돌려주는 값: 리그 운영진에게 알릴 문제. 없으면 빈 글."""
+    role_id = bot.player_role_id
+    if not role_id:
+        return ""
+    try:
+        guild = await get_guild()
+        role = guild.get_role(role_id)
+        if role is None:
+            return "정해 둔 리그 선수 역할을 찾지 못해 모집 글에서 선수들을 멘션하지 못했어요. 리그 관리자에게 알려 주세요(`/선수역할` 로 다시 정합니다)."
+        signup = await get_channel(SIGNUP_CHANNEL_ID)
+        place = rec.thread or signup
+        mentions = discord.AllowedMentions(everyone=False, users=False, roles=[discord.Object(id=role_id)])
+        await place.send(f"{actor}: <@&{role_id}> 내전 모집이 열렸어요! 여기에서 `/참여` 로 신청하세요.", allowed_mentions=mentions)
+    except discord.HTTPException as e:
+        print(f"모집 글에서 리그 선수 역할을 멘션하지 못했습니다: {e}")
+        return f"모집 글에서 리그 선수 역할을 멘션하지 못했어요. 선수들에게 알림이 가지 않았어요. ({e})"
+    return silent_ping(guild, role, signup) or crowded_role()
+
+
 async def find_member(guild: discord.Guild, name: str) -> discord.Member | None:
     """등록할 때 적은 디스코드(사용자명 또는 숫자로 된 사용자 ID)로 서버의 멤버를 찾는다. 서버에 없으면 None"""
     name = str(name or "").strip().lstrip("@").lower()
@@ -1712,11 +1785,14 @@ async def create_inhouse(interaction: discord.Interaction, deadline: Optional[st
         rec.task = asyncio.create_task(close_when_due(rec))
         save_state()
 
+    # 그 글에서 리그 선수 역할을 멘션해 선수들에게 알린다. 모집을 등록한 뒤에 불러서, 알림을 받고 바로 /참여 를 입력해도 받게 한다
+    trouble = await call_players(rec, actor)
     waiting = [x.get("place_id") for x in bot.lineups if waiting_result(x)]
     await answer(
         interaction,
         f"{actor}님이 모집을 시작했어요! {rec.message.jump_url}\n마감: {when(rec.end_ts)} (<t:{rec.end_ts}:R>)\n"
         "마감·연장·취소·재모집과 경기 시작·종료·결과 기록은 그 글에서 입력해 주세요."
+        + (f"\n⚠️ {trouble}" if trouble else "")
         + (f"\n⚠️ 시즌이 종료됐어요(<t:{int(bot.season_end)}:f>). 이 내전의 결과는 순위에 기록되지 않아요. 모집 글에도 그렇게 적었어요." if rec.offseason else "")
         + (f"\n⚠️ 결과를 아직 기록하지 않은 판이 있어요: {links(waiting)}. 끝났다면 그 글에서 `/승리` 로 기록하고, "
            "팀만 짜고 열리지 않은 판이면 `/승리` 에서 **경기 안 함**을 골라 주세요. 그 판에서 뛰는 선수는 다른 내전에 참여할 수 없어요."
@@ -2279,13 +2355,7 @@ def want_problem(guild: discord.Guild) -> str:
     role = guild.get_role(role_id)
     if role is None:
         return "정해 둔 리그 운영진 역할을 찾지 못했어요. `/내전하자설정` 의 **운영진역할** 칸에서 다시 골라 주세요."
-    if me is not None and not role.mentionable:
-        # 누구나 멘션할 수 있게 해 둔 역할이 아니면, 봇에 모든 역할을 멘션하는 권한이 있어야 알림이 울린다
-        perms = channel.permissions_for(me) if channel is not None else me.guild_permissions
-        if not perms.mention_everyone:
-            return (f"봇이 **{role.name}** 역할을 멘션해도 알림이 울리지 않아요. 서버 설정 → 역할에서 그 역할의 "
-                    "**누구나 이 역할을 멘션할 수 있도록 허용**을 켜거나, 봇의 역할에 **@everyone, @here, 모든 역할 멘션하기**를 켜 주세요.")
-    return ""
+    return silent_ping(guild, role, channel)
 
 
 async def want_status() -> str:

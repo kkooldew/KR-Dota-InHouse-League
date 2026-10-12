@@ -91,7 +91,7 @@
       <li>봇의 명령어는 리그 선수 역할을 받은 뒤부터 쓸 수 있습니다.</li>
       <li>승인된 뒤에는 포지션 순서만 <a href="#position"><code>/포지션변경</code></a>으로 직접 바꿀 수 있습니다. 그 밖에 바꿀 내용이 생기면 리그 관리자에게 알려 주세요.</li>
       <li>한 번 승인된 선수는 <strong>시즌이 바뀌어도 다시 등록하지 않습니다.</strong></li>
-      <li>내전 모집 공지는 디스코드로만 나갑니다. 서버에 들어와 알림을 켜 두세요.</li>
+      <li>내전 모집 공지는 디스코드로만 나갑니다. 모집 글이 올라오면 봇이 <strong>리그 선수</strong> 역할을 멘션해 알려 주니, 서버에 들어와 알림을 켜 두세요.</li>
       <li>모집 종료 날짜가 정해져 있으면 등록 페이지 첫 화면에 <strong>등록은 ○월 ○일까지 받습니다</strong>라고 보입니다. 그 다음 날 0시에 등록이 저절로 닫힙니다.</li>
     </ul>
   </section>
@@ -99,17 +99,18 @@
   <!-- 2 -->
   <section class="g-sec" id="join">
     <h2><span class="n">2</span>내전에 참여하기</h2>
-    <p>리그 운영진이 내전을 열면 봇이 <strong>#⚔️게임-참가신청</strong> 포럼에 모집 글을 올립니다. <strong>그 글 안에서</strong> <code>/참여</code>를 입력하면 신청됩니다. 마감 시각까지 받습니다.</p>
+    <p>리그 운영진이 내전을 열면 봇이 <strong>#⚔️게임-참가신청</strong> 포럼에 모집 글을 올리고, 그 글에서 <strong>리그 선수</strong> 역할을 멘션해 알립니다. 알림을 눌러 들어간 <strong>그 글 안에서</strong> <code>/참여</code>를 입력하면 신청됩니다. 마감 시각까지 받습니다.</p>
 
     <figure class="g-fig">
       <figcaption><b>예시</b>모집 글에서 <code>/참여</code>를 입력했을 때</figcaption>
       <div class="dc">
         <div class="dc-title">10월 10일(토) 20:54 내전 모집<small>#⚔️게임-참가신청 포럼의 글 · 모집 중</small></div>
         <div class="dc-msg"><div class="dc-av">퍼</div><div class="dc-body"><div class="dc-head"><b>퍼그나봇</b><i>앱</i><time>오후 8:54</time></div><div class="dc-text"><span class="at">@운영진1</span>님이 내전 모집을 열었어요.<br>🎮 <strong>도타 2 내전 모집!</strong><br>지금부터 내전 참여자를 모집합니다. 마감 후 명단이 공지되면 로비로 모여 주세요.<br><br>⏰ <strong><span class="ts">오후 9:00</span>까지</strong> 참여 신청을 받아요. (<span class="ts">3분 후</span> 마감)<br>👉 여기에서 <code>/참여</code> 를 입력하세요. 취소는 <code>/참여취소</code><br>👥 참여자 (12명): 플레이어1, 플레이어2, 플레이어3, 플레이어4, 플레이어5, 플레이어6, 플레이어7, 플레이어8, 플레이어9, 플레이어10, 플레이어11, 플레이어12 <span class="edited">(수정됨)</span></div></div></div>
+        <div class="dc-msg"><div class="dc-av">퍼</div><div class="dc-body"><div class="dc-head"><b>퍼그나봇</b><i>앱</i><time>오후 8:54</time></div><div class="dc-text"><span class="at">@운영진1</span>: <span class="role">@리그 선수</span> 내전 모집이 열렸어요! 여기에서 <code>/참여</code> 로 신청하세요.</div></div></div>
         <div class="dc-used"><span class="dc-mini">플</span><b>플레이어12</b> 님이 <span class="dc-cmd">/참여</span> 사용함</div>
         <div class="dc-msg me"><div class="dc-av">퍼</div><div class="dc-body"><div class="dc-head"><b>퍼그나봇</b><i>앱</i><time>오후 8:57</time></div><div class="dc-text">✅ 참여 완료! 12번째 참여자예요. 마감 <span class="ts">3분 후</span></div><div class="dc-only">👁 이 메시지는 나만 볼 수 있어요</div></div></div>
       </div>
-      <p class="after">누가 <code>/참여</code>할 때마다 본문의 <strong>참여자</strong> 줄이 바로 바뀝니다. 내 이름이 들어갔는지 여기서 확인합니다.</p>
+      <p class="after">맨 위가 모집 글의 본문이고, 그 아래가 리그 선수 모두에게 알림을 보내는 글입니다. 누가 <code>/참여</code>할 때마다 본문의 <strong>참여자</strong> 줄이 바로 바뀝니다. 내 이름이 들어갔는지 여기서 확인합니다.</p>
     </figure>
 
     <h3>참여를 취소하려면</h3>
@@ -352,6 +353,12 @@
 
     <h3>"이 명령어를 사용할 권한이 없어요"라고 나와요</h3>
     <p>리그 선수 역할이 없는 것입니다. 디스코드에서 내 프로필을 눌러 <strong>리그 선수</strong> 역할이 있는지 확인해 주세요. 방금 승인됐다면 5분쯤 뒤에 다시 입력해 보고, 그래도 없으면 위 "리그 선수 역할이 생기지 않아요"를 확인해 주세요.</p>
+
+    <h3>내전 모집 알림이 오지 않아요</h3>
+    <ul>
+      <li>알림은 <strong>리그 선수</strong> 역할이 있는 사람에게 갑니다. 디스코드에서 내 프로필을 눌러 역할이 있는지 확인해 주세요.</li>
+      <li>디스코드에서 이 서버나 <strong>#⚔️게임-참가신청</strong> 채널의 알림을 꺼 두었거나, 서버의 알림 설정에서 역할 멘션 알림을 꺼 두면 오지 않습니다.</li>
+    </ul>
 
     <h3>명령어를 입력해도 봇이 답하지 않아요</h3>
     <p>봇이 잠시 꺼져 있을 수 있습니다. 디스코드에서 리그 운영진에게 알려 주세요.</p>
