@@ -61,17 +61,25 @@
     }
   };
 
+  // 사이트의 뿌리 주소(이 파일이 있는 assets 폴더의 위). 하위 폴더(rank/)의 페이지에서도 맞도록 머리의 링크는 여기서부터 적는다
+  const ROOT = (() => { try{ return new URL('..', document.currentScript.src).href; }catch(e){ return ''; } })();
+
+  // 사이트는 두 갈래다 (운영자가 2026-10-13에 나눔): 선수 등록 / 순위와 승부의 신 랭킹(rank/).
+  // 등록 페이지에는 순위 쪽으로 가는 링크를 두지 않는다. 순위 쪽의 두 페이지는 서로 오간다. 리그 관리자 페이지에만 모두 둔다
+  const RANK_NAV = [['ranking', 'rank/', '순위와 경기 기록'], ['oracle', 'rank/oracle.html', '승부의 신 랭킹']];
+  const NAVS = {ranking: RANK_NAV, oracle: RANK_NAV, admin: [['register', 'index.html', '선수 등록']].concat(RANK_NAV)};
+
   function mountChrome(active, season){
     const head = document.getElementById('site-head');
     if(head){
+      const links = NAVS[active] || [];
       head.className = 'site-head';
       head.innerHTML =
         '<div class="wrap">' +
-          '<a class="brand" href="index.html"><b>' + esc(L.title) + '</b><span class="season" id="seasonTag" hidden></span></a>' +
-          '<nav class="site-nav" aria-label="사이트">' +
-            '<a href="index.html"' + (active === 'register' ? ' aria-current="page"' : '') + '>선수 등록</a>' +
-            '<a href="ranking.html"' + (active === 'ranking' ? ' aria-current="page"' : '') + '>순위와 경기 기록</a>' +
-          '</nav>' +
+          '<a class="brand" href="' + esc(ROOT + (links === RANK_NAV ? 'rank/' : 'index.html')) + '"><b>' + esc(L.title) + '</b><span class="season" id="seasonTag" hidden></span></a>' +
+          (links.length ? '<nav class="site-nav" aria-label="사이트">' +
+            links.map(([key, href, label]) => '<a href="' + esc(ROOT + href) + '"' + (active === key ? ' aria-current="page"' : '') + '>' + label + '</a>').join('') +
+          '</nav>' : '') +
         '</div>';
     }
     const foot = document.getElementById('site-foot');
@@ -115,5 +123,5 @@
     toastTimer = setTimeout(() => { t.hidden = true; }, ms || 3200);
   }
 
-  window.Site = {L, esc, api, mountChrome, setSeason, toast, PREF_LABEL, dayStart, dayAt, dayBefore};
+  window.Site = {L, esc, api, mountChrome, setSeason, toast, PREF_LABEL, dayStart, dayAt, dayBefore, root: ROOT};
 })();

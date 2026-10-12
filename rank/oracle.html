@@ -1,0 +1,238 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>승부의 신 랭킹 | 도타 2 인하우스 리그</title>
+<meta name="description" content="도타 2 인하우스 리그 승부 예측 포인트 랭킹">
+<meta name="robots" content="noindex">
+<meta name="theme-color" content="#141a20">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Oswald:wght@400;500;600&family=Noto+Sans+KR:wght@400;500;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../assets/site.css">
+<style>
+.status{font-size:13px;color:var(--bone-dim);display:flex;flex-wrap:wrap;gap:4px 16px;align-items:center;margin-bottom:6px}
+.status .warn{color:var(--dire)}
+.rule{margin:14px 0 18px;padding:0 0 0 18px;font-size:13.5px;line-height:1.75;color:var(--bone-dim)}
+.swipe{margin:-8px 0 12px;font-size:12.5px;color:var(--bone-dim)}
+.empty-box{border:1px dashed var(--line);border-radius:4px;padding:28px 24px;max-width:640px}
+.empty-box h2{margin:0 0 6px;font-size:18px}
+.empty-box p{margin:0;color:var(--bone-dim)}
+
+/* 순위표 (순위 페이지와 같은 모양) */
+.scroll{overflow-x:auto;-webkit-overflow-scrolling:touch}
+table.board{width:100%;border-collapse:collapse;min-width:560px}
+.board th{text-align:left;font-size:12px;font-weight:500;color:var(--bone-dim);padding:0 10px 2px;border-bottom:1px solid var(--line);white-space:nowrap}
+.board td{padding:11px 10px;border-bottom:1px solid var(--line-soft);vertical-align:middle}
+.board th.n,.board td.n{text-align:right}
+.board tbody tr:hover td{background:var(--ink-2)}
+/* 누르면 그 항목으로 정렬하는 머리글. 지금 정렬 기준은 금색과 ▲(오름차순)·▼(내림차순)로 보인다 */
+.sort{background:none;border:0;padding:6px 0;display:inline-flex;align-items:center;gap:4px;color:var(--bone-dim);font-size:12px;font-weight:500;white-space:nowrap}
+.sort::after{content:'↕';font-size:11px;opacity:.5}
+th.n .sort{flex-direction:row-reverse}
+.sort:hover{color:var(--bone)}
+th[aria-sort="ascending"] .sort,th[aria-sort="descending"] .sort{color:var(--gold)}
+th[aria-sort="ascending"] .sort::after{content:'▲';font-size:9px;opacity:1}
+th[aria-sort="descending"] .sort::after{content:'▼';font-size:9px;opacity:1}
+
+.c-rank{width:44px;font-family:var(--num);font-size:17px;color:var(--bone-dim)}
+.c-rank.is-top{color:var(--gold)}
+.c-name{font-weight:500;font-size:15.5px}
+.c-points,.c-profit,.c-hits,.c-rate,.c-claimed{font-family:var(--num);font-size:16px;font-variant-numeric:tabular-nums;white-space:nowrap}
+.c-hits,.c-rate,.c-claimed{color:var(--bone-dim)}
+.c-hits small{font-size:12.5px;margin-left:2px}
+.up{color:var(--rad)}
+.down{color:var(--dire)}
+.dim{color:var(--bone-dim)}
+/* 지금 정렬 기준인 숫자를 가장 크게 (순위는 보유 포인트로 매기므로 순위로 정렬할 때도 포인트를 크게) */
+.board.by-rank td.c-points,.board.by-points td.c-points{font-size:24px;color:var(--gold);line-height:1}
+.board.by-profit td.c-profit,.board.by-hits td.c-hits,.board.by-rate td.c-rate,.board.by-claimed td.c-claimed{font-size:22px;line-height:1}
+.board.by-hits td.c-hits,.board.by-rate td.c-rate,.board.by-claimed td.c-claimed{color:var(--gold)}
+.board.by-name td.c-name{color:var(--gold)}
+.board td.c-points.down{color:var(--dire)}   /* 0보다 적은 포인트는 정렬 기준이어도 붉게 */
+
+.narrow-only{display:none}
+@media (max-width:640px){
+  .narrow-only{display:block}
+  .board td{padding:10px 7px}
+  .board th{padding:0 7px 2px}
+}
+</style>
+</head>
+<body>
+<header id="site-head"></header>
+
+<main class="wrap">
+  <h1 class="page-title">승부의 신 랭킹</h1>
+  <div class="status" id="status" aria-live="polite"></div>
+
+  <div id="main" hidden>
+    <ul class="rule">
+      <li>일주일에 한 번, 월요일부터 오라클 봇을 통해 <span id="weekly">1,000</span> 포인트를 받을 수 있습니다.</li>
+      <li>내전 팀 편성 후 20분 동안 승부 예측에 참여할 수 있습니다.</li>
+      <li>본인이 참전하는 매치의 승부 예측에는 참여할 수 없습니다.</li>
+      <li id="playRule" hidden>내전에 참전하면 결과가 기록될 때 승패와 상관없이 <span id="playPoints">100</span> 포인트를 받습니다.</li>
+    </ul>
+    <p class="swipe narrow-only">표를 옆으로 밀면 나머지 항목이 보입니다.</p>
+    <div class="scroll">
+      <table class="board by-rank" id="board">
+        <thead>
+          <tr>
+            <th scope="col"><button type="button" class="sort" data-sort="rank">순위</button></th>
+            <th scope="col"><button type="button" class="sort" data-sort="name">선수</button></th>
+            <th scope="col" class="n"><button type="button" class="sort" data-sort="points">보유 포인트</button></th>
+            <th scope="col" class="n" title="승부 예측으로 얻은 포인트에서 잃은 포인트를 뺀 값"><button type="button" class="sort" data-sort="profit">예측 손익</button></th>
+            <th scope="col" class="n" title="맞힌 횟수 / 건 횟수"><button type="button" class="sort" data-sort="hits">맞힘</button></th>
+            <th scope="col" class="n"><button type="button" class="sort" data-sort="rate">적중률</button></th>
+            <th scope="col" class="n" title="한 주에 한 번 받을 수 있습니다"><button type="button" class="sort" data-sort="claimed">포인트 받은 주</button></th>
+          </tr>
+        </thead>
+        <tbody id="boardBody"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <section class="empty-box" id="empty">
+    <h2 id="emptyTitle">랭킹을 불러오는 중입니다</h2>
+    <p id="emptyText"></p>
+  </section>
+</main>
+
+<footer id="site-foot"></footer>
+
+<script src="../config.js"></script>
+<script src="../assets/site.js?v=17"></script>
+<script>
+const {api, mountChrome, setSeason, esc} = window.Site;
+const $ = s => document.querySelector(s);
+const REFRESH = 60;   // 화면이 보이는 동안 이만큼(초)마다 다시 읽는다
+const NUM = new Intl.NumberFormat('ko-KR');
+const TIME = new Intl.DateTimeFormat('ko-KR', {timeZone: 'Asia/Seoul', month: 'long', day: 'numeric', hour: 'numeric', minute: '2-digit'});
+// 처음 눌렀을 때의 순서: 순위와 선수는 오름차순(1위, 가나다부터), 숫자는 큰 값부터
+const FIRST_DIR = {rank: 1, name: 1, points: -1, profit: -1, hits: -1, rate: -1, claimed: -1};
+
+mountChrome('oracle');
+
+let model = null, lastText = '', lastChecked = null, stale = false, timer = null;
+const ui = {sort: 'rank', dir: 1};
+
+const num = n => (n < 0 ? '−' : '') + NUM.format(Math.abs(n));
+const signed = n => (n > 0 ? '+' : '') + num(n);
+
+/* 서버가 준 순위를 화면에 쓸 모양으로. 순위는 보유 포인트로 매긴다(같으면 공동 순위) */
+function prepare(data){
+  const int = v => Number.isFinite(Number(v)) ? Math.round(Number(v)) : 0;
+  const players = (Array.isArray(data.players) ? data.players : []).filter(p => p && typeof p === 'object').map(p => {
+    const bets = Math.max(0, int(p.bets)), hits = Math.min(bets, Math.max(0, int(p.hits)));
+    return {name: String(p.name || '이름 없음'), points: int(p.points), profit: int(p.profit), bets, hits,
+      rate: bets ? hits / bets : null, claimed: Math.max(0, int(p.claimed))};
+  });
+  players.sort((a, b) => b.points - a.points || b.profit - a.profit || a.name.localeCompare(b.name, 'ko'));
+  players.forEach((p, i) => { p.order = i; p.rank = i && players[i - 1].points === p.points ? players[i - 1].rank : i + 1; });
+  return {players, weekly: int(data.weekly), play: int(data.play), updatedAt: String(data.updatedAt || '')};
+}
+
+/* 고른 항목으로 정렬한다. 값이 같으면 순위 순서를 따르고, 값이 없는 줄(한 번도 걸지 않은 사람의 적중률)은 언제나 맨 아래다 */
+function sorted(){
+  const key = ui.sort, dir = ui.dir;
+  const value = p => key === 'rank' ? p.order : key === 'hits' ? p.hits : p[key];
+  return model.players.slice().sort((a, b) => {
+    const x = value(a), y = value(b);
+    if(x === null || y === null) return (x === null) - (y === null) || a.order - b.order;
+    if(key === 'name') return dir * a.name.localeCompare(b.name, 'ko') || a.order - b.order;
+    return dir * (x - y) || a.order - b.order;
+  });
+}
+
+function renderStatus(){
+  const parts = ['<span>' + model.players.length + '명</span>'];
+  const at = Date.parse(model.updatedAt);
+  if(Number.isFinite(at)) parts.push('<span>마지막으로 바뀐 때 ' + esc(TIME.format(new Date(at))) + '</span>');
+  if(stale) parts.push('<span class="warn">지금은 서버에서 새 랭킹을 받지 못하고 있습니다. 보이는 것은 마지막으로 받은 랭킹입니다.</span>');
+  $('#status').innerHTML = parts.join('');
+}
+
+function renderBoard(){
+  const board = $('#board');
+  board.className = 'board by-' + ui.sort;
+  board.querySelectorAll('th').forEach(th => {
+    const b = th.querySelector('.sort');
+    if(b && b.dataset.sort === ui.sort) th.setAttribute('aria-sort', ui.dir > 0 ? 'ascending' : 'descending');
+    else th.removeAttribute('aria-sort');
+  });
+  $('#boardBody').innerHTML = sorted().map(p =>
+    '<tr>' +
+      '<td class="c-rank' + (p.rank === 1 ? ' is-top' : '') + '">' + p.rank + '</td>' +
+      '<td class="c-name">' + esc(p.name) + '</td>' +
+      '<td class="n c-points' + (p.points < 0 ? ' down' : '') + '">' + num(p.points) + '</td>' +
+      '<td class="n c-profit ' + (p.profit > 0 ? 'up' : p.profit < 0 ? 'down' : 'dim') + '">' + signed(p.profit) + '</td>' +
+      '<td class="n c-hits">' + (p.bets ? p.hits + '<small> / ' + p.bets + '</small>' : '<span class="dim">–</span>') + '</td>' +
+      '<td class="n c-rate">' + (p.rate === null ? '<span class="dim">–</span>' : Math.round(p.rate * 100) + '%') + '</td>' +
+      '<td class="n c-claimed">' + p.claimed + '</td>' +
+    '</tr>').join('');
+}
+
+function renderAll(){
+  if(!model.players.length){
+    showEmpty('아직 포인트를 받은 사람이 없습니다', '디스코드에서 오라클 봇의 포인트 받기를 누르면 이 랭킹에 이름이 올라옵니다.');
+    return;
+  }
+  $('#empty').hidden = true;
+  $('#main').hidden = false;
+  if(model.weekly > 0) $('#weekly').textContent = NUM.format(model.weekly);
+  // 참가 포인트를 주고 있을 때만 그 설명을 보인다 (주인이 0으로 두었거나, 그 값을 싣지 않는 예전 봇이면 감춘다)
+  $('#playRule').hidden = !(model.play > 0);
+  if(model.play > 0) $('#playPoints').textContent = NUM.format(model.play);
+  renderStatus();
+  renderBoard();
+}
+
+function showEmpty(title, text){
+  $('#main').hidden = true;
+  $('#status').textContent = '';
+  $('#empty').hidden = false;
+  $('#emptyTitle').textContent = title;
+  $('#emptyText').textContent = text;
+}
+
+/* 불러오기: 리그 서버의 포인트 순위(오라클 봇이 정산할 때마다 올린다) */
+async function fetchBoard(){
+  if(!api.ready) throw new Error('리그 서버에 연결돼 있지 않습니다.');
+  const j = await api.get('oracle');
+  // 예전 서버(버전 16까지)는 이 요청을 몰라 공개 상태를 대신 돌려준다
+  if(!(j.oracle && Array.isArray(j.oracle.players))) throw new Error('랭킹이 아직 준비되지 않았습니다. 잠시 후 다시 열어 주세요.');
+  return JSON.stringify(j.oracle);
+}
+
+async function load(){
+  try{
+    const text = await fetchBoard();
+    lastChecked = new Date();
+    stale = false;
+    if(text !== lastText){
+      model = prepare(JSON.parse(text));
+      lastText = text;
+      renderAll();
+    }else if(model.players.length) renderStatus();
+  }catch(err){
+    if(model && model.players.length){ stale = true; renderStatus(); }
+    else if(!model) showEmpty('랭킹을 불러오지 못했습니다', err.message || '잠시 후 다시 시도해 주세요.');
+  }
+  if(!timer) timer = setInterval(() => { if(document.visibilityState === 'visible') load(); }, REFRESH * 1000);
+}
+document.addEventListener('visibilitychange', () => { if(document.visibilityState === 'visible' && model) load(); });
+
+$('#board thead').addEventListener('click', e => {
+  const b = e.target.closest('.sort');
+  if(!b || !model) return;
+  if(ui.sort === b.dataset.sort) ui.dir = -ui.dir;
+  else { ui.sort = b.dataset.sort; ui.dir = FIRST_DIR[ui.sort]; }
+  renderBoard();
+});
+
+load();
+if(api.ready) api.get('status').then(s => setSeason(s.season)).catch(() => {});
+</script>
+</body>
+</html>

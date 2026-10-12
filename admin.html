@@ -183,7 +183,7 @@ details.by-file[open] summary{margin-bottom:10px}
       </div>
       <p class="season-note" id="oracleNote" hidden>오라클 봇은 내전의 <b>승부 예측</b>(포인트 걸기)을 맡는 봇입니다. 켜고 끄는 것은 <b>5분 안에</b> 봇에 반영됩니다.
         끄면 새 승부 예측이 열리지 않고 포인트 받기와 걸기가 멈춥니다. 이미 받고 있거나 결과를 기다리는 판은 끝까지 처리합니다(마감, 정산, 돌려주기).
-        주인 키로만 바꿀 수 있습니다. <a href="oracle.html">승부의 신 랭킹 보기</a></p>
+        주인 키로만 바꿀 수 있습니다. <a href="rank/oracle.html">승부의 신 랭킹 보기</a></p>
       <div class="season-row" id="oraclePlayRow" hidden>
         <label for="oraclePlay" class="dim" style="font-size:13.5px">참가 포인트</label>
         <input type="number" id="oraclePlay" min="0" max="10000" step="10" inputmode="numeric" aria-describedby="oraclePlayState">
@@ -322,7 +322,7 @@ details.by-file[open] summary{margin-bottom:10px}
 <footer id="site-foot"></footer>
 
 <script src="config.js"></script>
-<script src="assets/site.js?v=16"></script>
+<script src="assets/site.js?v=17"></script>
 <script>
 (function(){
   const {L, api, esc, mountChrome, setSeason, toast, PREF_LABEL, dayStart, dayAt, dayBefore} = window.Site;
@@ -460,7 +460,7 @@ details.by-file[open] summary{margin-bottom:10px}
     $('#pastSeasons').textContent = past.length ? '지난 시즌: ' + past.map(s => s || '이름 없는 시즌').join(', ') : '';
     // 공개 기록은 리그 매니저나 봇이 기록을 올릴 때, 그리고 서버가 승인한 선수를 선수단에 넣을 때 바뀐다
     $('#recordsInfo').innerHTML = status.recordsAt
-      ? '공개 기록(순위 페이지)이 마지막으로 바뀐 때는 ' + esc(fmt(status.recordsAt)) + '입니다. <a href="ranking.html">순위 페이지 보기</a>'
+      ? '공개 기록(순위 페이지)이 마지막으로 바뀐 때는 ' + esc(fmt(status.recordsAt)) + '입니다. <a href="rank/">순위 페이지 보기</a>'
       : '아직 공개 기록이 없습니다. ' + (auto ? '선수를 승인하면 순위 페이지에 그 선수가 나타납니다.' : '리그 매니저의 데이터·설정 탭에서 서버를 연결해 기록을 올리면 순위 페이지에 나타납니다.');
   }
   $('#btnToggleOpen').addEventListener('click', async () => {

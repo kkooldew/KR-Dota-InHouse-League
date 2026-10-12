@@ -12,7 +12,7 @@
   건 포인트를 모두 모아 이긴 쪽이 건 만큼 나눠 갖는다(많이 건 사람이 많이 딴다). 한쪽에만 걸렸으면 모두 돌려준다.
 - 퍼그나봇의 /승리 로 결과가 기록되면 정산한다. /승리취소 면 정산을 되돌리고(그사이 딴 포인트를 써 버렸으면 0보다 적어질 수 있다),
   다시 /승리 하면 다시 정산한다. 경기가 없던 일이 되면(/취소·/재모집·다시 열기·경기 안 함) 건 포인트를 돌려준다.
-- 포인트를 받은 적이 있는 사람들의 순위를 리그 서버에 올린다(saveOracle, 서버 버전 17). oracle.html(승부의 신 랭킹)이 그것을 보여 준다.
+- 포인트를 받은 적이 있는 사람들의 순위를 리그 서버에 올린다(saveOracle, 서버 버전 17). rank/oracle.html(승부의 신 랭킹)이 그것을 보여 준다.
 - 주인이 리그 관리자 페이지에서 켜고 끈다(서버 버전 18, 운영자가 2026-10-13에 요청). 처음에는 꺼져 있고, 켜 두었는지는 리그 서버에 5분마다 물어본다.
   꺼져 있으면 새 승부 예측을 열지 않고 포인트 받기와 걸기를 받지 않는다. 이미 받던 판은 끝까지 처리한다(마감, 정산, 돌려주기).
 - 참가 포인트(서버 버전 19, 운영자가 2026-10-13에 요청): 결과가 기록되면 그 판에 뛴 선수 열 명이 승패와 상관없이 포인트를 받는다.
@@ -300,8 +300,6 @@ def points_text(uid: int) -> str:
     week, out = week_start(), staked(uid)
     lines = [f"🔮 보유 포인트는 **{num(acc['points'])}**이에요." + (f" 걸어 둔 포인트 {out:,}은 뺀 값이에요." if out else ""),
              f"승부 예측 {acc['bets']}번 가운데 {acc['hits']}번 맞혔고, 손익은 {signed(acc['profit'])} 포인트예요."]
-    if acc["played"]:
-        lines.append(f"내전 {acc['played']}판에 뛰어 참가 포인트로 {acc['earned']:,} 포인트를 받았어요.")
     lines.append(RESTING if not S.on
                  else f"이번 주 포인트는 받았어요. 다음 포인트는 <t:{week + 7 * 86400}:F>부터 받을 수 있어요." if acc["week"] == week
                  else "이번 주 포인트를 아직 받지 않았어요. **포인트 받기**를 눌러 받으세요.")
@@ -801,7 +799,7 @@ def board() -> dict:
         if nick:
             acc["nick"] = str(nick)
         rows.append({"name": acc["nick"] or acc["name"] or "이름 없음", "points": acc["points"] + staked(int(uid)), "profit": acc["profit"],
-                     "bets": acc["bets"], "hits": acc["hits"], "claimed": acc["claimed"], "earned": acc["earned"]})
+                     "bets": acc["bets"], "hits": acc["hits"], "claimed": acc["claimed"]})
     rows.sort(key=lambda x: (-x["points"], -x["profit"], x["name"]))
     return {"updatedAt": datetime.fromtimestamp(now(), timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), "weekly": WEEKLY_POINTS, "play": S.play, "players": rows}
 
