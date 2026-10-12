@@ -259,6 +259,16 @@ def claim(uid: int, user=None) -> tuple[bool, str]:
                   "내전의 팀 편성이 올라오면 그 아래에서 이길 팀에 걸 수 있어요.")
 
 
+def claim_place() -> str:
+    """이번 주 포인트를 받는 곳을 가리키는 말: /오라클설정 으로 정한 채널('포인트 받기' 글이 있는 곳). 정해 두지 않았으면 /포인트"""
+    return f"<#{S.channel_id}> 채널의 **포인트 받기**로" if S.channel_id else "`/포인트` 로"
+
+
+def no_points() -> str:
+    """걸 포인트가 없는 사람에게 하는 답"""
+    return f"걸 수 있는 포인트가 없어요. {claim_place()} 이번 주 포인트를 받았는지 확인해 보세요."
+
+
 def points_text(uid: int) -> str:
     """내 포인트 (/포인트 와 '내 포인트' 버튼)"""
     acc = S.accounts.get(str(uid))
@@ -328,7 +338,7 @@ def place(book: dict | None, uid: int, side: str, amount: int, user=None) -> tup
         return False, why
     have = spendable(book, uid)
     if have <= 0:
-        return False, "걸 수 있는 포인트가 없어요. `/포인트` 로 이번 주 포인트를 받았는지 확인해 보세요."
+        return False, no_points()
     if amount < 1:
         return False, "1 포인트 이상 걸어 주세요."
     if amount > have:
@@ -423,7 +433,7 @@ def open_text(book: dict) -> str:
     end = int(book["closes"])
     return ("🔮 **승부 예측** — 이 경기에서 이길 팀에 포인트를 걸어 보세요.\n"
             f"⏰ **<t:{end}:t>까지** 걸 수 있어요. (<t:{end}:R> 마감) 마감하면 배당률을 알려 드려요.\n"
-            "이 경기에 뛰는 선수는 걸 수 없어요. 포인트가 없으면 `/포인트` 로 이번 주 포인트를 먼저 받으세요.\n"
+            f"이 경기에 뛰는 선수는 걸 수 없어요. 포인트가 없으면 {claim_place()} 이번 주 포인트를 먼저 받으세요.\n"
             f"지금까지 **{len(book['bets'])}명**이 걸었어요.")
 
 
@@ -812,7 +822,7 @@ async def pick_side(interaction: discord.Interaction, side: str) -> None:
         return
     have = spendable(book, uid)
     if have <= 0:
-        await reply(interaction, "걸 수 있는 포인트가 없어요. `/포인트` 로 이번 주 포인트를 받았는지 확인해 보세요.")
+        await reply(interaction, no_points())
         return
     old = book["bets"].get(str(uid))
     text = f"{SIDES[side]}에 얼마를 걸까요? 걸 수 있는 포인트는 **{have:,}**이에요."

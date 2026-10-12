@@ -292,6 +292,9 @@ async def main():
           and isinstance(first.view, mod.BetView) and first.view.is_persistent() and labels(first.view) == ["래디언트", "다이어", "내 베팅"]
           and [c.custom_id for c in first.view.children] == ["oracle:bet:r", "oracle:bet:d", "oracle:mine"] and book["message_id"] == first.id,
           "그 글에 승부 예측 글과 버튼(래디언트·다이어·내 베팅)을 올린다")
+    mod.S.channel_id = 400                     # /오라클설정 으로 '포인트 받기' 글의 채널을 정해 두었으면 그 채널을 알려 준다
+    check("이 경기에 뛰는 선수는 걸 수 없어요. 포인트가 없으면 <#400> 채널의 **포인트 받기**로 이번 주 포인트를 먼저 받으세요.\n" in mod.open_text(book)
+          and "/포인트" not in mod.open_text(book), "승부 예측 글: 포인트가 없으면 '포인트 받기' 글이 있는 채널에서 받으라고 알린다 (/포인트 가 아니라)")
 
     # 진영 버튼 → 금액 버튼
     i = inter(300, GUEST)
@@ -302,7 +305,15 @@ async def main():
     check(said(i) == "이 경기에 뛰는 선수는 걸 수 없어요." and view_of(i) is None, "베팅: 그 경기에 뛰는 선수는 걸 수 없다")
     i = inter(300, D)
     await mod.pick_side(i, "r")
-    check(said(i).startswith("걸 수 있는 포인트가 없어요. `/포인트` 로") and "14" not in mod.S.accounts, "베팅: 포인트가 없으면 걸 수 없다")
+    check(said(i) == "걸 수 있는 포인트가 없어요. <#400> 채널의 **포인트 받기**로 이번 주 포인트를 받았는지 확인해 보세요." and "14" not in mod.S.accounts,
+          "베팅: 포인트가 없으면 걸 수 없다 (포인트를 받는 채널을 알려 준다)")
+    ok, why = mod.place(book, D.id, "r", 100, D)
+    check(not ok and why == said(i), "베팅: 금액을 고른 뒤에 포인트가 없어도 같은 안내를 한다")
+    mod.S.channel_id = 0
+    i = inter(300, D)
+    await mod.pick_side(i, "r")
+    check(said(i) == "걸 수 있는 포인트가 없어요. `/포인트` 로 이번 주 포인트를 받았는지 확인해 보세요." and "14" not in mod.S.accounts,
+          "베팅: 채널을 정해 두지 않았으면 /포인트 를 알려 준다")
     i = inter(300, A)
     await mod.pick_side(i, "r")
     check(said(i) == "🟢 래디언트에 얼마를 걸까요? 걸 수 있는 포인트는 **1,000**이에요." and i.response.send_message.call_args.kwargs["ephemeral"] is True
