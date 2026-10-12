@@ -17,7 +17,7 @@
  * 코드를 고친 뒤에는 배포 → 배포 관리 → 수정(연필) → 버전: 새 버전 → 배포 를 눌러야 반영됩니다.
  */
 
-const SERVER_VERSION = 18;                         // 서버를 고칠 때마다 올린다. 상태 응답에 실려서 새 버전이 배포됐는지 밖에서 확인할 수 있다
+const SERVER_VERSION = 19;                         // 서버를 고칠 때마다 올린다. 상태 응답에 실려서 새 버전이 배포됐는지 밖에서 확인할 수 있다
 const SHEET_NAME = '선수등록';                             // 등록 탭 이름의 앞부분. 시즌마다 '선수등록 (시즌 이름)' 탭을 따로 쓴다
 // 칸을 더할 때는 맨 뒤에 붙이고 LAYOUT 을 올린다. 이미 있는 탭에는 ready_ 가 새 머리글을 채워 넣는다
 // 처리자·처리시각: 그 등록의 상태(승인·제외·대기)를 마지막으로 바꾼 리그 관리자와 그 시각 (버전 11)
@@ -33,6 +33,8 @@ const STEAM_TRIES = 4;                                     // 스팀 조회를 �
 const DRIVE_TRIES = 3;                                     // 드라이브 파일을 몇 번까지 다시 읽어 볼지
 const LEAGUE_MAX = 8000000;                                // 리그 기록의 최대 크기(글자 수)
 const ORACLE_MAX = 2000000;                                // 오라클 봇이 올리는 포인트 기록 사본의 최대 크기(글자 수)
+const ORACLE_PLAY = 100;                                   // 참가 포인트의 처음 값: 결과가 기록되면 그 판에 뛴 선수가 승패와 상관없이 받는다 (버전 19)
+const ORACLE_PLAY_MAX = 10000;                             // 참가 포인트로 받는 가장 큰 값
 const SEASON_WORD = '시즌 변경';                            // 새 시즌을 시작할 때 리그 관리자가 직접 입력해야 하는 확인 문구
 const LINKED = '1';                                        // 승인한 선수를 선수단에 넣기 시작했다는 표시 (버전 10). ready_ 가 처음 한 번 맞춘다
 const OWNER_NAME = '주인';                                 // 주인 키(ADMIN_KEY)로 한 일에 남기는 이름
@@ -268,6 +270,7 @@ function adminStatus_() {
     // 오라클 봇(승부 예측)을 켜 두었는지와, 그 봇이 마지막으로 이 값을 확인하러 온 때(온 적이 없으면 빈 값) (버전 18)
     oracleOn: oracleOn_(),
     oracleSeen: PropertiesService.getScriptProperties().getProperty('ORACLE_SEEN') || '',
+    oraclePlay: oraclePlay_(),      // 참가 포인트: 결과가 기록되면 그 판에 뛴 선수가 받는 포인트 (버전 19)
     role: ACTOR && !ACTOR.owner ? 'staff' : 'owner',
     name: ACTOR ? ACTOR.name : OWNER_NAME
   });
@@ -284,6 +287,10 @@ function setConfig_(body) {
   // 오라클 봇(승부 예측)을 켜고 끄는 것도 주인 키로만 한다 (운영자가 2026-10-13에 정함)
   if (typeof body.oracle === 'boolean' && !(ACTOR && ACTOR.owner))
     fail_('오라클 봇은 주인 키로만 켜고 끌 수 있습니다. 주인 키를 가진 리그 관리자에게 부탁해 주세요.', 'owner');
+  // 참가 포인트(결과가 기록되면 그 판에 뛴 선수가 받는 포인트)도 주인 키로만 바꾼다 (버전 19). 값은 먼저 확인한다
+  const play = body.oraclePlay === undefined ? null : parsePlay_(body.oraclePlay);
+  if (play !== null && !(ACTOR && ACTOR.owner))
+    fail_('참가 포인트는 주인 키로만 바꿀 수 있습니다. 주인 키를 가진 리그 관리자에게 부탁해 주세요.', 'owner');
   if (typeof body.open === 'boolean') {
     const was = regOpen_(props);
     props.setProperty('REG_OPEN', String(body.open));
@@ -313,6 +320,11 @@ function setConfig_(body) {
     const was = oracleOn_();
     props.setProperty('ORACLE_ON', String(body.oracle));
     if (was !== body.oracle) logAlone_(body.oracle ? '오라클 봇 켜기' : '오라클 봇 끄기', '', '');
+  }
+  if (play !== null) {
+    const was = oraclePlay_();
+    props.setProperty('ORACLE_PLAY', String(play));
+    if (was !== play) logAlone_('참가 포인트', String(play), was + ' → ' + play + (play ? ' · 결과가 기록되면 그 판에 뛴 선수가 받음' : ' · 주지 않음'));
   }
   return adminStatus_();
 }
@@ -1492,16 +1504,33 @@ function oracleOn_() {
   return PropertiesService.getScriptProperties().getProperty('ORACLE_ON') === 'true';
 }
 
+// 참가 포인트 (버전 19, 운영자가 2026-10-13에 요청): 내전의 결과가 기록되면 그 판에 뛴 선수 열 명이 승패와 상관없이 받는 포인트.
+// 처음에는 100이고 주인이 리그 관리자 페이지에서 바꾼다(adminConfig {oraclePlay}). 0이면 주지 않는다.
+// 봇은 켜 두었는지를 받는 곳에서 이 값도 함께 받는다. 바꾸기 전에 이미 준 포인트는 그대로다.
+function oraclePlay_() {
+  const raw = PropertiesService.getScriptProperties().getProperty('ORACLE_PLAY');
+  const n = raw === null || raw === '' ? NaN : Number(raw);
+  return Number.isInteger(n) && n >= 0 && n <= ORACLE_PLAY_MAX ? n : ORACLE_PLAY;
+}
+
+function parsePlay_(v) {
+  const n = typeof v === 'number' ? v : (typeof v === 'string' && /^\d{1,6}$/.test(v.trim()) ? Number(v.trim()) : NaN);
+  if (!Number.isInteger(n) || n < 0 || n > ORACLE_PLAY_MAX)
+    fail_('참가 포인트는 0부터 ' + ORACLE_PLAY_MAX + '까지의 숫자로 적어 주세요. 0이면 주지 않습니다.', 'oraclePlay');
+  return n;
+}
+
 // 오라클 봇(승부 예측)이 정산할 때마다 올리는 포인트 순위. 순위 페이지(oracle.html)가 키 없이 읽는다.
-// 공개 기록처럼 내보내도 되는 칸만 남긴다(이름, 포인트, 손익, 건 횟수, 맞힌 횟수, 포인트를 받은 횟수). 디스코드 ID는 받아도 버린다.
+// 공개 기록처럼 내보내도 되는 칸만 남긴다(이름, 포인트, 손익, 건 횟수, 맞힌 횟수, 포인트를 받은 횟수, 참가 포인트로 받은 합). 디스코드 ID는 받아도 버린다.
 function sanitizeOracle_(b) {
   if (!b || typeof b !== 'object' || !Array.isArray(b.players)) fail_('포인트 순위 형식이 잘못됐습니다');
   const int = v => { const n = Math.round(Number(v)); return Number.isFinite(n) ? n : 0; };
   return {
     weekly: int(b.weekly),
+    play: int(b.play),              // 참가 포인트: 한 판에 얼마 (랭킹 페이지의 설명에 적는다)
     players: b.players.slice(0, 1000).filter(p => !!p && typeof p === 'object').map(p => ({
       name: String(p.name == null ? '' : p.name).slice(0, 40),
-      points: int(p.points), profit: int(p.profit), bets: int(p.bets), hits: int(p.hits), claimed: int(p.claimed)
+      points: int(p.points), profit: int(p.profit), bets: int(p.bets), hits: int(p.hits), claimed: int(p.claimed), earned: int(p.earned)
     }))
   };
 }
@@ -1522,7 +1551,7 @@ function saveOracle_(body) {
     driveFile_('ORACLE_FILE_ID', '인하우스_오라클_순위.json').setContent(text);
     putCache_('oracle', text);
     if (backup) driveFile_('ORACLE_STATE_ID', '인하우스_오라클_포인트기록.json').setContent(backup);
-    return { updatedAt: clean.updatedAt, players: clean.players.length, oracleOn: oracleOn_() };
+    return { updatedAt: clean.updatedAt, players: clean.players.length, oracleOn: oracleOn_(), oraclePlay: oraclePlay_() };
   });
 }
 
@@ -1545,12 +1574,12 @@ function oracleState_(body) {
   const props = PropertiesService.getScriptProperties();
   if (body && body.brief === true) {
     props.setProperty('ORACLE_SEEN', new Date().toISOString());
-    return { oracleOn: oracleOn_() };
+    return { oracleOn: oracleOn_(), oraclePlay: oraclePlay_() };
   }
   const id = props.getProperty('ORACLE_STATE_ID');
-  if (!id) return { state: null, oracleOn: oracleOn_() };
+  if (!id) return { state: null, oracleOn: oracleOn_(), oraclePlay: oraclePlay_() };
   const text = readFile_(id);
-  return { state: text ? JSON.parse(text) : null, oracleOn: oracleOn_() };
+  return { state: text ? JSON.parse(text) : null, oracleOn: oracleOn_(), oraclePlay: oraclePlay_() };
 }
 
 /* =========================================================
@@ -1585,7 +1614,8 @@ function getLeague_() {
   const list = seasons_(), end = seasonEnd_(list);
   return { league: text ? JSON.parse(text) : null, rev, leagueAt: text ? (props.getProperty('LEAGUE_AT') || '') : '',
     seasonNo: list.length - 1, seasonEnd: end.date, seasonEndAt: end.at,
-    oracleOn: oracleOn_() };      // 오라클 봇을 켜 두었는지. 봇이 팀을 짜기 직전에 받아, 그 판에 승부 예측을 열지 정한다 (버전 18)
+    oracleOn: oracleOn_(),        // 오라클 봇을 켜 두었는지. 봇이 팀을 짜기 직전에 받아, 그 판에 승부 예측을 열지 정한다 (버전 18)
+    oraclePlay: oraclePlay_() };  // 참가 포인트 (버전 19)
 }
 
 // 서버가 직접 고치려고 읽는 리그 기록. 한 번도 올라온 적이 없으면 null 이다.

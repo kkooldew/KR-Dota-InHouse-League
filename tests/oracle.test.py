@@ -89,6 +89,7 @@ class World:
         self.asked, self.fail, self.backup = [], False, None
         self.switch = True                # 주인이 리그 관리자 페이지에서 오라클 봇을 켜 두었는지. None 이면 그 값을 모르는 예전 서버처럼 군다
         self.polls, self.deaf = 0, False  # 봇이 켜 두었는지 물어본 횟수. deaf 면 그 물음에 답하지 않는다
+        self.play = None                  # 리그 서버가 알려 주는 참가 포인트. None 이면 그 값을 모르는 예전 서버처럼 군다
 
         async def can_play(user):
             return user.id in self.players
@@ -98,7 +99,8 @@ class World:
                 self.polls += 1
                 if self.deaf:
                     raise RuntimeError("서버가 답하지 않음")
-                return {"ok": True} if self.switch is None else {"ok": True, "oracleOn": self.switch}
+                extra = {} if self.play is None else {"oraclePlay": self.play}
+                return {"ok": True} if self.switch is None else {"ok": True, "oracleOn": self.switch, **extra}
             self.asked.append(payload)
             if self.fail:
                 raise RuntimeError("서버 오류")
@@ -112,6 +114,7 @@ class World:
         mod.S.client = SimpleNamespace(get_partial_messageable=self.place)
         mod.S.ready = True
         mod.S.on = True                   # 주인이 켜 둔 상태에서 본다 (꺼 둔 경우는 따로 본다)
+        mod.S.play = 0                    # 참가 포인트는 주지 않는 것으로 두고 본다 (주는 경우는 따로 본다)
 
     def place(self, cid):
         if cid not in self.places:
@@ -184,7 +187,8 @@ async def main():
     i = inter(400, A)
     await mod.claim_points(i)
     check(said(i).startswith("✅ **1,000 포인트**를 받았어요. 보유 포인트는 **1,000**이에요.") and i.response.send_message.call_args.kwargs["ephemeral"] is True
-          and mod.S.accounts["11"] == {"points": 1000, "claimed": 1, "week": MON, "name": "가", "username": "u11", "nick": "", "bets": 0, "hits": 0, "profit": 0},
+          and mod.S.accounts["11"] == {"points": 1000, "claimed": 1, "week": MON, "name": "가", "username": "u11", "nick": "", "bets": 0, "hits": 0, "profit": 0,
+                                     "played": 0, "earned": 0},
           "포인트 받기: 누르면 1000 포인트를 받는다")
     i = inter(400, A)
     await mod.claim_points(i)
@@ -239,6 +243,7 @@ async def main():
     i = inter(100, ADMIN)
     await mod.cmd_setup(i, None)
     check(said(i) == "<@1>님, 오라클 봇의 설정이에요.\n승부 예측: **켜짐** (주인이 리그 관리자 페이지에서 켜고 꺼요. 바꾸면 5분 안에 반영돼요)\n"
+          "참가 포인트: **주지 않음** (결과가 기록되면 그 판에 뛴 선수가 받아요. 주인이 리그 관리자 페이지에서 바꿔요)\n"
           "'포인트 받기' 글을 올리는 채널: 정하지 않음 (정하면 그 채널에 이번 주 글을 올려요)\n포인트를 받은 적이 있는 사람: 0명",
           "/오라클설정: 비우고 쓰면 지금 설정을 보여 준다 (켜져 있는지도)")
     i = inter(100, ADMIN)
@@ -384,9 +389,9 @@ async def main():
     w.at += 60
     await mod.put_amount(inter(300, B), key, "r", 100)
     await mod.put_amount(inter(300, C), key, "d", 300)
-    check(mod.board()["players"] == [{"name": "가", "points": 1000, "profit": 0, "bets": 0, "hits": 0, "claimed": 1}, {"name": "나", "points": 1000, "profit": 0, "bets": 0, "hits": 0, "claimed": 1},
-                                     {"name": "다", "points": 1000, "profit": 0, "bets": 0, "hits": 0, "claimed": 1}, {"name": "선수105", "points": 1000, "profit": 0, "bets": 0, "hits": 0, "claimed": 1},
-                                     {"name": "선수110", "points": 1000, "profit": 0, "bets": 0, "hits": 0, "claimed": 1}],
+    check(mod.board()["players"] == [{"name": "가", "points": 1000, "profit": 0, "bets": 0, "hits": 0, "claimed": 1, "earned": 0}, {"name": "나", "points": 1000, "profit": 0, "bets": 0, "hits": 0, "claimed": 1, "earned": 0},
+                                     {"name": "다", "points": 1000, "profit": 0, "bets": 0, "hits": 0, "claimed": 1, "earned": 0}, {"name": "선수105", "points": 1000, "profit": 0, "bets": 0, "hits": 0, "claimed": 1, "earned": 0},
+                                     {"name": "선수110", "points": 1000, "profit": 0, "bets": 0, "hits": 0, "claimed": 1, "earned": 0}],
           "순위에는 걸어 둔 포인트도 보유 포인트로 넣는다 (경기가 끝나기 전에는 순위가 바뀌지 않는다)")
     w.at = T0 + 1199
     await mod.tick()
@@ -441,11 +446,11 @@ async def main():
     await mod.tick()
     sent = w.asked[-1]
     check(len(w.asked) == 1 and sent["action"] == "saveOracle" and sent["board"]["weekly"] == 1000 and sent["board"]["updatedAt"].endswith("Z")
-          and sent["board"]["players"][:3] == [{"name": "가나다", "points": 1250, "profit": 250, "bets": 1, "hits": 1, "claimed": 1},
-                                               {"name": "나", "points": 1050, "profit": 50, "bets": 1, "hits": 1, "claimed": 1},
-                                               {"name": "선수105", "points": 1000, "profit": 0, "bets": 0, "hits": 0, "claimed": 1}]
-          and sent["board"]["players"][-1] == {"name": "다", "points": 700, "profit": -300, "bets": 1, "hits": 0, "claimed": 1}
-          and all(set(row) == {"name", "points", "profit", "bets", "hits", "claimed"} for row in sent["board"]["players"]) and set(sent["board"]) == {"updatedAt", "weekly", "players"}
+          and sent["board"]["players"][:3] == [{"name": "가나다", "points": 1250, "profit": 250, "bets": 1, "hits": 1, "claimed": 1, "earned": 0},
+                                               {"name": "나", "points": 1050, "profit": 50, "bets": 1, "hits": 1, "claimed": 1, "earned": 0},
+                                               {"name": "선수105", "points": 1000, "profit": 0, "bets": 0, "hits": 0, "claimed": 1, "earned": 0}]
+          and sent["board"]["players"][-1] == {"name": "다", "points": 700, "profit": -300, "bets": 1, "hits": 0, "claimed": 1, "earned": 0}
+          and all(set(row) == {"name", "points", "profit", "bets", "hits", "claimed", "earned"} for row in sent["board"]["players"]) and set(sent["board"]) == {"updatedAt", "weekly", "play", "players"}
           and not mod.S.dirty,
           "정산한 뒤 포인트 순위를 리그 서버에 올린다 (보유 포인트 순. 이름은 리그 닉네임이고 모르면 서버 별명. 디스코드 ID는 싣지 않는다)")
     check(sent["state"]["accounts"]["11"]["points"] == 1250 and sent["state"]["books"][0]["state"] == "settled", "포인트 기록의 사본도 함께 올린다 (이 PC의 파일을 잃어도 되살릴 수 있게)")
@@ -743,6 +748,155 @@ async def main():
     mod.setup(token="x", path=path, host=None)
     check(mod.S.on is False, "기록이 없는 처음에는 꺼진 것으로 시작한다 (리그 서버가 켜 두었다고 알려 줄 때까지)")
 
+    # ── 참가 포인트: 결과가 기록되면 그 판에 뛴 선수 열 명이 승패와 상관없이 받는다 (처음에는 한 판에 100. 주인이 리그 관리자 페이지에서 바꾼다) ──
+    path.unlink(missing_ok=True)
+    check(mod.State().play == 100 == mod.PLAY_POINTS, "참가 포인트: 처음에는 한 판에 100이다")
+    w = World(mod, path, T0)
+    mod.S.play = 100
+    w.players = {11, 12, 13} | set(range(100, 112))
+    for u in (A, B, C, user(105)):
+        await mod.claim_points(inter(400, u))
+    acc = mod.S.accounts
+    game = lineup(1)
+    await mod.on_lineup(game)
+    pb = mod.S.books[0]
+    end = int(pb["closes"])
+    check(w.place(300).sent[0].text == "🔮 **승부 예측** — 이 경기에서 이길 팀에 포인트를 걸어 보세요.\n"
+          f"⏰ **<t:{end}:t>까지** 걸 수 있어요. (<t:{end}:R> 마감) 마감하면 배당률을 알려 드려요.\n"
+          "이 경기에 뛰는 선수는 걸 수 없어요. 대신 결과가 기록되면 참가 포인트로 **100 포인트**를 받아요.\n"
+          "포인트가 없으면 `/포인트` 로 이번 주 포인트를 먼저 받으세요.\n지금까지 **0명**이 걸었어요.",
+          "참가 포인트: 승부 예측 글에서, 걸 수 없는 선수에게 참가 포인트를 받는다고 알려 준다")
+    i = inter(300, user(105))
+    await mod.pick_side(i, "r")
+    check(said(i) == "이 경기에 뛰는 선수는 걸 수 없어요. 대신 결과가 기록되면 참가 포인트로 **100 포인트**를 받아요.", "참가 포인트: 걸려고 한 선수에게도 알려 준다")
+    await mod.put_amount(inter(300, A), pb["key"], "r", 500)
+    await mod.put_amount(inter(300, B), pb["key"], "d", 500)
+    w.at = pb["closes"]
+    await mod.tick()
+    check(acc["105"]["points"] == 1000 and "100" not in acc and pb["play"] == {}, "참가 포인트: 결과가 기록되기 전에는 주지 않는다")
+    await mod.on_result(game, "r")
+    check(pb["state"] == "settled" and pb["play"] == {str(uid): 100 for uid in range(100, 110)} and acc["105"]["points"] == 1100
+          and (acc["100"]["points"], acc["100"]["claimed"], acc["100"]["played"], acc["100"]["earned"]) == (100, 0, 1, 100)
+          and "110" not in acc and "111" not in acc and (acc["11"]["points"], acc["11"]["played"], acc["12"]["points"]) == (1500, 0, 500),
+          "참가 포인트: 그 판에 뛴 열 명이 승패와 상관없이 받는다 (포인트 받기를 누른 적이 없는 선수에게도 쌓인다. 쉬는 사람과 건 사람은 받지 않는다)")
+    check(w.place(300).texts()[-1] == "🔮 **승부 예측 결과** — 🟢 래디언트 승리! (배당 2.00배)\n\n🎉 **맞힌 사람**\n<@11> **+500** · 보유 1,500\n\n💸 **틀린 사람**\n<@12> −500 · 보유 500\n\n"
+          "🎮 **참가 포인트** — 이 경기에 뛴 선수 10명이 **100 포인트**씩 받았어요.\n\n📊 승부의 신 랭킹: <https://example.invalid/oracle.html>",
+          "참가 포인트: 정산 글에 한 줄로 알린다")
+    rows = mod.board()
+    check(rows["play"] == 100 and [(r["name"], r["points"], r["earned"]) for r in rows["players"]] == [("가", 1500, 0), ("선수105", 1100, 100), ("다", 1000, 0), ("나", 500, 0)],
+          "참가 포인트: 순위에는 포인트 받기를 누른 적이 있는 사람만 나온다 (참가 포인트로 받은 합과, 한 판에 얼마인지도 싣는다)")
+    i = inter(400, user(100))
+    await mod.show_points(i)
+    check(said(i) == "🔮 보유 포인트는 **100**이에요.\n승부 예측 0번 가운데 0번 맞혔고, 손익은 0 포인트예요.\n내전 1판에 뛰어 참가 포인트로 100 포인트를 받았어요.\n"
+          "이번 주 포인트를 아직 받지 않았어요. **포인트 받기**를 눌러 받으세요.\n승부의 신 랭킹에는 **포인트 받기**를 한 번이라도 누른 뒤부터 이름이 올라가요.\n"
+          "승부의 신 랭킹: <https://example.invalid/oracle.html>" and labels(view_of(i)) == ["포인트 받기", "내 포인트"],
+          "참가 포인트: 포인트 받기를 누른 적이 없는 선수도 내 포인트를 볼 수 있다 (랭킹에는 포인트 받기를 누른 뒤부터 나온다고 알린다)")
+    await mod.claim_points(inter(400, user(100)))
+    check(acc["100"]["points"] == 1100 and any(r["name"] == "선수100" and r["points"] == 1100 and r["earned"] == 100 for r in mod.board()["players"]),
+          "참가 포인트: 포인트 받기를 누르면 그때부터 랭킹에 나온다 (쌓인 참가 포인트와 함께)")
+    other = lineup(2, place=301)
+    other["who"] = {f"p{k}": 200 + k for k in range(12)}             # 다른 열 명이 뛰는 판
+    await mod.on_lineup(other)
+    ob = mod.S.books[1]
+    i = inter(301, user(101))
+    await mod.put_amount(i, ob["key"], "r", 100)
+    check(said(i).startswith("✅ 🟢 래디언트에 **100 포인트**") and acc["101"]["points"] == 0, "참가 포인트: 받은 포인트로 다른 경기에 걸 수 있다")
+
+    # /승리취소 면 거둔다. 다시 기록하면 다시 준다
+    await mod.on_undo(game)
+    check(pb["state"] == "closed" and pb["play"] == {} and pb["winner"] is None and acc["105"]["points"] == 1000
+          and (acc["100"]["points"], acc["100"]["played"], acc["100"]["earned"]) == (1000, 0, 0) and (acc["101"]["points"], acc["101"]["played"]) == (-100, 0)
+          and (acc["11"]["points"], acc["12"]["points"]) == (500, 500),
+          "참가 포인트: /승리취소 면 거둔다 (이미 다른 판에 걸었으면 0보다 적어진다. 건 포인트의 정산도 함께 되돌린다)")
+    check(w.place(300).texts()[-1] == "🔮 경기 결과가 취소돼서 승부 예측의 정산을 되돌리고 참가 포인트를 거뒀어요. 결과가 다시 기록되면 그때 다시 정산하고 다시 드려요.\n"
+          "포인트가 0보다 적어진 사람: <@101> (−100)", "참가 포인트: 거뒀다고 알리고, 0보다 적어진 사람을 적는다")
+    with contextlib.redirect_stdout(io.StringIO()) as out:
+        mod.hear(None, 50)
+    check(mod.S.play == 50 and mod.S.on and "참가 포인트를 한 판에 50 포인트로 정했습니다" in out.getvalue() and json.loads(path.read_text(encoding="utf-8"))["play"] == 50,
+          "참가 포인트: 리그 서버가 알려 준 값으로 바뀐다 (파일에 적어 둔다. 켜 두었는지는 건드리지 않는다)")
+    for bad in (-1, 10001, 1.5, "100", True, None, float("nan")):
+        mod.hear(None, bad)
+    check(mod.S.play == 50, "참가 포인트: 쓸 수 없는 값은 받지 않는다")
+    await mod.on_result(game, "d")
+    n = len(w.place(300).sent)
+    check(pb["state"] == "settled" and pb["play"] == {str(uid): 50 for uid in range(100, 110)} and (acc["101"]["points"], acc["101"]["played"], acc["101"]["earned"]) == (-50, 1, 50)
+          and "뛴 선수 10명이 **50 포인트**씩 받았어요." in w.place(300).texts()[-1], "참가 포인트: 다시 기록하면 그때의 값으로 다시 준다")
+    await mod.on_result(game, "d")
+    check(acc["101"]["points"] == -50 and len(w.place(300).sent) == n, "참가 포인트: 같은 결과에 두 번 주지 않는다")
+    w.play = 120
+    w.at += 300
+    with contextlib.redirect_stdout(io.StringIO()):
+        await mod.tick()
+    check(mod.S.play == 120, "참가 포인트: 켜 두었는지를 5분마다 물어볼 때 함께 받는다")
+
+    # 건 사람이 없어 정산할 것이 없는 판에도 준다
+    quiet = lineup(3, place=302)
+    await mod.on_lineup(quiet)
+    qb = mod.S.books[2]
+    await mod.on_result(quiet, "r")                                  # 20분이 되기 전에 결과가 나왔다: 마감하고(건 사람 없음) 참가 포인트만 준다
+    check(qb["state"] == "void" and qb["winner"] == "r" and qb["play"] == {str(uid): 120 for uid in range(100, 110)} and acc["105"]["points"] == 1170
+          and w.place(302).texts() == ["🔮 **승부 예측** — 마감했어요. 건 사람이 없었어요.",
+                                       "🎮 **참가 포인트** — 이 경기에 뛴 선수 10명이 **120 포인트**씩 받았어요.\n\n📊 승부의 신 랭킹: <https://example.invalid/oracle.html>"],
+          "참가 포인트: 건 사람이 없어 정산할 것이 없는 판에도 준다 (참가 포인트만 알린다)")
+    await mod.on_result(quiet, "d")
+    check(acc["105"]["points"] == 1170 and len(w.place(302).sent) == 2, "참가 포인트: 건 사람이 없던 판에도 두 번 주지 않는다")
+    await mod.on_undo(quiet)
+    check(qb["play"] == {} and qb["winner"] is None and acc["105"]["points"] == 1050
+          and w.place(302).texts()[-1] == "🔮 경기 결과가 취소돼서 참가 포인트를 거뒀어요. 결과가 다시 기록되면 그때 다시 드려요.\n포인트가 0보다 적어진 사람: <@101> (−50)",
+          "참가 포인트: 건 사람이 없던 판도 /승리취소 면 거둔다")
+    await mod.on_undo(quiet)
+    check(len(w.place(302).sent) == 3 and acc["105"]["points"] == 1050, "참가 포인트: 거둔 판에서 다시 거두지 않는다")
+    await mod.on_result(quiet, "r")
+    await mod.on_void(quiet)
+    check(qb["off"] is True and qb["play"] == {} and acc["105"]["points"] == 1050 and w.place(302).texts()[-1] == "🔮 이 경기가 없던 일이 돼서 참가 포인트를 거뒀어요.",
+          "참가 포인트: 결과를 기록한 판이 없던 일이 되면 거둔다")
+    await mod.on_result(quiet, "r")
+    check(qb["play"] == {} and acc["105"]["points"] == 1050, "참가 포인트: 없던 일이 된 판에는 주지 않는다")
+
+    # 0이면 주지 않는다
+    with contextlib.redirect_stdout(io.StringIO()) as out:
+        mod.hear(None, 0)
+    zero = lineup(4, place=303)
+    await mod.on_lineup(zero)
+    zb = mod.S.books[-1]
+    check("참가 포인트를 주지 않기로 했습니다" in out.getvalue() and "참가 포인트" not in w.place(303).sent[0].text
+          and "이 경기에 뛰는 선수는 걸 수 없어요. 포인트가 없으면" in w.place(303).sent[0].text, "참가 포인트: 0이면 승부 예측 글에서도 말하지 않는다")
+    await mod.on_result(zero, "r")
+    check(zb["play"] == {} and zb["winner"] == "r" and acc["105"]["points"] == 1050 and len(w.place(303).sent) == 1,
+          "참가 포인트: 0이면 결과가 기록돼도 주지 않는다 (건 사람도 없으면 글을 올리지 않는다)")
+
+    # 주인이 끈 뒤에도, 켜져 있을 때 짠 판은 끝까지 처리한다
+    with contextlib.redirect_stdout(io.StringIO()):
+        mod.hear(None, 100)
+    kept = lineup(5, place=304)
+    await mod.on_lineup(kept)
+    with contextlib.redirect_stdout(io.StringIO()):
+        mod.hear(False)
+    await mod.on_result(kept, "r")
+    check(acc["105"]["points"] == 1150 and w.place(304).texts()[-1].startswith("🎮 **참가 포인트** — 이 경기에 뛴 선수 10명이 **100 포인트**씩"),
+          "참가 포인트: 주인이 끈 뒤에도, 켜져 있을 때 짠 판은 결과가 나오면 준다")
+    await mod.on_lineup(lineup(6, place=305))
+    await mod.on_result(lineup(6, place=305), "r")
+    check(acc["105"]["points"] == 1150 and 305 not in w.places, "참가 포인트: 꺼져 있을 때 짠 판에는 주지 않는다")
+    i = inter(400, user(105))
+    await mod.show_points(i)
+    check("내전 2판에 뛰어 참가 포인트로 150 포인트를 받았어요." in said(i) and "랭킹에는" not in said(i), "참가 포인트: 내 포인트에 뛴 판수와 받은 합이 보인다")
+
+    # 봇을 껐다 켜도 남는다. /오라클설정 으로 지금 값을 본다
+    mod.S = mod.State()
+    mod.setup(token="x", path=path, host=None)
+    check(mod.S.play == 100 and (mod.S.accounts["100"]["points"], mod.S.accounts["100"]["played"], mod.S.accounts["100"]["earned"]) == (1150, 2, 150)
+          and mod.find_book(pb["key"])["play"] == {str(uid): 50 for uid in range(100, 110)} and mod.find_book(pb["key"])["off"] is False
+          and mod.find_book(qb["key"])["off"] is True, "참가 포인트: 봇을 껐다 켜도 금액과 준 것이 남는다")
+    w = World(mod, path, T0)
+    mod.S.play = 100
+    w.play = 80
+    i = inter(100, ADMIN)
+    with contextlib.redirect_stdout(io.StringIO()):
+        await mod.cmd_setup(i, None)
+    check("참가 포인트: 한 판에 **80** (결과가 기록되면 그 판에 뛴 선수가 받아요. 주인이 리그 관리자 페이지에서 바꿔요)\n" in said(i) and mod.S.play == 80,
+          "/오라클설정 을 비우고 쓰면 참가 포인트도 보인다 (방금 바꾼 값이 그 자리에서 반영된다)")
+
     # ── 오라클 봇을 쓰지 않을 때(토큰이 없을 때)는 아무 일도 하지 않는다 ──
     path.unlink(missing_ok=True)
     w = World(mod, path, T0)
@@ -761,7 +915,7 @@ async def main():
     big = mod.S.books[0]
     for k in range(120):
         uid = 100000000000000000 + k
-        mod.S.accounts[str(uid)] = {"points": 0, "claimed": 1, "week": MON, "name": f"선수{k}", "username": f"u{k}", "nick": "", "bets": 0, "hits": 0, "profit": 0}
+        mod.S.accounts[str(uid)] = {"points": 0, "claimed": 1, "week": MON, "name": f"선수{k}", "username": f"u{k}", "nick": "", "bets": 0, "hits": 0, "profit": 0, "played": 0, "earned": 0}
         big["bets"][str(uid)] = {"side": "rd"[k % 2], "amount": 100 + k, "at": T0 + k}
     w.at = big["closes"]
     await mod.tick()

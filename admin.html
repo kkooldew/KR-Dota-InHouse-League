@@ -25,8 +25,9 @@
 .season-row{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:14px}
 .season-row input{width:160px}
 .season-row label{min-width:58px}
-.season-row input[type=date]{background:var(--ink);border:1px solid var(--line);border-radius:3px;padding:8px 10px;color:var(--bone)}
-.season-row input[type=date]:focus{outline:2px solid var(--gold-dim);outline-offset:-1px;border-color:var(--gold-dim)}
+.season-row input[type=date],.season-row input[type=number]{background:var(--ink);border:1px solid var(--line);border-radius:3px;padding:8px 10px;color:var(--bone)}
+.season-row input[type=date]:focus,.season-row input[type=number]:focus{outline:2px solid var(--gold-dim);outline-offset:-1px;border-color:var(--gold-dim)}
+.season-row input[type=number]{width:110px;font-family:var(--num);font-size:15px}
 .season-row .state{flex:1 1 260px;font-size:12.5px;color:var(--bone-dim)}
 .season-row .state.done{color:#e58b80}
 .season-note{margin:10px 0 0;font-size:12.5px;color:var(--bone-dim);max-width:76ch}
@@ -183,6 +184,15 @@ details.by-file[open] summary{margin-bottom:10px}
       <p class="season-note" id="oracleNote" hidden>오라클 봇은 내전의 <b>승부 예측</b>(포인트 걸기)을 맡는 봇입니다. 켜고 끄는 것은 <b>5분 안에</b> 봇에 반영됩니다.
         끄면 새 승부 예측이 열리지 않고 포인트 받기와 걸기가 멈춥니다. 이미 받고 있거나 결과를 기다리는 판은 끝까지 처리합니다(마감, 정산, 돌려주기).
         주인 키로만 바꿀 수 있습니다. <a href="oracle.html">승부의 신 랭킹 보기</a></p>
+      <div class="season-row" id="oraclePlayRow" hidden>
+        <label for="oraclePlay" class="dim" style="font-size:13.5px">참가 포인트</label>
+        <input type="number" id="oraclePlay" min="0" max="10000" step="10" inputmode="numeric" aria-describedby="oraclePlayState">
+        <button class="btn sm" type="button" id="btnOraclePlay">저장</button>
+        <span class="state" id="oraclePlayState"></span>
+      </div>
+      <p class="season-note" id="oraclePlayNote" hidden><b>참가 포인트</b>는 내전의 결과가 기록될 때 그 판에 뛴 선수 열 명이 <b>승패와 상관없이</b> 받는 포인트입니다(쉬는 사람은 받지 않습니다).
+        바꾸면 <b>5분 안에</b> 봇에 반영되고, 그 뒤에 기록되는 결과부터 새 값으로 줍니다. 이미 준 포인트는 그대로입니다. 0으로 두면 주지 않습니다.
+        주인 키로만 바꿀 수 있습니다.</p>
     </section>
 
     <section class="panel">
@@ -408,6 +418,14 @@ details.by-file[open] summary{margin-bottom:10px}
     $('#oracleState').textContent = status.oracleSeen
       ? '오라클 봇이 마지막으로 확인하러 온 때는 ' + fmt(status.oracleSeen) + '입니다.'
       : '오라클 봇이 아직 접속한 적이 없습니다. 봇을 돌리는 컴퓨터의 config.json 에 oracle_token 을 넣고 봇을 다시 켜야 합니다.';
+    // 참가 포인트(서버 버전 19): 결과가 기록되면 그 판에 뛴 선수가 받는 포인트. 주인 키로만 바꾼다. 0이면 주지 않는다
+    const canPlay = owner && (status.version || 0) >= 19;
+    const play = Number.isInteger(status.oraclePlay) && status.oraclePlay > 0 ? status.oraclePlay : 0;
+    $('#oraclePlayRow').hidden = !canPlay; $('#oraclePlayNote').hidden = !canPlay;
+    if(document.activeElement !== $('#oraclePlay')) $('#oraclePlay').value = play;
+    $('#oraclePlayState').textContent = play
+      ? '결과가 기록되면 그 판에 뛴 선수 열 명이 ' + play.toLocaleString('ko-KR') + ' 포인트씩 받습니다.'
+      : '지금은 참가 포인트를 주지 않습니다(0).';
     if(hasStaff() && owner && !staffSeen){ staffSeen = true; loadStaff(); }
     const auto = autoLink(), box = $('#byFile');
     $('#autoLink').hidden = !auto; $('#linkHint').hidden = !auto; $('#fileWhen').hidden = !auto;
@@ -463,6 +481,26 @@ details.by-file[open] summary{margin-bottom:10px}
     }catch(err){ toast(err.message); }
     finally{ $('#btnOracle').disabled = false; }
   });
+  /* ---------- 참가 포인트: 결과가 기록되면 그 판에 뛴 선수가 받는 포인트 (주인 키로만) ---------- */
+  $('#btnOraclePlay').addEventListener('click', async () => {
+    const raw = $('#oraclePlay').value.trim();
+    const n = /^\d+$/.test(raw) ? Number(raw) : NaN;
+    if(!(Number.isInteger(n) && n <= 10000)){
+      toast('참가 포인트는 0부터 10000까지의 숫자로 적어 주세요. 0이면 주지 않습니다.');
+      $('#oraclePlay').focus();
+      return;
+    }
+    $('#btnOraclePlay').disabled = true;
+    try{
+      status = await adminPost({action: 'adminConfig', oraclePlay: n});
+      $('#oraclePlay').blur();
+      renderStatus();
+      toast(n ? '참가 포인트를 한 판에 ' + n.toLocaleString('ko-KR') + ' 포인트로 정했습니다. 5분 안에 봇에 반영됩니다.'
+              : '참가 포인트를 주지 않기로 했습니다. 5분 안에 봇에 반영됩니다.', 5000);
+    }catch(err){ toast(err.message); }
+    finally{ $('#btnOraclePlay').disabled = false; }
+  });
+  $('#oraclePlay').addEventListener('keydown', e => { if(e.key === 'Enter'){ e.preventDefault(); $('#btnOraclePlay').click(); } });
   /* ---------- 날짜로 닫기: 모집 종료 날짜와 시즌 종료 날짜 (그날 0시에 저절로 닫힌다) ---------- */
   // field 는 서버에 보내는 이름(regClose | seasonEnd). day 가 빈 값이면 날짜를 지운다
   async function saveDay(field, day, done){

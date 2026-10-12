@@ -1214,7 +1214,7 @@ assert(props.ADMIN_KEY === key, 'running setup again keeps the admin key');
     'dates: a day starts at 0:00 Korean time; days that do not exist are not dates');
 
   let st = status();
-  assert(st.open === true && st.regClose === '' && st.seasonEnd === '' && st.seasonEnded === false && st.version === 18 && !('registered' in st),
+  assert(st.open === true && st.regClose === '' && st.seasonEnd === '' && st.seasonEnded === false && st.version === 19 && !('registered' in st),
     'dates: nothing set at first (the public status carries both dates)');
 
   // 모집 종료 날짜
@@ -1301,8 +1301,8 @@ assert(props.ADMIN_KEY === key, 'running setup again keeps the admin key');
   r = post({ action: 'adminOracle', key });
   assert(r.ok && r.state === null, 'oracle: no copy of the points before anything is saved');
 
-  const board = { updatedAt: 'ignored', weekly: 1000, secret: 'x', players: [
-    { name: '가나다', points: 1250, profit: 250, bets: 1, hits: 1, claimed: 1, discord: '100000000000000001', id: '11' },
+  const board = { updatedAt: 'ignored', weekly: 1000, play: 100, secret: 'x', players: [
+    { name: '가나다', points: 1250, profit: 250, bets: 1, hits: 1, claimed: 1, earned: 300, discord: '100000000000000001', id: '11' },
     null, 'x',
     { name: 'x'.repeat(60), points: '-750.4', profit: -1750, bets: 2, hits: 0, claimed: 2 }] };
   const state = { channel_id: 400, accounts: { '100000000000000001': { points: 1250 } }, books: [] };
@@ -1319,9 +1319,9 @@ assert(props.ADMIN_KEY === key, 'running setup again keeps the admin key');
   assert(r.ok && r.players === 2 && /^\d{4}-/.test(r.updatedAt) && !('version' in r), 'oracle: saved');
   r = get('oracle');
   const text = JSON.stringify(r.oracle);
-  assert(r.ok && r.oracle.weekly === 1000 && r.oracle.updatedAt !== 'ignored' && r.oracle.players.length === 2
-    && JSON.stringify(r.oracle.players[0]) === JSON.stringify({ name: '가나다', points: 1250, profit: 250, bets: 1, hits: 1, claimed: 1 })
-    && r.oracle.players[1].name.length === 40 && r.oracle.players[1].points === -750 && r.oracle.players[1].profit === -1750,
+  assert(r.ok && r.oracle.weekly === 1000 && r.oracle.play === 100 && r.oracle.updatedAt !== 'ignored' && r.oracle.players.length === 2
+    && JSON.stringify(r.oracle.players[0]) === JSON.stringify({ name: '가나다', points: 1250, profit: 250, bets: 1, hits: 1, claimed: 1, earned: 300 })
+    && r.oracle.players[1].name.length === 40 && r.oracle.players[1].points === -750 && r.oracle.players[1].profit === -1750 && r.oracle.players[1].earned === 0,
     'oracle: the public ranking keeps only the public fields (negative points are allowed)');
   assert(!text.includes('100000000000000001') && !text.includes('secret') && !text.includes('discord') && !text.includes('channel_id'), 'oracle: no Discord IDs in the public ranking');
   r = post({ action: 'adminOracle', key });
@@ -1355,7 +1355,7 @@ assert(props.ADMIN_KEY === key, 'running setup again keeps the admin key');
   const staffKey = post({ action: 'adminStaffAdd', key, name: '봇' }).key;
   assert(post({ action: 'saveOracle', key: staffKey, board: { players: [] } }).ok && get('oracle').oracle.players.length === 0, 'oracle: a staff key can save too');
   const st = get('status');
-  assert(st.version === 18 && !('oracle' in st) && !('oracleOn' in st) && !('oracleSeen' in st), 'oracle: the public status is unchanged');
+  assert(st.version === 19 && !('oracle' in st) && !('oracleOn' in st) && !('oracleSeen' in st) && !('oraclePlay' in st), 'oracle: the public status is unchanged');
 
   // 켜고 끄기 (버전 18): 주인이 리그 관리자 페이지에서 켜고 끈다. 처음에는 꺼져 있다
   const logs = () => (S.sheets['운영 기록'] ? S.sheets['운영 기록'].grid.slice(1).map(r => r[2] + '|' + r[3]) : []);
@@ -1385,4 +1385,32 @@ assert(props.ADMIN_KEY === key, 'running setup again keeps the admin key');
     && post({ action: 'adminOracle', key, brief: true }).oracleOn === false && post({ action: 'adminLeague', key }).oracleOn === false, 'oracle switch: the owner turns it off (logged)');
   r = post({ action: 'adminConfig', key, oracle: 'yes' });
   assert(r.ok && r.oracleOn === false, 'oracle switch: a value that is not true or false is ignored');
+
+  // 참가 포인트 (버전 19): 결과가 기록되면 그 판에 뛴 선수가 받는 포인트. 처음에는 100이고 주인이 바꾼다
+  r = post({ action: 'ping', key });
+  assert(r.ok && r.oraclePlay === 100 && !('ORACLE_PLAY' in S.props), 'play points: 100 at first');
+  assert(post({ action: 'adminOracle', key, brief: true }).oraclePlay === 100 && post({ action: 'adminOracle', key }).oraclePlay === 100
+    && post({ action: 'adminLeague', key }).oraclePlay === 100 && post({ action: 'saveOracle', key, board: { players: [] } }).oraclePlay === 100,
+    'play points: the bot is told wherever it is told the switch');
+  r = post({ action: 'adminConfig', key: staffKey, oraclePlay: 50 });
+  assert(!r.ok && r.code === 'owner' && post({ action: 'ping', key }).oraclePlay === 100, 'play points: only the owner key can change it');
+  r = post({ action: 'adminConfig', key: staffKey, oraclePlay: 50, open: false });
+  assert(!r.ok && r.code === 'owner' && S.props.REG_OPEN !== 'false', 'play points: a refused request changes nothing else');
+  for (const bad of [-1, 10001, 1.5, 'many', '', null, true, '1e3', [50]]) {
+    r = post({ action: 'adminConfig', key, oraclePlay: bad, oracle: true });
+    assert(!r.ok && r.code === 'oraclePlay' && post({ action: 'ping', key }).oraclePlay === 100 && S.props.ORACLE_ON === 'false',
+      'play points: ' + JSON.stringify(bad) + ' is refused and nothing else in the request is changed');
+  }
+  r = post({ action: 'adminConfig', key, oraclePlay: 150 });
+  assert(r.ok && r.oraclePlay === 150 && S.props.ORACLE_PLAY === '150' && logs().filter(l => l === '주인|참가 포인트').length === 1, 'play points: the owner changes it (logged)');
+  r = post({ action: 'adminConfig', key, oraclePlay: '150' });
+  assert(r.ok && r.oraclePlay === 150 && logs().filter(l => l === '주인|참가 포인트').length === 1, 'play points: the same value again is not logged twice (digits as text are fine)');
+  assert(post({ action: 'adminOracle', key, brief: true }).oraclePlay === 150 && post({ action: 'adminLeague', key }).oraclePlay === 150, 'play points: the bot is told the new value');
+  r = post({ action: 'adminConfig', key, oraclePlay: 0 });
+  assert(r.ok && r.oraclePlay === 0 && S.props.ORACLE_PLAY === '0' && post({ action: 'adminOracle', key, brief: true }).oraclePlay === 0
+    && logs().filter(l => l === '주인|참가 포인트').length === 2, 'play points: 0 turns it off');
+  r = post({ action: 'adminConfig', key, open: true });
+  assert(r.ok && r.oraclePlay === 0, 'play points: other settings leave it alone');
+  S.props.ORACLE_PLAY = 'broken';
+  assert(post({ action: 'ping', key }).oraclePlay === 100, 'play points: a broken stored value falls back to 100');
 })();

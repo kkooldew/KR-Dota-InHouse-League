@@ -1128,7 +1128,7 @@ def note_season(data: dict) -> None:
     if isinstance(at, (int, float)) and not isinstance(at, bool):
         bot.season_end = at / 1000 if at > 0 else 0.0
     # 주인이 리그 관리자 페이지에서 오라클 봇을 켜 두었는지 (서버 버전 18. 팀을 짜기 직전에 받는 리그 기록에 실려 온다)
-    oracle.hear(data.get("oracleOn"))
+    oracle.hear(data.get("oracleOn"), data.get("oraclePlay"))
 
 
 def season_over(at: float | None = None) -> bool:

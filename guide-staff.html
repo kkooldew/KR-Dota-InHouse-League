@@ -505,8 +505,8 @@
         <thead><tr><th>내전에서 생긴 일</th><th>오라클 봇이 하는 일</th></tr></thead>
         <tbody>
           <tr><td>마감되어 팀 편성이 올라옴</td><td>그 바로 아래에 승부 예측을 열고 20분 동안 받습니다. 20분이 지나면 마감하고 배당률을 올립니다.</td></tr>
-          <tr><td><code>/승리</code>로 이긴 팀을 기록</td><td>건 포인트를 정산해 그 글에 올립니다.</td></tr>
-          <tr><td><code>/승리취소</code></td><td>정산을 되돌립니다. 다시 <code>/승리</code>하면 다시 정산합니다.</td></tr>
+          <tr><td><code>/승리</code>로 이긴 팀을 기록</td><td>건 포인트를 정산해 그 글에 올립니다. 그 판에 뛴 선수 열 명에게 <strong>참가 포인트</strong>(한 판에 100)도 줍니다.</td></tr>
+          <tr><td><code>/승리취소</code></td><td>정산을 되돌리고 참가 포인트를 거둡니다. 다시 <code>/승리</code>하면 다시 정산하고 다시 줍니다.</td></tr>
           <tr><td><code>/승리</code>의 <strong>경기 안 함</strong>, <code>/취소</code>, <code>/재모집</code>, 마감한 뒤의 <code>/연장</code></td><td>그 판이 없던 일이 됐으므로 건 포인트를 모두 돌려줍니다.</td></tr>
         </tbody>
       </table>
@@ -516,14 +516,15 @@
       <figcaption><b>예시</b><code>/승리</code>로 래디언트의 승리를 기록했을 때, 퍼그나봇의 결과 글 아래에 올라오는 글</figcaption>
       <div class="dc">
         <div class="dc-title">10월 10일(토) 20:54 내전 모집</div>
-        <div class="dc-msg"><div class="dc-av oracle">오</div><div class="dc-body"><div class="dc-head"><b>오라클</b><i>앱</i><time>오후 9:53</time></div><div class="dc-text">🔮 <strong>승부 예측 결과</strong> — 🟢 래디언트 승리! (배당 1.50배)<br><br>🎉 <strong>맞힌 사람</strong><br><span class="at">@플레이어6</span> <strong>+250</strong> · 보유 1,250<br><span class="at">@플레이어9</span> <strong>+50</strong> · 보유 1,050<br><br>💸 <strong>틀린 사람</strong><br><span class="at">@플레이어13</span> −300 · 보유 700<br><br>📊 승부의 신 랭킹: <span class="link">https://…/승부의-신-랭킹</span></div></div></div>
+        <div class="dc-msg"><div class="dc-av oracle">오</div><div class="dc-body"><div class="dc-head"><b>오라클</b><i>앱</i><time>오후 9:53</time></div><div class="dc-text">🔮 <strong>승부 예측 결과</strong> — 🟢 래디언트 승리! (배당 1.50배)<br><br>🎉 <strong>맞힌 사람</strong><br><span class="at">@플레이어6</span> <strong>+250</strong> · 보유 1,250<br><span class="at">@플레이어9</span> <strong>+50</strong> · 보유 1,050<br><br>💸 <strong>틀린 사람</strong><br><span class="at">@플레이어13</span> −300 · 보유 700<br><br>🎮 <strong>참가 포인트</strong> — 이 경기에 뛴 선수 10명이 <strong>100 포인트</strong>씩 받았어요.<br><br>📊 승부의 신 랭킹: <span class="link">https://…/승부의-신-랭킹</span></div></div></div>
       </div>
     </figure>
     <ul>
       <li><strong>이긴 팀을 정확히 골라 주세요.</strong> <code>/승리</code>로 고른 대로 포인트가 오갑니다. 잘못 골랐으면 바로 <code>/승리취소</code>를 한 뒤 다시 기록하면 정산도 고쳐집니다. 그사이 선수가 딴 포인트를 다른 경기에 걸어 잃었다면 그 선수의 포인트가 0보다 적어질 수 있습니다(다음 주에 받는 포인트로 메워집니다).</li>
-      <li>대타가 뛰어서 리그 관리자가 리그 매니저로 기록하는 판은 오라클 봇이 승패를 알 수 없습니다. 그 글에서 <code>/승리</code>의 <strong>경기 안 함</strong>으로 정리하면 건 포인트가 돌아갑니다.</li>
+      <li>대타가 뛰어서 리그 관리자가 리그 매니저로 기록하는 판은 오라클 봇이 승패를 알 수 없습니다. 그 글에서 <code>/승리</code>의 <strong>경기 안 함</strong>으로 정리하면 건 포인트가 돌아갑니다. 이런 판에는 참가 포인트도 주지 못합니다.</li>
       <li>결과를 기록하지 않은 채 이틀이 지나면 건 포인트가 저절로 돌아갑니다.</li>
       <li>그 경기에 뛰는 선수는 걸 수 없습니다. 리그 운영진도 리그 선수처럼 포인트를 받고 걸 수 있습니다.</li>
+      <li><strong>참가 포인트</strong>는 결과가 기록될 때 그 판에 뛴 선수가 승패와 상관없이 받는 포인트입니다. 아무도 걸지 않은 판에서도 줍니다. 한 판에 얼마를 줄지는 운영자가 리그 관리자 페이지에서 정합니다(0이면 주지 않습니다).</li>
       <li>시즌이 끝난 뒤에 짠 팀에는 승부 예측이 열리지 않습니다.</li>
       <li>봇을 돌리는 컴퓨터가 꺼져 있는 동안에는 걸 수 없고, 다시 켜졌을 때 20분이 지나 있으면 바로 마감합니다.</li>
       <li>매주 올라오는 <strong>포인트 받기</strong> 글의 채널은 리그 관리자가 <strong>#💚퍼그나봇-콘솔</strong>에서 <code>/오라클설정</code>으로 정합니다. 승부 예측 글은 포인트가 없는 사람에게 그 채널에서 받으라고 안내합니다.</li>

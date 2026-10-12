@@ -15,6 +15,8 @@
 - 포인트를 받은 적이 있는 사람들의 순위를 리그 서버에 올린다(saveOracle, 서버 버전 17). oracle.html(승부의 신 랭킹)이 그것을 보여 준다.
 - 주인이 리그 관리자 페이지에서 켜고 끈다(서버 버전 18, 운영자가 2026-10-13에 요청). 처음에는 꺼져 있고, 켜 두었는지는 리그 서버에 5분마다 물어본다.
   꺼져 있으면 새 승부 예측을 열지 않고 포인트 받기와 걸기를 받지 않는다. 이미 받던 판은 끝까지 처리한다(마감, 정산, 돌려주기).
+- 참가 포인트(서버 버전 19, 운영자가 2026-10-13에 요청): 결과가 기록되면 그 판에 뛴 선수 열 명이 승패와 상관없이 포인트를 받는다.
+  처음에는 한 판에 100이고 주인이 리그 관리자 페이지에서 바꾼다(0이면 주지 않는다). /승리취소 면 거두고, 다시 기록되면 다시 준다.
 
 이 파일은 bot.py 를 불러오지 않는다(bot.py 가 이 파일을 불러와 setup 으로 필요한 것을 넘겨준다). 그래서 따로 시험할 수 있다(tests/oracle.test.py).
 """
@@ -41,6 +43,8 @@ POST_RETRY = 600          # 올리지 못한 글을 이만큼 뒤에 다시 올�
 PUBLISH_GAP = 20          # 순위를 서버에 올린 뒤 이만큼은 다시 올리지 않는다 (포인트 받기가 몰릴 때 한 번에 올리려고)
 PUBLISH_RETRY = 600       # 서버에 올리지 못했으면 이만큼 뒤에 다시 올린다
 SWITCH_POLL = 300         # 주인이 켜 두었는지를 리그 서버에 이만큼마다 물어본다
+PLAY_POINTS = 100         # 참가 포인트의 처음 값: 결과가 기록되면 그 판에 뛴 선수가 승패와 상관없이 받는다 (주인이 리그 관리자 페이지에서 바꾼다)
+PLAY_MAX = 10000          # 참가 포인트로 받아들이는 가장 큰 값 (리그 서버와 같다)
 AMOUNTS = (100, 300, 500, 1000)  # 금액 버튼
 MESSAGE_LIMIT = 1900      # 디스코드 메시지는 2000자까지라 조금 남겨 두고 나눈다
 SIDES = {"r": "🟢 래디언트", "d": "🔴 다이어"}
@@ -61,12 +65,13 @@ class State:
         self.ready = False              # 로그인해서 글을 올릴 수 있는지
         self.on = False                 # 주인이 리그 관리자 페이지에서 켜 두었는지 (리그 서버가 알려 준다. 알기 전에는 꺼진 것으로 둔다)
         self.asked = 0.0                # 켜 두었는지를 마지막으로 물어본(또는 들은) 시각
+        self.play = PLAY_POINTS         # 참가 포인트: 한 판에 얼마 (리그 서버가 알려 준다. 0이면 주지 않는다)
         self.loaded = False             # 상태 파일을 읽었는지 (못 읽었으면 켤 때 서버의 사본을 받아 본다)
         self.lock = asyncio.Lock()      # 마감·정산·되돌리기의 글이 뒤섞이지 않게 한 번에 하나씩 한다
         self.task: asyncio.Task | None = None
         self.channel_id = 0             # 매주 '포인트 받기' 글을 올리는 채널 (/오라클설정)
         self.round: dict | None = None  # 이번 주 {"start": 주가 시작한 시각, "message_id", "channel_id", "prev": 지울 앞 글 [채널, 글]}
-        self.accounts: dict[str, dict] = {}  # 디스코드 ID(글자) → {"points", "claimed", "week", "name", "username", "nick", "bets", "hits", "profit"}
+        self.accounts: dict[str, dict] = {}  # 디스코드 ID(글자) → {"points", "claimed", "week", "name", "username", "nick", "bets", "hits", "profit", "played", "earned"}
         self.books: list[dict] = []     # 승부 예측 한 판씩 (open → closed → settled, 또는 void)
         self.dirty = False              # 서버에 올려야 할 바뀐 순위가 있는지
         self.publish_at = 0.0           # 이 시각 전에는 서버에 올리지 않는다
@@ -112,7 +117,7 @@ def signed(n: int) -> str:
 
 # ── 상태 파일 ─────────────────────────────────────────────────
 def snapshot() -> dict:
-    return {"on": S.on, "channel_id": S.channel_id, "round": S.round, "accounts": S.accounts, "books": S.books, "dirty": S.dirty}
+    return {"on": S.on, "play": S.play, "channel_id": S.channel_id, "round": S.round, "accounts": S.accounts, "books": S.books, "dirty": S.dirty}
 
 
 def save() -> None:
@@ -137,9 +142,18 @@ def whole(v, default: int = 0) -> int:
     return int(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else default
 
 
+def play_amount(v) -> int | None:
+    """참가 포인트로 쓸 수 있는 값이면 그 값(0 ~ PLAY_MAX 의 정수), 아니면 None"""
+    if isinstance(v, bool) or not isinstance(v, (int, float)) or (isinstance(v, float) and not v.is_integer()):
+        return None
+    return int(v) if 0 <= v <= PLAY_MAX else None
+
+
 def adopt(data: dict) -> None:
     """파일(또는 서버의 사본)에서 읽은 상태를 받아들인다. 모양이 맞지 않는 것은 버린다"""
     S.on = data.get("on") is True  # 마지막으로 알던 값. 켠 뒤 곧 리그 서버에 다시 물어본다
+    amount = play_amount(data.get("play"))
+    S.play = PLAY_POINTS if amount is None else amount
     S.channel_id = whole(data.get("channel_id"))
     r = data.get("round")
     S.round = ({"start": whole(r.get("start")), "message_id": whole(r.get("message_id")), "channel_id": whole(r.get("channel_id")),
@@ -152,7 +166,8 @@ def adopt(data: dict) -> None:
         if str(uid).isdigit() and isinstance(a, dict):
             S.accounts[str(uid)] = {"points": whole(a.get("points")), "claimed": whole(a.get("claimed")), "week": whole(a.get("week")),
                                     "name": str(a.get("name") or ""), "username": str(a.get("username") or ""), "nick": str(a.get("nick") or ""),
-                                    "bets": whole(a.get("bets")), "hits": whole(a.get("hits")), "profit": whole(a.get("profit"))}
+                                    "bets": whole(a.get("bets")), "hits": whole(a.get("hits")), "profit": whole(a.get("profit")),
+                                    "played": whole(a.get("played")), "earned": whole(a.get("earned"))}
     S.books = []
     for b in books:
         if not (isinstance(b, dict) and b.get("key") and b.get("state") in ("open", "closed", "settled", "void")):
@@ -163,7 +178,8 @@ def adopt(data: dict) -> None:
                         "closes": float(b.get("closes") or 0), "ended": float(b.get("ended") or 0), "state": b["state"],
                         "players": [whole(x) for x in b.get("players") or []], "bets": bets, "message_id": whole(b.get("message_id")),
                         "winner": b.get("winner") if b.get("winner") in SIDES else None,
-                        "paid": {str(uid): whole(v) for uid, v in (b.get("paid") or {}).items()}})
+                        "paid": {str(uid): whole(v) for uid, v in (b.get("paid") or {}).items()},
+                        "play": {str(uid): whole(v) for uid, v in (b.get("play") or {}).items() if whole(v) > 0}, "off": b.get("off") is True})
     S.dirty = bool(data.get("dirty"))
 
 
@@ -182,8 +198,15 @@ def load() -> bool:
 
 
 # ── 켜고 끄기 (주인이 리그 관리자 페이지에서) ───────────────────
-def hear(value) -> None:
-    """리그 서버가 알려 준 값: 주인이 오라클 봇을 켜 두었는지. 퍼그나봇이 팀을 짜기 직전에 받는 리그 기록에도 실려 온다"""
+def hear(value, play=None) -> None:
+    """리그 서버가 알려 준 값: 주인이 오라클 봇을 켜 두었는지(value)와 참가 포인트(play). 퍼그나봇이 팀을 짜기 직전에 받는 리그 기록에도 실려 온다.
+    그 값이 실려 있지 않은 답(예전 서버)으로는 바꾸지 않는다"""
+    amount = play_amount(play)
+    if amount is not None and amount != S.play:
+        S.play = amount
+        save()
+        print(f"[{datetime.fromtimestamp(now(), KST):%m-%d %H:%M}] 오라클 봇: 리그 관리자 페이지에서 참가 포인트를 "
+              + (f"한 판에 {amount:,} 포인트로 정했습니다." if amount else "주지 않기로 했습니다(0)."))
     if not isinstance(value, bool):
         return
     S.asked = now()
@@ -206,7 +229,7 @@ async def check_switch(force: bool = False) -> None:
         note(f"오라클: 리그 서버에서 켜 두었는지 확인하지 못했습니다. 알고 있던 대로 둡니다. ({e})")
         return
     if isinstance(got.get("oracleOn"), bool):
-        hear(got["oracleOn"])
+        hear(got["oracleOn"], got.get("oraclePlay"))
     else:  # 예전 서버(버전 17까지)는 이 값을 모른다
         note("오라클: 리그 서버가 오라클 봇을 켜 두었는지 알려 주지 않습니다(서버 버전 18부터). Code.gs 를 새 버전으로 배포하기 전에는 꺼진 채로 둡니다.")
 
@@ -221,7 +244,7 @@ def week_start(at: float | None = None) -> int:
 
 def account(uid: int) -> dict:
     return S.accounts.setdefault(str(uid), {"points": 0, "claimed": 0, "week": 0, "name": "", "username": "", "nick": "",
-                                            "bets": 0, "hits": 0, "profit": 0})
+                                            "bets": 0, "hits": 0, "profit": 0, "played": 0, "earned": 0})
 
 
 def remember(uid: int, user) -> dict:
@@ -272,14 +295,18 @@ def no_points() -> str:
 def points_text(uid: int) -> str:
     """내 포인트 (/포인트 와 '내 포인트' 버튼)"""
     acc = S.accounts.get(str(uid))
-    if not acc or not acc["claimed"]:
+    if not acc or not (acc["claimed"] or acc["played"] or acc["points"]):
         return f"아직 포인트를 받은 적이 없어요. **포인트 받기**를 누르면 이번 주 {WEEKLY_POINTS:,} 포인트를 받아요." if S.on else RESTING
     week, out = week_start(), staked(uid)
     lines = [f"🔮 보유 포인트는 **{num(acc['points'])}**이에요." + (f" 걸어 둔 포인트 {out:,}은 뺀 값이에요." if out else ""),
-             f"승부 예측 {acc['bets']}번 가운데 {acc['hits']}번 맞혔고, 손익은 {signed(acc['profit'])} 포인트예요.",
-             (RESTING if not S.on
-              else f"이번 주 포인트는 받았어요. 다음 포인트는 <t:{week + 7 * 86400}:F>부터 받을 수 있어요." if acc["week"] == week
-              else "이번 주 포인트를 아직 받지 않았어요. **포인트 받기**를 눌러 받으세요.")]
+             f"승부 예측 {acc['bets']}번 가운데 {acc['hits']}번 맞혔고, 손익은 {signed(acc['profit'])} 포인트예요."]
+    if acc["played"]:
+        lines.append(f"내전 {acc['played']}판에 뛰어 참가 포인트로 {acc['earned']:,} 포인트를 받았어요.")
+    lines.append(RESTING if not S.on
+                 else f"이번 주 포인트는 받았어요. 다음 포인트는 <t:{week + 7 * 86400}:F>부터 받을 수 있어요." if acc["week"] == week
+                 else "이번 주 포인트를 아직 받지 않았어요. **포인트 받기**를 눌러 받으세요.")
+    if not acc["claimed"]:  # 참가 포인트만 받은 사람: 랭킹에는 본인이 한 번이라도 '포인트 받기'를 눌러야 나온다
+        lines.append("승부의 신 랭킹에는 **포인트 받기**를 한 번이라도 누른 뒤부터 이름이 올라가요.")
     if S.page:
         lines.append(f"승부의 신 랭킹: <{S.page}>")
     return "\n".join(lines)
@@ -321,7 +348,7 @@ def bet_block(book: dict | None, uid: int) -> str:
     if book is None or book["state"] != "open" or now() >= book["closes"]:
         return "이 경기의 승부 예측은 마감됐어요."
     if uid in book["players"]:
-        return "이 경기에 뛰는 선수는 걸 수 없어요."
+        return "이 경기에 뛰는 선수는 걸 수 없어요." + play_promise()
     return ""
 
 
@@ -417,10 +444,46 @@ def unsettle(book: dict) -> list[int]:
     return [int(uid) for uid in book["bets"] if points_of(int(uid)) < 0]
 
 
+def play_promise() -> str:
+    """그 경기에 뛰는 선수에게 하는 말: 걸 수는 없지만 참가 포인트를 받는다. 주지 않기로 했으면 빈 글"""
+    return f" 대신 결과가 기록되면 참가 포인트로 **{S.play:,} 포인트**를 받아요." if S.play > 0 else ""
+
+
+def grant(book: dict) -> int:
+    """참가 포인트: 결과가 기록된 판에 뛴 선수들에게 승패와 상관없이 준다. 준 사람 수를 돌려준다.
+    포인트를 받은 적이 없는 선수에게도 쌓인다(랭킹에는 본인이 '포인트 받기'를 한 번이라도 눌러야 나온다).
+    얼마를 줬는지 판에 적어 두어, 되돌릴 때는 그사이 금액이 바뀌었어도 준 만큼 그대로 거둔다"""
+    if S.play <= 0 or book["off"] or book["play"]:
+        return 0
+    for uid in book["players"]:
+        acc = account(uid)
+        acc["points"] += S.play
+        acc["played"] += 1
+        acc["earned"] += S.play
+        book["play"][str(uid)] = S.play
+    if book["play"]:
+        S.dirty = True
+    return len(book["play"])
+
+
+def ungrant(book: dict) -> None:
+    """준 참가 포인트를 거둔다 (/승리취소, 그 판이 없던 일이 됐을 때). 이미 써 버렸으면 0보다 적어질 수 있다(건 포인트의 정산을 되돌릴 때와 같다)"""
+    given, book["play"] = book["play"], {}
+    for uid, amount in given.items():
+        acc = account(int(uid))
+        acc["points"] -= amount
+        acc["played"] -= 1
+        acc["earned"] -= amount
+    if given:
+        S.dirty = True
+
+
 def void(book: dict) -> bool:
-    """이 판을 없던 일로 하고 건 포인트를 돌려준다. 돌려준 포인트가 있으면 True"""
+    """이 판을 없던 일로 하고 건 포인트를 돌려준다(준 참가 포인트는 거둔다). 돌려준 포인트가 있으면 True"""
     if book["state"] == "settled":  # 정산한 판이 없던 일이 됐다. 정산부터 되돌린다
         unsettle(book)
+    ungrant(book)
+    book["off"], book["winner"] = True, None  # 없던 일이 된 판에는 참가 포인트를 주지 않는다
     if book["state"] not in ("open", "closed"):
         return False
     refund(book)
@@ -433,7 +496,8 @@ def open_text(book: dict) -> str:
     end = int(book["closes"])
     return ("🔮 **승부 예측** — 이 경기에서 이길 팀에 포인트를 걸어 보세요.\n"
             f"⏰ **<t:{end}:t>까지** 걸 수 있어요. (<t:{end}:R> 마감) 마감하면 배당률을 알려 드려요.\n"
-            f"이 경기에 뛰는 선수는 걸 수 없어요. 포인트가 없으면 {claim_place()} 이번 주 포인트를 먼저 받으세요.\n"
+            "이 경기에 뛰는 선수는 걸 수 없어요." + (play_promise() + "\n" if S.play > 0 else " ")
+            + f"포인트가 없으면 {claim_place()} 이번 주 포인트를 먼저 받으세요.\n"
             f"지금까지 **{len(book['bets'])}명**이 걸었어요.")
 
 
@@ -474,9 +538,21 @@ def result_text(book: dict) -> str:
     won = [f"<@{uid}> **+{book['paid'].get(uid, 0) - b['amount']:,}** · 보유 {num(points_of(int(uid)))}" for uid, b in rows if b["side"] == w]
     lost = [f"<@{uid}> −{b['amount']:,} · 보유 {num(points_of(int(uid)))}" for uid, b in rows if b["side"] != w]
     lines += ["", "🎉 **맞힌 사람**"] + won + ["", "💸 **틀린 사람**"] + lost
+    if book["play"]:
+        lines += ["", play_line(book)]
     if S.page:
         lines += ["", f"📊 승부의 신 랭킹: <{S.page}>"]
     return "\n".join(lines)
+
+
+def play_line(book: dict) -> str:
+    """참가 포인트를 줬다고 알리는 한 줄"""
+    return f"🎮 **참가 포인트** — 이 경기에 뛴 선수 {len(book['play'])}명이 **{max(book['play'].values()):,} 포인트**씩 받았어요."
+
+
+def play_text(book: dict) -> str:
+    """정산할 것이 없는 판(건 사람이 없었거나 한쪽에만 걸린 판)에서 참가 포인트만 알리는 글"""
+    return play_line(book) + (f"\n\n📊 승부의 신 랭킹: <{S.page}>" if S.page else "")
 
 
 def round_text() -> str:
@@ -588,13 +664,15 @@ async def finish(book: dict) -> None:
 
 async def call_off(book: dict, why: str) -> None:
     """이 판을 없던 일로 한다 (S.lock 을 잡은 채 부른다)"""
-    was_open = book["state"] == "open"
+    was_open, took = book["state"] == "open", bool(book["play"])
     back = void(book)
     save()
     if was_open:
         await edit(book["place_id"], book["message_id"], closed_text("void", 0))
     if back:
-        await send(book["place_id"], f"🔮 {why} 승부 예측을 취소했어요. 건 포인트는 모두 돌려드렸어요.")
+        await send(book["place_id"], f"🔮 {why} 승부 예측을 취소했어요. 건 포인트는 모두 돌려드렸어요." + (" 참가 포인트는 거뒀어요." if took else ""))
+    elif took:
+        await send(book["place_id"], f"🔮 {why} 참가 포인트를 거뒀어요.")
 
 
 # ── 퍼그나봇이 알려 주는 일들 ───────────────────────────────────
@@ -607,7 +685,7 @@ async def on_lineup(entry: dict) -> None:
         who = entry.get("who") or {}
         players = sorted({int(who[pid]) for pid in entry.get("ids") or [] if pid in who})  # 그 경기에 뛰는 열 명의 디스코드 ID
         book = {"key": book_key(entry), "place_id": int(entry.get("place_id") or 0), "opened": now(), "closes": now() + BET_SECONDS, "ended": 0.0,
-                "state": "open", "players": players, "bets": {}, "message_id": 0, "winner": None, "paid": {}}
+                "state": "open", "players": players, "bets": {}, "message_id": 0, "winner": None, "paid": {}, "play": {}, "off": False}
         S.books.append(book)
         save()
         await announce_open(book)
@@ -616,37 +694,51 @@ async def on_lineup(entry: dict) -> None:
 
 
 async def on_result(entry: dict, winner: str) -> None:
-    """/승리 로 결과가 기록됐다. 정산한다"""
+    """/승리 로 결과가 기록됐다. 정산하고, 그 판에 뛴 선수들에게 참가 포인트를 준다"""
     if not enabled() or winner not in SIDES:
         return
     try:
         async with S.lock:
             book = find_book(book_key(entry))
-            if book is None:
+            if book is None or book["off"] or book["winner"] is not None:  # 없던 일이 된 판, 이미 결과를 받은 판
                 return
             if book["state"] == "open":  # 20분이 되기 전에 결과가 나왔다. 마감부터 한다
                 await finish(book)
-            if book["state"] != "closed":
-                return
-            settle(book, winner)
+            bets = book["state"] == "closed"  # 양쪽에 걸려 결과를 기다리던 판. 아니면(건 사람이 없었거나 한쪽에만 걸렸으면) 정산할 것이 없다
+            if bets:
+                settle(book, winner)
+            book["winner"] = winner
+            given = grant(book)
             save()
-            await send(book["place_id"], result_text(book))
+            if bets or given:
+                await send(book["place_id"], result_text(book) if bets else play_text(book))
     except Exception as e:
         print(f"오라클: 승부 예측을 정산하지 못했습니다: {e!r}")
 
 
 async def on_undo(entry: dict) -> None:
-    """/승리취소 로 결과가 취소됐다. 정산을 되돌린다"""
+    """/승리취소 로 결과가 취소됐다. 정산을 되돌리고, 준 참가 포인트를 거둔다"""
     if not enabled():
         return
     try:
         async with S.lock:
             book = find_book(book_key(entry))
-            if book is None or book["state"] != "settled":
+            if book is None or book["winner"] is None:
                 return
-            minus = unsettle(book)
+            settled, took = book["state"] == "settled", bool(book["play"])
+            people = ([int(uid) for uid in book["bets"]] if settled else []) + [int(uid) for uid in book["play"]]
+            if settled:
+                unsettle(book)
+            ungrant(book)
+            book["winner"] = None
             save()
-            await send(book["place_id"], "🔮 경기 결과가 취소돼서 승부 예측의 정산을 되돌렸어요. 결과가 다시 기록되면 그때 다시 정산해요."
+            if not settled and not took:
+                return
+            minus = [uid for uid in dict.fromkeys(people) if points_of(uid) < 0]
+            what = ("승부 예측의 정산을 되돌리고 참가 포인트를 거뒀어요. 결과가 다시 기록되면 그때 다시 정산하고 다시 드려요." if settled and took
+                    else "승부 예측의 정산을 되돌렸어요. 결과가 다시 기록되면 그때 다시 정산해요." if settled
+                    else "참가 포인트를 거뒀어요. 결과가 다시 기록되면 그때 다시 드려요.")
+            await send(book["place_id"], "🔮 경기 결과가 취소돼서 " + what
                        + ("\n포인트가 0보다 적어진 사람: " + ", ".join(f"<@{uid}> ({num(points_of(uid))})" for uid in minus) if minus else ""))
     except Exception as e:
         print(f"오라클: 승부 예측의 정산을 되돌리지 못했습니다: {e!r}")
@@ -709,9 +801,9 @@ def board() -> dict:
         if nick:
             acc["nick"] = str(nick)
         rows.append({"name": acc["nick"] or acc["name"] or "이름 없음", "points": acc["points"] + staked(int(uid)), "profit": acc["profit"],
-                     "bets": acc["bets"], "hits": acc["hits"], "claimed": acc["claimed"]})
+                     "bets": acc["bets"], "hits": acc["hits"], "claimed": acc["claimed"], "earned": acc["earned"]})
     rows.sort(key=lambda x: (-x["points"], -x["profit"], x["name"]))
-    return {"updatedAt": datetime.fromtimestamp(now(), timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), "weekly": WEEKLY_POINTS, "players": rows}
+    return {"updatedAt": datetime.fromtimestamp(now(), timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), "weekly": WEEKLY_POINTS, "play": S.play, "players": rows}
 
 
 async def publish() -> None:
@@ -992,6 +1084,8 @@ async def cmd_setup(interaction: discord.Interaction, channel: Optional[discord.
         got = sum(1 for a in S.accounts.values() if a["claimed"])
         await interaction.followup.send(f"{actor}님, 오라클 봇의 설정이에요.\n"
                                         f"승부 예측: {'**켜짐**' if S.on else '**꺼짐**'} (주인이 리그 관리자 페이지에서 켜고 꺼요. 바꾸면 5분 안에 반영돼요)\n"
+                                        f"참가 포인트: {f'한 판에 **{S.play:,}**' if S.play else '**주지 않음**'} "
+                                        "(결과가 기록되면 그 판에 뛴 선수가 받아요. 주인이 리그 관리자 페이지에서 바꿔요)\n"
                                         f"'포인트 받기' 글을 올리는 채널: {where}\n포인트를 받은 적이 있는 사람: {got}명", allowed_mentions=QUIET)
         return
     S.channel_id = channel.id
@@ -1056,6 +1150,7 @@ def status() -> list[str]:
     signup = guild.get_channel(S.host.signup_channel_id)
     lines = ["오라클 봇: " + ("켜짐 (승부 예측을 받습니다)" if S.on
                            else "꺼짐 (주인이 리그 관리자 페이지에서 오라클 봇을 켜면 5분 안에 승부 예측을 받습니다)"),
+             "오라클 참가 포인트(결과가 기록되면 그 판에 뛴 선수에게 줍니다): " + (f"한 판에 {S.play:,}" if S.play else "주지 않음 (0)"),
              "오라클 승부 예측(팀 편성 아래에 올립니다): " + (
         f"#{signup.name}" + missing(signup, {"view_channel": "채널 보기", "send_messages_in_threads": "스레드에서 메시지 보내기"}
                                     if isinstance(signup, discord.ForumChannel) else {"view_channel": "채널 보기", "send_messages": "메시지 보내기"})
