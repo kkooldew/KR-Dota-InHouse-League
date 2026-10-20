@@ -126,7 +126,13 @@ class World:
         mod.setup(token="x", path=path, page="https://example.invalid/oracle.html", host=SimpleNamespace(
             guild=discord.Object(id=1), admin_channel_id=100, signup_channel_id=200, can_play=can_play,
             is_manager=lambda user: user.id == 1, nickname=lambda uid, username: self.nicks.get(uid), server=ask if server else None))
-        mod.S.client = SimpleNamespace(get_partial_messageable=self.place)
+        self.lookups = []                 # 봇이 이름을 디스코드에 물어본 사람 (fill_names)
+
+        async def fetch_user(uid):
+            self.lookups.append(uid)
+            return user(uid)
+
+        mod.S.client = SimpleNamespace(get_partial_messageable=self.place, get_guild=lambda gid: None, fetch_user=fetch_user)
         mod.S.ready = True
         mod.S.on = True                   # 주인이 켜 둔 상태에서 본다 (꺼 둔 경우는 따로 본다)
         mod.S.play = 0                    # 참가 포인트는 주지 않는 것으로 두고 본다 (주는 경우는 따로 본다)
@@ -705,6 +711,18 @@ async def main():
     w.backup = {"accounts": {"1": {"points": 5}}}
     await mod.restore()
     check("1" not in mod.S.accounts, "사본은 켤 때 한 번만 받아 온다")
+    mod.save()
+    w = World(mod, path, T0)                                         # 기록이 있는 채로 다시 켰다. 바뀐 것은 없다
+    w.asked.clear()
+    mod.S.dirty = False
+    await mod.boot()
+    await mod.tick()
+    sent = [x for x in w.asked if x["action"] == "saveOracle"]
+    check(len(sent) == 1 and len(sent[0]["ledger"]) == 5 and len(sent[0]["board"]["players"]) == 5 and not mod.S.dirty,
+          "켤 때 한 번은 바뀐 것이 없어도 순위와 시트에 적을 기록을 올린다 (서버를 새 버전으로 올린 뒤 시트를 채우려고)")
+    w.at += 60
+    await mod.tick()
+    check(len([x for x in w.asked if x["action"] == "saveOracle"]) == 1, "그 뒤로는 바뀐 것이 있을 때만 올린다")
 
     # ── 켜고 끄기: 주인이 리그 관리자 페이지에서 켜고 끈다. 봇은 리그 서버에 5분마다 물어본다 ──
     path.unlink(missing_ok=True)
@@ -1155,10 +1173,16 @@ async def main():
     check(sent["action"] == "saveOracle" and sorted(led) == [str(u) for u in range(100, 110)]
           and led["100"] == {"id": "100", "username": "u100", "name": "백", "points": 100, "staked": 40, "profit": 0, "bets": 0, "hits": 0, "claimed": 0,
                              "played": 1, "earned": 100, "listed": True}
-          and led["101"] == {"id": "101", "username": "", "name": "", "points": 100, "staked": 0, "profit": 0, "bets": 0, "hits": 0, "claimed": 0,
+          and led["101"] == {"id": "101", "username": "u101", "name": "선수101", "points": 100, "staked": 0, "profit": 0, "bets": 0, "hits": 0, "claimed": 0,
                              "played": 1, "earned": 100, "listed": False}
           and [r["name"] for r in sent["board"]["players"]] == ["백"],
           "랭킹: 리그 서버에는 시트에 적을 모든 사람의 기록을 따로 올린다 (공개 순위에는 오른 사람만. 디스코드 ID는 공개 순위에 싣지 않는다)")
+    check(sorted(w.lookups) == list(range(101, 110)) and mod.S.accounts["105"]["username"] == "u105",
+          "랭킹: 참가 포인트만 받아 이름을 모르는 사람은 올리기 전에 디스코드에 물어 사용자명을 적는다 (시트의 등록 탭과 맞추려고)")
+    mod.S.dirty = True
+    w.at += 30
+    await mod.tick()
+    check(len(w.lookups) == 9, "랭킹: 이름은 한 사람에 한 번만 묻는다")
     mod.adopt({"accounts": {"1": {"points": 5, "claimed": 1}, "2": {"points": 5, "bets": 2}, "3": {"points": 5, "played": 1}, "4": {"points": 5}},
                "books": [{"key": "k", "state": "open", "bets": {"4": {"side": "r", "amount": 10, "at": 0}}}]})
     check([mod.S.accounts[k]["listed"] for k in "1234"] == [True, True, False, True],

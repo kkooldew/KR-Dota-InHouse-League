@@ -87,6 +87,7 @@ class State:
         self.dirty = False              # 서버에 올려야 할 바뀐 순위가 있는지
         self.publish_at = 0.0           # 이 시각 전에는 서버에 올리지 않는다
         self.notes: set[str] = set()    # 창에 한 번 찍은 문제. 같은 문제를 되풀이해 찍지 않는다
+        self.looked: set[str] = set()   # 이름을 디스코드에 물어본 계정 (켠 동안 한 사람에 한 번만 묻는다. fill_names)
 
 
 S = State()
@@ -908,10 +909,38 @@ def ledger() -> list[dict]:
     return rows
 
 
+async def fill_names(limit: int = 20) -> None:
+    """이름을 모르는 계정의 디스코드 사용자명과 서버 별명을 디스코드에 물어 적는다. 참가 포인트만 받고 버튼을 누른 적이 없는 사람은
+    봇이 이름을 모른다. 시트의 등록 탭은 디스코드 사용자명으로 그 선수의 줄을 찾으므로, 모르면 그 줄에 포인트를 적지 못한다(2026-10-21에 찾은 빈틈).
+    한 번에 limit 명까지, 켠 동안 한 사람에 한 번만 묻는다. 묻지 못하면 넘어간다"""
+    if not S.ready or S.client is None:
+        return
+    todo = [uid for uid, acc in S.accounts.items() if not acc["username"] and uid not in S.looked][:limit]
+    if not todo:
+        return
+    guild = S.client.get_guild(S.host.guild.id) if S.host is not None else None
+    for uid in todo:
+        S.looked.add(uid)
+        user = None
+        if guild is not None:
+            try:
+                user = await guild.fetch_member(int(uid))  # 서버 별명까지 안다
+            except discord.HTTPException:
+                user = None
+        if user is None:
+            try:
+                user = await S.client.fetch_user(int(uid))  # 서버를 나간 사람
+            except discord.HTTPException:
+                continue
+        remember(int(uid), user)
+    save()
+
+
 async def publish() -> None:
     """바뀐 순위를 리그 서버에 올린다(순위 페이지가 읽는다). 포인트 기록도 사본으로 함께 올려, 이 PC의 파일을 잃어도 되살릴 수 있게 한다"""
     if not S.dirty or S.host is None or S.host.server is None or now() < S.publish_at:
         return
+    await fill_names()
     try:
         shown = board()
         got = await S.host.server({"action": "saveOracle", "board": shown, "ledger": ledger(), "state": snapshot(), "reset": S.reset})
@@ -925,6 +954,15 @@ async def publish() -> None:
     S.dirty = False
     S.publish_at = now() + PUBLISH_GAP
     save()
+
+
+async def boot() -> None:
+    """켤 때 한 번: 서버의 사본으로 되살릴지 보고, 주인이 켜 두었는지 묻고, 지금 기록을 한 번 올린다.
+    포인트가 바뀌지 않아도 켤 때마다 순위와 시트의 기록(ledger)을 서버에 다시 올린다. 서버를 새 버전으로 올린 뒤 시트를 처음 채우거나
+    (운영자가 2026-10-21에 지금 있는 포인트를 시트로 옮겨 달라고 함), 꺼져 있던 사이에 어긋난 것을 맞추려는 것이다. 곧 tick 이 올린다"""
+    await restore()
+    await check_switch(force=True)  # 주인이 켜 두었는지부터 물어본다
+    S.dirty = True
 
 
 async def restore() -> None:
@@ -1253,8 +1291,7 @@ class OracleBot(discord.Client):
         if self.started:  # 연결이 끊겼다 다시 붙을 때는 다시 하지 않는다
             return
         self.started = True
-        await restore()
-        await check_switch(force=True)  # 주인이 켜 두었는지부터 물어본다
+        await boot()
         S.ready = True
         for line in status():
             print(line)
