@@ -50,6 +50,7 @@ import os
 import re
 import shutil
 import time
+from collections.abc import Sequence
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -1456,14 +1457,25 @@ def silent_ping(guild: discord.Guild, role: discord.Role, channel=None) -> str:
             "**누구나 이 역할을 멘션할 수 있도록 허용**을 켜거나, 봇의 역할에 **@everyone, @here, 모든 역할 멘션하기**를 켜 주세요.")
 
 
+def role_key(name) -> str:
+    """역할 이름을 견줄 때 쓰는 모양: 글자와 숫자만 남긴다. 띄어쓰기, 이모지, 기호는 보지 않는다(채널 이름처럼 '🔔내전 알림'으로 만들어도 찾게)"""
+    return re.sub(r"[\W_]+", "", name).lower() if isinstance(name, str) else ""
+
+
+def guild_roles(guild: discord.Guild) -> list:
+    """서버의 역할들 (봇이 알고 있는 것). discord.py 는 리스트가 아니라 SequenceProxy 로 준다(Sequence 면 모두 받는다)"""
+    roles = getattr(guild, "roles", None)
+    return [r for r in roles if isinstance(getattr(r, "name", None), str)] if isinstance(roles, Sequence) and not isinstance(roles, str) else []
+
+
 def alert_role(guild: discord.Guild) -> tuple[discord.Role | None, str]:
-    """'내전 알림' 역할과, 찾지 못했을 때의 까닭. 적어 둔 ID가 없거나 그 역할이 지워졌으면 이름(띄어쓰기는 보지 않는다)으로 찾고 ID를 적어 둔다"""
+    """'내전 알림' 역할과, 찾지 못했을 때의 까닭. 적어 둔 ID가 없거나 그 역할이 지워졌으면 이름(글자만 견준다: role_key)으로 찾고 ID를 적어 둔다"""
     if bot.alert_role_id:
         role = guild.get_role(bot.alert_role_id)
         if role is not None:
             return role, ""
-    key, roles = ALERT_ROLE_NAME.replace(" ", ""), getattr(guild, "roles", None)
-    found = [r for r in roles if isinstance(getattr(r, "name", None), str) and r.name.replace(" ", "") == key] if isinstance(roles, (list, tuple)) else []
+    key = role_key(ALERT_ROLE_NAME)
+    found = [r for r in guild_roles(guild) if role_key(r.name) == key]
     if len(found) == 1:
         if bot.alert_role_id != found[0].id:
             if bot.alert_role_id:  # 다른 역할이 됐다. 예전 역할을 받은 사람들의 수는 버린다
@@ -1498,7 +1510,10 @@ async def ping_status() -> str:
         return f"[확인 필요] 디스코드 서버를 확인하지 못했습니다 ({e})"
     role, missing = alert_role(guild)
     if role is None:
-        return f"[확인 필요] {missing} 그때까지는 모집 글에서 아무도 부르지 않고, `/내전알림` 도 쓸 수 없습니다."
+        # 이름을 조금 다르게 만들었을 수 있다. 이름에 '내전'이나 '알림'이 든 역할을 보여 준다
+        like = [r.name for r in guild_roles(guild) if "내전" in role_key(r.name) or "알림" in role_key(r.name)][:5]
+        hint = f" 이름이 비슷한 역할: {', '.join('@' + n for n in like)}." if like and missing == NO_ALERT_ROLE else ""
+        return f"[확인 필요] {missing}{hint} 그때까지는 모집 글에서 아무도 부르지 않고, `/내전알림` 도 쓸 수 없습니다."
     problem, trouble = silent_ping(guild, role, signup) or crowded_role(), role_problem(guild, role)
     return (f"@{role.name} (`/내전알림` 으로 받은 사람 {len(bot.alert_members)}명)" + (f" [확인 필요] {problem}" if problem else "")
             + (f" [확인 필요] `/내전알림`: {trouble}" if trouble else "") + ("" if problem or trouble else " - 권한 확인"))

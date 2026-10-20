@@ -2214,7 +2214,7 @@ async def main():
 
     class Club:   # 가짜 서버: 역할들과 봇 자신 (봇의 역할은 '내전 알림'보다 위에 있다)
         def __init__(self, roles=(AROLE,), can_ping=False, can_manage=True):
-            self.roles = [PROLE, *roles]
+            self.roles = discord.utils.SequenceProxy([PROLE, *roles])   # 진짜 discord.py 처럼 리스트가 아닌 모양으로 준다
             self.me = Mock()
             self.me.guild_permissions = Mock(mention_everyone=can_ping, manage_roles=can_manage)
             self.me.top_role = BOTTOP
@@ -2286,6 +2286,9 @@ async def main():
     w, t = await opened(can_ping=True, roles=(arole(58, "내전알림"),))
     check(w.texts(w.thread.send) == ["<@1>: <@&58> 내전 모집이 열렸어요! 여기에서 `/참여` 로 신청하세요."] and mod.bot.alert_role_id == 58,
           "역할 이름의 띄어쓰기는 보지 않는다")
+    w, t = await opened(can_ping=True, roles=(arole(60, "🔔 내전 알림!"),))
+    check(w.texts(w.thread.send) == ["<@1>: <@&60> 내전 모집이 열렸어요! 여기에서 `/참여` 로 신청하세요."] and mod.bot.alert_role_id == 60,
+          "역할 이름의 이모지와 기호도 보지 않는다 (채널 이름처럼 이모지를 붙여 만들어도 찾는다)")
     w, t = await opened(can_ping=True, roles=(arole(57, "내전 알림"), arole(59, "내전 알림")))
     check(not w.thread.send.await_count and "이라는 이름의 역할이 2개 있어요. 하나만 남겨 주세요." in t, "같은 이름의 역할이 여럿이면 고르지 않고 리그 운영진에게 알린다")
 
@@ -2328,6 +2331,10 @@ async def main():
     club(roles=())
     check(await mod.ping_status() == "[확인 필요] **내전 알림** 역할을 찾지 못했어요. 디스코드 서버 설정 → 역할에서 **내전 알림** 이라는 이름으로 역할을 만들어 주세요. "
           "그때까지는 모집 글에서 아무도 부르지 않고, `/내전알림` 도 쓸 수 없습니다.", "켤 때 확인: 내전 알림 역할을 아직 만들지 않았을 때")
+    club(roles=(arole(61, "📢내전알람"), arole(62, "알림 끄기")))
+    check(await mod.ping_status() == "[확인 필요] **내전 알림** 역할을 찾지 못했어요. 디스코드 서버 설정 → 역할에서 **내전 알림** 이라는 이름으로 역할을 만들어 주세요. "
+          "이름이 비슷한 역할: @📢내전알람, @알림 끄기. 그때까지는 모집 글에서 아무도 부르지 않고, `/내전알림` 도 쓸 수 없습니다.",
+          "켤 때 확인: 이름이 조금 다른 역할을 만들었으면 비슷한 이름의 역할을 보여 준다")
     club()
     mod.bot.alert_members = {1, 2}
     w.signup.permissions_for = Mock(return_value=Mock(mention_everyone=True))
