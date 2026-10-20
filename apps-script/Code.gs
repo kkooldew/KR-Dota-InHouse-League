@@ -17,12 +17,14 @@
  * 코드를 고친 뒤에는 배포 → 배포 관리 → 수정(연필) → 버전: 새 버전 → 배포 를 눌러야 반영됩니다.
  */
 
-const SERVER_VERSION = 20;                         // 서버를 고칠 때마다 올린다. 상태 응답에 실려서 새 버전이 배포됐는지 밖에서 확인할 수 있다
+const SERVER_VERSION = 21;                         // 서버를 고칠 때마다 올린다. 상태 응답에 실려서 새 버전이 배포됐는지 밖에서 확인할 수 있다
 const SHEET_NAME = '선수등록';                             // 등록 탭 이름의 앞부분. 시즌마다 '선수등록 (시즌 이름)' 탭을 따로 쓴다
 // 칸을 더할 때는 맨 뒤에 붙이고 LAYOUT 을 올린다. 이미 있는 탭에는 ready_ 가 새 머리글을 채워 넣는다
 // 처리자·처리시각: 그 등록의 상태(승인·제외·대기)를 마지막으로 바꾼 리그 관리자와 그 시각 (버전 11)
-const HEADERS = ['등록시각', '수정시각', '상태', '닉네임', '스팀프로필', '스팀키', '디스코드', 'MMR', '1지망', '2지망', '3지망', '4지망', '비고', '최고MMR', '처리자', '처리시각'];
-const LAYOUT = '3';
+// 승부예측포인트: 그 디스코드 계정의 승부 예측 보유 포인트. 오라클 봇이 순위를 올릴 때마다 서버가 다시 적는다(보기용. 버전 21)
+const HEADERS = ['등록시각', '수정시각', '상태', '닉네임', '스팀프로필', '스팀키', '디스코드', 'MMR', '1지망', '2지망', '3지망', '4지망', '비고', '최고MMR', '처리자', '처리시각',
+  '승부예측포인트'];
+const LAYOUT = '4';
 const COL = HEADERS.reduce((o, h, i) => (o[h] = i, o), {});
 const PREF_LABELS = ['캐리', '미드', '오프', '서폿'];          // 지망 번호 1~4
 const STATUSES = ['대기', '승인', '제외'];
@@ -34,7 +36,9 @@ const DRIVE_TRIES = 3;                                     // 드라이브 파�
 const LEAGUE_MAX = 8000000;                                // 리그 기록의 최대 크기(글자 수)
 const ORACLE_MAX = 2000000;                                // 오라클 봇이 올리는 포인트 기록 사본의 최대 크기(글자 수)
 const ORACLE_PLAY = 100;                                   // 참가 포인트의 처음 값: 결과가 기록되면 그 판에 뛴 선수가 승패와 상관없이 받는다 (버전 19)
+const ORACLE_FIRST = 300;                                  // 그날의 첫 내전에 뛴 선수가 받는 참가 포인트의 처음 값 (버전 21)
 const ORACLE_PLAY_MAX = 10000;                             // 참가 포인트로 받는 가장 큰 값
+const ORACLE_TAB = '승부 예측 포인트';                       // 오라클 봇의 포인트 기록을 보기용으로 적는 시트 탭 (버전 21)
 const ORACLE_RESET_WORD = '포인트 초기화';                  // 승부 예측 포인트를 초기화할 때 주인이 직접 입력해야 하는 확인 문구 (버전 20)
 const SEASON_WORD = '시즌 변경';                            // 새 시즌을 시작할 때 리그 관리자가 직접 입력해야 하는 확인 문구
 const LINKED = '1';                                        // 승인한 선수를 선수단에 넣기 시작했다는 표시 (버전 10). ready_ 가 처음 한 번 맞춘다
@@ -273,6 +277,7 @@ function adminStatus_() {
     oracleOn: oracleOn_(),
     oracleSeen: PropertiesService.getScriptProperties().getProperty('ORACLE_SEEN') || '',
     oraclePlay: oraclePlay_(),      // 참가 포인트: 결과가 기록되면 그 판에 뛴 선수가 받는 포인트 (버전 19)
+    oracleFirst: oracleFirst_(),    // 그날의 첫 내전의 참가 포인트 (버전 21)
     oracleResetAt: oracleResetId_(),    // 승부 예측 포인트를 마지막으로 초기화한 때 (없으면 빈 값. 버전 20)
     role: ACTOR && !ACTOR.owner ? 'staff' : 'owner',
     name: ACTOR ? ACTOR.name : OWNER_NAME
@@ -292,7 +297,8 @@ function setConfig_(body) {
     fail_('오라클 봇은 주인 키로만 켜고 끌 수 있습니다. 주인 키를 가진 리그 관리자에게 부탁해 주세요.', 'owner');
   // 참가 포인트(결과가 기록되면 그 판에 뛴 선수가 받는 포인트)도 주인 키로만 바꾼다 (버전 19). 값은 먼저 확인한다
   const play = body.oraclePlay === undefined ? null : parsePlay_(body.oraclePlay);
-  if (play !== null && !(ACTOR && ACTOR.owner))
+  const first = body.oracleFirst === undefined ? null : parsePoints_(body.oracleFirst, '첫 내전의 참가 포인트', 'oracleFirst');   // 버전 21
+  if ((play !== null || first !== null) && !(ACTOR && ACTOR.owner))
     fail_('참가 포인트는 주인 키로만 바꿀 수 있습니다. 주인 키를 가진 리그 관리자에게 부탁해 주세요.', 'owner');
   if (typeof body.open === 'boolean') {
     const was = regOpen_(props);
@@ -328,6 +334,11 @@ function setConfig_(body) {
     const was = oraclePlay_();
     props.setProperty('ORACLE_PLAY', String(play));
     if (was !== play) logAlone_('참가 포인트', String(play), was + ' → ' + play + (play ? ' · 결과가 기록되면 그 판에 뛴 선수가 받음' : ' · 주지 않음'));
+  }
+  if (first !== null) {
+    const was = oracleFirst_();
+    props.setProperty('ORACLE_FIRST', String(first));
+    if (was !== first) logAlone_('첫 내전 참가 포인트', String(first), was + ' → ' + first + (first ? ' · 그날 결과가 가장 먼저 기록된 내전에 뛴 선수가 받음' : ' · 주지 않음'));
   }
   return adminStatus_();
 }
@@ -1511,16 +1522,36 @@ function oracleOn_() {
 // 처음에는 100이고 주인이 리그 관리자 페이지에서 바꾼다(adminConfig {oraclePlay}). 0이면 주지 않는다.
 // 봇은 켜 두었는지를 받는 곳에서 이 값도 함께 받는다. 바꾸기 전에 이미 준 포인트는 그대로다.
 function oraclePlay_() {
-  const raw = PropertiesService.getScriptProperties().getProperty('ORACLE_PLAY');
+  return storedPoints_('ORACLE_PLAY', ORACLE_PLAY);
+}
+
+// 그날의 첫 내전의 참가 포인트 (버전 21, 운영자가 2026-10-21에 요청): 하루(한국 시간 오전 6시에 바뀐다) 가운데 결과가 가장 먼저 기록된 내전에
+// 뛴 선수 열 명은 참가 포인트 대신 이만큼 받는다. 처음에는 300이고 주인이 리그 관리자 페이지에서 바꾼다(adminConfig {oracleFirst}).
+// 어느 판이 그날의 첫 내전인지는 봇이 가린다. 보통 내전과 같게 하려면 참가 포인트와 같은 값을 넣는다
+function oracleFirst_() {
+  return storedPoints_('ORACLE_FIRST', ORACLE_FIRST);
+}
+
+function storedPoints_(name, fallback) {
+  const raw = PropertiesService.getScriptProperties().getProperty(name);
   const n = raw === null || raw === '' ? NaN : Number(raw);
-  return Number.isInteger(n) && n >= 0 && n <= ORACLE_PLAY_MAX ? n : ORACLE_PLAY;
+  return Number.isInteger(n) && n >= 0 && n <= ORACLE_PLAY_MAX ? n : fallback;
 }
 
 function parsePlay_(v) {
+  return parsePoints_(v, '참가 포인트', 'oraclePlay');
+}
+
+function parsePoints_(v, label, code) {
   const n = typeof v === 'number' ? v : (typeof v === 'string' && /^\d{1,6}$/.test(v.trim()) ? Number(v.trim()) : NaN);
   if (!Number.isInteger(n) || n < 0 || n > ORACLE_PLAY_MAX)
-    fail_('참가 포인트는 0부터 ' + ORACLE_PLAY_MAX + '까지의 숫자로 적어 주세요. 0이면 주지 않습니다.', 'oraclePlay');
+    fail_(label + '는 0부터 ' + ORACLE_PLAY_MAX + '까지의 숫자로 적어 주세요. 0이면 주지 않습니다.', code);
   return n;
+}
+
+// 오라클 봇에게 켜 두었는지를 알려 주는 곳마다 함께 싣는 값들
+function oracleInfo_() {
+  return { oracleOn: oracleOn_(), oraclePlay: oraclePlay_(), oracleFirst: oracleFirst_(), oracleReset: oracleResetId_() };
 }
 
 // 승부 예측 포인트 초기화 (버전 20, 운영자가 2026-10-13에 요청): 주인이 리그 관리자 페이지에서 누른다(adminOracleReset, 확인 문구가 함께 와야 한다).
@@ -1552,18 +1583,68 @@ function oracleReset_(body) {
 }
 
 // 오라클 봇(승부 예측)이 정산할 때마다 올리는 포인트 순위. 순위 페이지(oracle.html)가 키 없이 읽는다.
-// 공개 기록처럼 내보내도 되는 칸만 남긴다(이름, 포인트, 손익, 건 횟수, 맞힌 횟수, 포인트를 받은 횟수, 참가 포인트로 받은 합). 디스코드 ID는 받아도 버린다.
+// 공개 기록처럼 내보내도 되는 칸만 남긴다(이름, 포인트, 손익, 건 횟수, 맞힌 횟수, 포인트를 받은 횟수). 디스코드 ID는 받아도 버린다.
+// 누가 참가 포인트로 얼마를 받았는지(earned)는 싣지 않는다(운영자가 2026-10-13에 알릴 필요가 없다고 했다. 버전 21에서 뺐다)
 function sanitizeOracle_(b) {
   if (!b || typeof b !== 'object' || !Array.isArray(b.players)) fail_('포인트 순위 형식이 잘못됐습니다');
   const int = v => { const n = Math.round(Number(v)); return Number.isFinite(n) ? n : 0; };
   return {
     weekly: int(b.weekly),
     play: int(b.play),              // 참가 포인트: 한 판에 얼마 (랭킹 페이지의 설명에 적는다)
+    first: int(b.first),            // 그날의 첫 내전의 참가 포인트 (버전 21)
     players: b.players.slice(0, 1000).filter(p => !!p && typeof p === 'object').map(p => ({
       name: String(p.name == null ? '' : p.name).slice(0, 40),
-      points: int(p.points), profit: int(p.profit), bets: int(p.bets), hits: int(p.hits), claimed: int(p.claimed), earned: int(p.earned)
+      points: int(p.points), profit: int(p.profit), bets: int(p.bets), hits: int(p.hits), claimed: int(p.claimed)
     }))
   };
+}
+
+// 시트에 적을 포인트 기록(ledger, 버전 21): 봇이 순위와 함께 올리는, 모든 사람의 기록. 공개하지 않으므로 디스코드 ID와 사용자명이 있다.
+// 모양이 맞지 않는 줄은 버린다. 올라오지 않았으면(예전 봇) null
+function cleanLedger_(list) {
+  if (list == null) return null;
+  if (!Array.isArray(list)) fail_('포인트 기록 형식이 잘못됐습니다');
+  const int = v => { const n = Math.round(Number(v)); return Number.isFinite(n) ? n : 0; };
+  return list.slice(0, 3000).filter(a => !!a && typeof a === 'object' && /^\d{5,25}$/.test(String(a.id))).map(a => ({
+    id: String(a.id), username: discordKey_(a.username), name: String(a.name == null ? '' : a.name).slice(0, 40),
+    points: int(a.points), staked: int(a.staked), profit: int(a.profit), bets: int(a.bets), hits: int(a.hits), claimed: int(a.claimed),
+    played: int(a.played), earned: int(a.earned), listed: a.listed === true
+  }));
+}
+
+// 포인트 기록을 구글 시트에 적는다(버전 21, 운영자가 2026-10-21에 "선수 정보에 포인트 보유 상황도 표시해 줘"라고 요청):
+//  - 지금 시즌의 등록 탭의 '승부예측포인트' 칸: 그 줄의 디스코드(숫자 ID나 사용자명)와 같은 계정의 보유 포인트(걸어 둔 포인트 포함). 모르는 줄은 비운다
+//  - '승부 예측 포인트' 탭: 모든 사람의 기록 (보기용. 원본은 봇의 기록이고, 그 사본은 드라이브에 따로 있다)
+// 보기용이라 쓰지 못해도 순위 저장은 끝낸다
+function writeOracleSheet_(ledger) {
+  try {
+    const sheet = getSheet_(), last = sheet.getLastRow();
+    if (last >= 2) {
+      const byId = {}, byName = {};
+      ledger.forEach(a => { byId[a.id] = a; if (a.username && !(a.username in byName)) byName[a.username] = a; });
+      const keys = sheet.getRange(2, COL['디스코드'] + 1, last - 1, 1).getDisplayValues();
+      const cells = keys.map(k => { const d = discordKey_(k[0]), a = byId[d] || byName[d]; return [a ? a.points : '']; });
+      sheet.getRange(2, COL['승부예측포인트'] + 1, last - 1, 1).setValues(cells);
+    }
+  } catch (err) {
+    console.warn('등록 탭에 승부 예측 포인트를 적지 못했습니다: ' + err);
+  }
+  try {
+    const rows = [['순위', '이름', '디스코드 사용자명', '디스코드 ID', '보유 포인트', '걸어 둔 포인트', '예측 손익', '예측', '맞힘', '포인트 받은 주',
+      '참가한 내전', '참가 포인트 합', '랭킹']];
+    const t = v => v ? text_(v) : '';
+    let rank = 0;
+    ledger.forEach(a => {
+      if (a.listed) rank++;
+      rows.push([a.listed ? rank : '-', t(a.name), t(a.username), text_(a.id), a.points, a.staked, a.profit, a.bets, a.hits, a.claimed,
+        a.played, a.earned, a.listed ? '오름' : '안 오름 (포인트 받기·승부 예측 전)']);
+    });
+    mirrorTab_(SpreadsheetApp.getActiveSpreadsheet(), ORACLE_TAB, rows,
+      '이 탭은 오라클 봇이 포인트가 바뀔 때마다 자동으로 다시 씁니다(보기용). 여기서 고친 내용은 지워집니다. 원본은 오라클 봇의 포인트 기록이고, '
+      + '그 사본은 드라이브의 \'인하우스_오라클_포인트기록.json\'에 있습니다. 보유 포인트에는 결과를 기다리는 판에 걸어 둔 포인트도 들어 있습니다.');
+  } catch (err) {
+    console.warn('승부 예측 포인트 탭을 쓰지 못했습니다: ' + err);
+  }
 }
 
 // 순위(board)는 걸러서 공개 파일과 캐시에 쓰고, 함께 온 포인트 기록(state)은 거르지 않고 비공개 파일에 사본으로 둔다.
@@ -1571,8 +1652,9 @@ function sanitizeOracle_(b) {
 function saveOracle_(body) {
   // 주인이 포인트를 초기화했는데 아직 그것을 모르는 봇이 올린 순위는 초기화 전의 것이다. 받지 않고, 초기화하라고 알려 준다 (버전 20)
   if (body.reset !== undefined && String(body.reset) !== oracleResetId_())
-    return { stale: true, oracleOn: oracleOn_(), oraclePlay: oraclePlay_(), oracleReset: oracleResetId_() };
+    return Object.assign({ stale: true }, oracleInfo_());
   const clean = sanitizeOracle_(body.board);
+  const ledger = cleanLedger_(body.ledger);
   let backup = '';
   if (body.state != null) {
     if (typeof body.state !== 'object' || Array.isArray(body.state)) fail_('포인트 기록 형식이 잘못됐습니다');
@@ -1585,7 +1667,8 @@ function saveOracle_(body) {
     driveFile_('ORACLE_FILE_ID', '인하우스_오라클_순위.json').setContent(text);
     putCache_('oracle', text);
     if (backup) driveFile_('ORACLE_STATE_ID', '인하우스_오라클_포인트기록.json').setContent(backup);
-    return { updatedAt: clean.updatedAt, players: clean.players.length, oracleOn: oracleOn_(), oraclePlay: oraclePlay_(), oracleReset: oracleResetId_() };
+    if (ledger) writeOracleSheet_(ledger);
+    return Object.assign({ updatedAt: clean.updatedAt, players: clean.players.length }, oracleInfo_());
   });
 }
 
@@ -1608,12 +1691,12 @@ function oracleState_(body) {
   const props = PropertiesService.getScriptProperties();
   if (body && body.brief === true) {
     props.setProperty('ORACLE_SEEN', new Date().toISOString());
-    return { oracleOn: oracleOn_(), oraclePlay: oraclePlay_(), oracleReset: oracleResetId_() };
+    return oracleInfo_();
   }
   const id = props.getProperty('ORACLE_STATE_ID');
-  if (!id) return { state: null, oracleOn: oracleOn_(), oraclePlay: oraclePlay_(), oracleReset: oracleResetId_() };
+  if (!id) return Object.assign({ state: null }, oracleInfo_());
   const text = readFile_(id);
-  return { state: text ? JSON.parse(text) : null, oracleOn: oracleOn_(), oraclePlay: oraclePlay_(), oracleReset: oracleResetId_() };
+  return Object.assign({ state: text ? JSON.parse(text) : null }, oracleInfo_());
 }
 
 /* =========================================================
@@ -1650,6 +1733,7 @@ function getLeague_() {
     seasonNo: list.length - 1, seasonEnd: end.date, seasonEndAt: end.at,
     oracleOn: oracleOn_(),        // 오라클 봇을 켜 두었는지. 봇이 팀을 짜기 직전에 받아, 그 판에 승부 예측을 열지 정한다 (버전 18)
     oraclePlay: oraclePlay_(),    // 참가 포인트 (버전 19)
+    oracleFirst: oracleFirst_(),  // 그날의 첫 내전의 참가 포인트 (버전 21)
     oracleReset: oracleResetId_() };  // 승부 예측 포인트를 초기화하라는 표시 (버전 20)
 }
 
@@ -1738,15 +1822,15 @@ function keepMirror_(season) {
   }
 }
 
-// rows 의 첫 줄은 머리글이다. 맨 위에 안내 한 줄을 두고 그 아래에 쓴다.
-function mirrorTab_(ss, name, rows) {
+// rows 의 첫 줄은 머리글이다. 맨 위에 안내 한 줄(note, 주지 않으면 MIRROR_NOTE)을 두고 그 아래에 쓴다.
+function mirrorTab_(ss, name, rows, note) {
   let sheet = ss.getSheetByName(name);
   if (!sheet) {
     sheet = ss.insertSheet(name);
     try { sheet.protect().setWarningOnly(true); } catch (err) { /* 고치려 할 때 경고만 띄운다. 못 걸어도 괜찮다 */ }
   }
   const width = rows[0].length;
-  const table = [[MIRROR_NOTE].concat(new Array(width - 1).fill(''))].concat(rows);
+  const table = [[note || MIRROR_NOTE].concat(new Array(width - 1).fill(''))].concat(rows);
   sheet.clearContents();
   if (sheet.getMaxRows() < table.length) sheet.insertRowsAfter(sheet.getMaxRows(), table.length - sheet.getMaxRows());
   if (sheet.getMaxColumns() < width) sheet.insertColumnsAfter(sheet.getMaxColumns(), width - sheet.getMaxColumns());

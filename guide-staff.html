@@ -44,15 +44,15 @@
     <table class="g-table cmds">
         <thead><tr><th>명령어</th><th>어디서</th><th>하는 일</th></tr></thead>
       <tbody>
-        <tr><td><code>/내전생성</code></td><td>#💚퍼그나봇-콘솔</td><td>내전 모집을 열고, 모집 글에서 리그 선수들을 불러 알립니다. 마감 시각을 적을 수 있습니다.</td></tr>
+        <tr><td><code>/내전생성</code></td><td>#💚퍼그나봇-콘솔</td><td>내전 모집을 열고, 모집 글에서 <strong>내전 알림</strong> 역할을 불러 알립니다. 마감 시각을 적을 수 있습니다.</td></tr>
         <tr><td><code>/마감</code></td><td>그 내전의 글</td><td>지금까지 모인 인원으로 바로 마감합니다.</td></tr>
         <tr><td><code>/연장</code></td><td>그 내전의 글</td><td>마감을 5분 뒤로 미룹니다. 마감한 뒤에도 다시 열 수 있습니다.</td></tr>
         <tr><td><code>/재모집</code></td><td>그 내전의 글</td><td>참여 신청을 모두 취소로 돌리고 5분 동안 처음부터 다시 받습니다.</td></tr>
-        <tr><td><code>/취소</code></td><td>그 내전의 글</td><td>그 내전을 취소합니다.</td></tr>
+        <tr><td><code>/취소</code></td><td>그 내전의 글</td><td>그 내전을 취소합니다. 글은 10분 뒤에 지워집니다.</td></tr>
         <tr><td><code>/시작</code></td><td>그 내전의 글</td><td>로비 음성 채널에 있는 그 내전의 선수를 팀 음성 채널로 옮깁니다.</td></tr>
         <tr><td><code>/종료</code></td><td>그 내전의 글</td><td>그 내전의 팀 음성 채널에 있는 모두를 로비로 옮깁니다.</td></tr>
-        <tr><td><code>/승리</code></td><td>그 내전의 글</td><td>이긴 팀을 골라 결과를 기록합니다. 열리지 않은 판은 <strong>경기 안 함</strong>으로 정리합니다.</td></tr>
-        <tr><td><code>/승리취소</code></td><td>그 내전의 글</td><td>그 내전에 기록한 결과를 되돌립니다.</td></tr>
+        <tr><td><code>/승리</code></td><td>그 내전의 글</td><td>이긴 팀을 골라 결과를 기록합니다. 열리지 않은 판은 <strong>경기 안 함</strong>으로 정리합니다. 글은 10분 뒤에 잠기고 닫힙니다.</td></tr>
+        <tr><td><code>/승리취소</code></td><td>그 내전의 글</td><td>그 내전에 기록한 결과를 되돌립니다. 글이 닫히기 전(10분 안)에 씁니다.</td></tr>
         <tr><td><code>/도움말</code></td><td>어디서나</td><td>내가 쓸 수 있는 명령어를 보여 줍니다.</td></tr>
       </tbody>
     </table>
@@ -103,19 +103,21 @@
     </figure>
 
     <h3>선수들에게 가는 알림</h3>
-    <p>모집 글을 만들면 봇이 그 글에 글을 하나 더 올려 <strong>리그 선수</strong> 역할을 멘션합니다. 리그 선수 역할이 있는 사람 모두에게 디스코드 알림이 갑니다.</p>
+    <p>모집 글을 만들면 봇이 그 글에 글을 하나 더 올려 <strong>내전 알림</strong> 역할을 멘션합니다. 이 역할은 선수가 <code>/내전알림</code>으로 스스로 받고 빼는 역할이라, 알림을 켠 선수에게만 디스코드 알림이 갑니다.</p>
     <figure class="g-fig">
       <figcaption><b>예시</b>방금 만든 모집 글</figcaption>
       <div class="dc">
         <div class="dc-title">10월 10일(토) 20:54 내전 모집<small>#⚔️게임-참가신청 포럼의 글 · 모집 중</small></div>
         <div class="dc-msg"><div class="dc-av">퍼</div><div class="dc-body"><div class="dc-head"><b>퍼그나봇</b><i>앱</i><time>오후 8:54</time></div><div class="dc-text"><span class="at">@운영진1</span>님이 내전 모집을 열었어요.<br>🎮 <strong>도타 2 내전 모집!</strong><br>지금부터 내전 참여자를 모집합니다. 마감 후 명단이 공지되면 로비로 모여 주세요.<br><br>⏰ <strong><span class="ts">오후 9:00</span>까지</strong> 참여 신청을 받아요. (<span class="ts">6분 후</span> 마감)<br>👉 여기에서 <code>/참여</code> 를 입력하세요. 취소는 <code>/참여취소</code><br>👥 참여자 (0명): 아직 없음</div></div></div>
-        <div class="dc-msg"><div class="dc-av">퍼</div><div class="dc-body"><div class="dc-head"><b>퍼그나봇</b><i>앱</i><time>오후 8:54</time></div><div class="dc-text"><span class="at">@운영진1</span>: <span class="role">@리그 선수</span> 내전 모집이 열렸어요! 여기에서 <code>/참여</code> 로 신청하세요.</div></div></div>
+        <div class="dc-msg"><div class="dc-av">퍼</div><div class="dc-body"><div class="dc-head"><b>퍼그나봇</b><i>앱</i><time>오후 8:54</time></div><div class="dc-text"><span class="at">@운영진1</span>: <span class="role">@내전 알림</span> 내전 모집이 열렸어요! 여기에서 <code>/참여</code> 로 신청하세요.</div></div></div>
       </div>
       <p class="after">위가 모집 글의 본문이고, 아래가 선수들을 부르는 글입니다.</p>
     </figure>
     <ul>
       <li>글을 만들 때 <strong>한 번만</strong> 부릅니다. <code>/연장</code>이나 <code>/재모집</code>으로 다시 열 때는 다시 부르지 않습니다.</li>
-      <li>내전을 열 때마다 리그 선수 모두에게 알림이 갑니다. 열었다가 바로 취소해도 알림은 이미 간 뒤입니다.</li>
+      <li>내전을 열 때마다 내전 알림을 켠 선수 모두에게 알림이 갑니다. 열었다가 바로 취소해도 알림은 이미 간 뒤입니다.</li>
+      <li>디스코드에 <strong>내전 알림</strong> 역할이 아직 없으면 아무도 부르지 않습니다. 운영자가 그 이름으로 역할을 만들면 됩니다.</li>
+      <li>승인이 풀린(대기·제외) 선수는 리그 선수 역할과 함께 내전 알림 역할도 빠집니다.</li>
       <li>디스코드는 글 안에서 멘션한 역할의 사람들을 그 글에 참여시킵니다. 그래서 선수들의 채널 목록에 그 글이 보이게 됩니다.</li>
     </ul>
 
@@ -140,9 +142,9 @@
       <table class="g-table says">
         <thead><tr><th>답에 붙은 안내</th><th>뜻</th></tr></thead>
         <tbody>
-          <tr><td>봇이 <strong>리그 선수</strong> 역할을 멘션해도 알림이 울리지 않아요 …</td><td>부르는 글은 올라갔지만 알림이 울리지 않았습니다. 디스코드 서버의 역할 설정을 고쳐야 합니다(고치는 법이 안내에 적혀 있습니다).</td></tr>
-          <tr><td>리그 선수 역할이 있는 선수가 100명이에요 …</td><td>디스코드는 글 안에서 100명 이상인 역할을 멘션하면 알림을 보내지 않습니다. 선수들에게 알리는 방법을 바꿔야 합니다.</td></tr>
-          <tr><td>정해 둔 리그 선수 역할을 찾지 못해 …<br>모집 글에서 리그 선수 역할을 멘션하지 못했어요 …</td><td>선수들을 부르지 못했습니다.</td></tr>
+          <tr><td>봇이 <strong>내전 알림</strong> 역할을 멘션해도 알림이 울리지 않아요 …</td><td>부르는 글은 올라갔지만 알림이 울리지 않았습니다. 디스코드 서버의 역할 설정을 고쳐야 합니다(고치는 법이 안내에 적혀 있습니다).</td></tr>
+          <tr><td><code>/내전알림</code> 으로 <strong>내전 알림</strong> 역할을 받은 사람이 100명이에요 …</td><td>디스코드는 글 안에서 100명 이상인 역할을 멘션하면 알림을 보내지 않습니다. 선수들에게 알리는 방법을 바꿔야 합니다.</td></tr>
+          <tr><td>모집 글에서 아무도 부르지 않았어요 …<br>모집 글에서 내전 알림 역할을 멘션하지 못했어요 …</td><td>선수들을 부르지 못했습니다(역할이 지워졌거나 같은 이름의 역할이 여럿입니다).</td></tr>
         </tbody>
       </table>
     </div>
@@ -158,7 +160,7 @@
           <tr><td>인원이 다 모였다</td><td><code>/마감</code></td><td>마감 시각을 기다리지 않고 바로 마감하고 팀을 짭니다.</td></tr>
           <tr><td>조금 모자란다</td><td><code>/연장</code></td><td>마감을 5분 뒤로 미룹니다. 이미 신청한 사람은 그대로입니다.</td></tr>
           <tr><td>신청한 사람이 아직 있는지 모르겠다</td><td><code>/재모집</code></td><td>신청을 모두 취소로 돌리고 5분 동안 다시 받습니다. 모두 <code>/참여</code>를 다시 입력해야 합니다.</td></tr>
-          <tr><td>열 수 없다</td><td><code>/취소</code></td><td>그 내전을 취소하고 참여자에게 알립니다. 글은 잠깁니다.</td></tr>
+          <tr><td>열 수 없다</td><td><code>/취소</code></td><td>그 내전을 취소하고 참여자에게 알립니다. 글은 잠기고, <strong>10분 뒤에 지워집니다.</strong></td></tr>
         </tbody>
       </table>
     </div>
@@ -200,9 +202,9 @@
       <figcaption><b>예시</b><code>/취소</code></figcaption>
       <div class="dc">
         <div class="dc-title">10월 10일(토) 20:54 내전 모집</div>
-        <div class="dc-msg"><div class="dc-av">퍼</div><div class="dc-body"><div class="dc-head"><b>퍼그나봇</b><i>앱</i><time>오후 9:26</time></div><div class="dc-text"><span class="at">@운영진1</span>님이 이번 내전을 취소했어요.<br><span class="at">@플레이어1</span> <span class="at">@플레이어2</span> <span class="at">@플레이어3</span> <span class="at">@플레이어4</span></div></div></div>
+        <div class="dc-msg"><div class="dc-av">퍼</div><div class="dc-body"><div class="dc-head"><b>퍼그나봇</b><i>앱</i><time>오후 9:26</time></div><div class="dc-text"><span class="at">@운영진1</span>님이 이번 내전을 취소했어요.<br>🗑️ 이 글은 10분 뒤(<span class="ts">오후 9:36</span>)에 지워져요.<br><span class="at">@플레이어1</span> <span class="at">@플레이어2</span> <span class="at">@플레이어3</span> <span class="at">@플레이어4</span></div></div></div>
         <div class="dc-used"><span class="dc-mini">운</span><b>운영진1</b> 님이 <span class="dc-cmd">/취소</span> 사용함</div>
-        <div class="dc-msg me"><div class="dc-av">퍼</div><div class="dc-body"><div class="dc-head"><b>퍼그나봇</b><i>앱</i><time>오후 9:26</time></div><div class="dc-text"><span class="at">@운영진1</span>님이 내전을 취소했어요. <span class="link">https://discord.com/channels/…/내전-모집-글</span></div><div class="dc-only">👁 이 메시지는 나만 볼 수 있어요</div></div></div>
+        <div class="dc-msg me"><div class="dc-av">퍼</div><div class="dc-body"><div class="dc-head"><b>퍼그나봇</b><i>앱</i><time>오후 9:26</time></div><div class="dc-text"><span class="at">@운영진1</span>님이 내전을 취소했어요. <span class="link">https://discord.com/channels/…/내전-모집-글</span> 이 글은 10분 뒤에 지워져요.</div><div class="dc-only">👁 이 메시지는 나만 볼 수 있어요</div></div></div>
       </div>
     </figure>
 
@@ -255,7 +257,7 @@
     <h2><span class="n">5</span>경기 시작: <code>/시작</code> <span class="g-where">그 내전의 글</span></h2>
     <ol>
       <li>도타 2 로비를 만들어 선수들에게 안내합니다. 이 일은 지금처럼 사람이 합니다.</li>
-      <li>선수들이 <strong>로비 음성 채널</strong>(<strong>🔊 📺로비 (디코 중계방)</strong>)에 모이면 그 내전의 글에서 <code>/시작</code>을 입력합니다. 칸(로비·래디언트·다이어)은 비워 둡니다.</li>
+      <li>선수들이 <strong>로비 음성 채널</strong>(<strong>🔊 📺대회 로비 (디코 중계방)</strong>)에 모이면 그 내전의 글에서 <code>/시작</code>을 입력합니다. 칸(로비·래디언트·다이어)은 비워 둡니다.</li>
       <li>봇이 로비 음성 채널에 있는 그 내전의 선수를 각자의 팀 음성 채널로 한꺼번에 옮깁니다.</li>
     </ol>
 
@@ -283,7 +285,7 @@
         <thead><tr><th>봇의 답</th><th>뜻과 할 일</th></tr></thead>
         <tbody>
           <tr><td>배정된 팀이 없어서 옮길 사람이 없어요.</td><td>이 내전에는 봇이 짠 팀이 없습니다. 팀 편성이 올라온 뒤에 씁니다.</td></tr>
-          <tr><td>🔊 📺로비 (디코 중계방) 에 배정된 선수가 없어서 아무도 옮기지 않았어요.</td><td>선수들이 아직 로비 음성 채널에 없습니다. 모인 뒤에 다시 입력합니다.</td></tr>
+          <tr><td>🔊 📺대회 로비 (디코 중계방) 에 배정된 선수가 없어서 아무도 옮기지 않았어요.</td><td>선수들이 아직 로비 음성 채널에 없습니다. 모인 뒤에 다시 입력합니다.</td></tr>
           <tr><td>선수들이 이미 각자의 팀 음성 채널에 있어요.</td><td>더 할 일이 없습니다.</td></tr>
           <tr><td>비어 있는 팀 음성 채널이 없어요.</td><td>세 벌을 다른 내전이 모두 쓰고 있습니다. 끝난 판의 글에서 <code>/종료</code>를 입력해 비웁니다.</td></tr>
           <tr><td>봇에 <strong>멤버 이동</strong> 권한이 없어요.</td><td>디스코드 서버 설정의 문제입니다. 운영자에게 알립니다.</td></tr>
@@ -303,7 +305,7 @@
         <div class="dc-title">10월 10일(토) 20:54 내전 모집</div>
         <div class="dc-msg"><div class="dc-av">퍼</div><div class="dc-body"><div class="dc-head"><b>퍼그나봇</b><i>앱</i><time>오후 9:52</time></div><div class="dc-text"><span class="at">@운영진1</span>: 게임이 종료되어 모든 선수를 로비로 이동시킵니다.</div></div></div>
         <div class="dc-used"><span class="dc-mini">운</span><b>운영진1</b> 님이 <span class="dc-cmd">/종료</span> 사용함</div>
-        <div class="dc-msg me"><div class="dc-av">퍼</div><div class="dc-body"><div class="dc-head"><b>퍼그나봇</b><i>앱</i><time>오후 9:52</time></div><div class="dc-text"><span class="at">@운영진1</span>: 게임이 종료되어 모든 선수를 로비로 이동시킵니다.<br>게임 채널 1에서 <span class="ch">🔊 📺로비 (디코 중계방)</span> 로 10명을 옮겼어요.</div><div class="dc-only">👁 이 메시지는 나만 볼 수 있어요</div></div></div>
+        <div class="dc-msg me"><div class="dc-av">퍼</div><div class="dc-body"><div class="dc-head"><b>퍼그나봇</b><i>앱</i><time>오후 9:52</time></div><div class="dc-text"><span class="at">@운영진1</span>: 게임이 종료되어 모든 선수를 로비로 이동시킵니다.<br>게임 채널 1에서 <span class="ch">🔊 📺대회 로비 (디코 중계방)</span> 로 10명을 옮겼어요.</div><div class="dc-only">👁 이 메시지는 나만 볼 수 있어요</div></div></div>
       </div>
       <p class="after"><code>/종료</code>를 하면 그 팀 음성 채널 벌이 비어 다음 내전이 쓸 수 있게 됩니다.</p>
     </figure>
@@ -319,11 +321,14 @@
       <div class="dc">
         <div class="dc-title">10월 10일(토) 20:54 내전 모집</div>
         <div class="dc-input"><span class="lab">입력</span><span class="dc-cmd">/승리</span><span class="opt"><b>팀</b>래디언트</span></div>
-        <div class="dc-msg"><div class="dc-av">퍼</div><div class="dc-body"><div class="dc-head"><b>퍼그나봇</b><i>앱</i><time>오후 9:53</time></div><div class="dc-text"><span class="at">@운영진1</span>님이 경기 결과를 기록했어요.<br>🏆 <strong>래디언트 승리!</strong> MMR을 정산했어요.<br><br>🟢 <strong>래디언트</strong> · 승<br><code>1 캐리</code> · <span class="at">@플레이어1</span> · 5420 → <strong>5507</strong> (+87)<br><code>2 미드</code> · <span class="at">@플레이어7</span> · 5640 → <strong>5721</strong> (+81)<br><code>3 오프</code> · <span class="at">@플레이어2</span> · 4715 → <strong>4824</strong> (+109)<br><code>4 서폿</code> · <span class="at">@플레이어5</span> · 4310 → <strong>4431</strong> (+121)<br><code>5 서폿</code> · <span class="at">@플레이어12</span> · 4605 → <strong>4717</strong> (+112)<br><br>🔴 <strong>다이어</strong><br><code>1 캐리</code> · <span class="at">@플레이어11</span> · 5210 → <strong>5102</strong> (−108)<br><code>2 미드</code> · <span class="at">@플레이어3</span> · 5130 → <strong>5024</strong> (−106)<br><code>3 오프</code> · <span class="at">@플레이어4</span> · 5790 → <strong>5669</strong> (−121)<br><code>4 서폿</code> · <span class="at">@플레이어8</span> · 4525 → <strong>4432</strong> (−93)<br><code>5 서폿</code> · <span class="at">@플레이어10</span> · 3940 → <strong>3859</strong> (−81)</div></div></div>
+        <div class="dc-msg"><div class="dc-av">퍼</div><div class="dc-body"><div class="dc-head"><b>퍼그나봇</b><i>앱</i><time>오후 9:53</time></div><div class="dc-text"><span class="at">@운영진1</span>님이 경기 결과를 기록했어요.<br>🏆 <strong>래디언트 승리!</strong> MMR을 정산했어요.<br><br>🟢 <strong>래디언트</strong> · 승<br><code>1 캐리</code> · <span class="at">@플레이어1</span> · 5420 → <strong>5507</strong> (+87)<br><code>2 미드</code> · <span class="at">@플레이어7</span> · 5640 → <strong>5721</strong> (+81)<br><code>3 오프</code> · <span class="at">@플레이어2</span> · 4715 → <strong>4824</strong> (+109)<br><code>4 서폿</code> · <span class="at">@플레이어5</span> · 4310 → <strong>4431</strong> (+121)<br><code>5 서폿</code> · <span class="at">@플레이어12</span> · 4605 → <strong>4717</strong> (+112)<br><br>🔴 <strong>다이어</strong><br><code>1 캐리</code> · <span class="at">@플레이어11</span> · 5210 → <strong>5102</strong> (−108)<br><code>2 미드</code> · <span class="at">@플레이어3</span> · 5130 → <strong>5024</strong> (−106)<br><code>3 오프</code> · <span class="at">@플레이어4</span> · 5790 → <strong>5669</strong> (−121)<br><code>4 서폿</code> · <span class="at">@플레이어8</span> · 4525 → <strong>4432</strong> (−93)<br><code>5 서폿</code> · <span class="at">@플레이어10</span> · 3940 → <strong>3859</strong> (−81)<br><span class="sub">이 글은 10분 뒤(<span class="ts">오후 10:03</span>)에 잠기고 닫혀요.</span></div></div></div>
         <div class="dc-used"><span class="dc-mini">운</span><b>운영진1</b> 님이 <span class="dc-cmd">/승리</span> 사용함</div>
-        <div class="dc-msg me"><div class="dc-av">퍼</div><div class="dc-body"><div class="dc-head"><b>퍼그나봇</b><i>앱</i><time>오후 9:53</time></div><div class="dc-text"><span class="cut">… 위와 같은 결과 …</span><br><br>순위 페이지와 구글 시트에 반영했어요. 잘못 기록했다면 <code>/승리취소</code> 로 되돌릴 수 있어요.</div><div class="dc-only">👁 이 메시지는 나만 볼 수 있어요</div></div></div>
+        <div class="dc-msg me"><div class="dc-av">퍼</div><div class="dc-body"><div class="dc-head"><b>퍼그나봇</b><i>앱</i><time>오후 9:53</time></div><div class="dc-text"><span class="cut">… 위와 같은 결과 …</span><br><br>순위 페이지와 구글 시트에 반영했어요. 잘못 기록했다면 이 글이 닫히기 전(10분 안)에 그 글에서 <code>/승리취소</code> 로 되돌릴 수 있어요.</div><div class="dc-only">👁 이 메시지는 나만 볼 수 있어요</div></div></div>
       </div>
     </figure>
+
+    <h3>기록한 뒤 10분이 지나면 글이 닫힙니다</h3>
+    <p>결과를 기록하고(<strong>경기 안 함</strong>으로 정리한 판도) <strong>10분이 지나면 봇이 그 글을 잠그고 닫습니다.</strong> 잘못 기록했다면 그 전에 그 글에서 <code>/승리취소</code>를 합니다(<a href="#undo">8번</a>). 닫힌 글은 포럼 목록에서 닫힌 글로 보이고, 그 안의 기록은 그대로 남습니다.</p>
 
     <div class="notice bad">
       <p><strong>대타가 뛰었거나 자리를 바꿔 뛰었다면 <code>/승리</code>로 기록하지 않습니다.</strong> 봇은 알린 편성 그대로만 기록합니다. 리그 관리자에게 누가 누구 대신 뛰었는지, 어느 팀이 이겼는지 알려 주세요. 리그 관리자가 편성을 고쳐서 기록합니다.</p>
@@ -336,7 +341,7 @@
       <div class="dc">
         <div class="dc-title">10월 10일(토) 20:54 내전 모집</div>
         <div class="dc-input"><span class="lab">입력</span><span class="dc-cmd">/승리</span><span class="opt"><b>팀</b>경기 안 함 (이 판을 기록 없이 정리)</span></div>
-        <div class="dc-msg"><div class="dc-av">퍼</div><div class="dc-body"><div class="dc-head"><b>퍼그나봇</b><i>앱</i><time>오후 9:30</time></div><div class="dc-text"><span class="at">@운영진1</span>님이 이 판을 경기 없이 정리했어요. 결과는 기록되지 않습니다.</div></div></div>
+        <div class="dc-msg"><div class="dc-av">퍼</div><div class="dc-body"><div class="dc-head"><b>퍼그나봇</b><i>앱</i><time>오후 9:30</time></div><div class="dc-text"><span class="at">@운영진1</span>님이 이 판을 경기 없이 정리했어요. 결과는 기록되지 않습니다.<br><span class="sub">이 글은 10분 뒤(<span class="ts">오후 9:40</span>)에 잠기고 닫혀요.</span></div></div></div>
       </div>
     </figure>
 
@@ -353,7 +358,7 @@
       <figcaption><b>예시</b>시즌 종료 시각 뒤에 시작한 경기에 <code>/승리</code>를 입력했을 때</figcaption>
       <div class="dc">
         <div class="dc-title">11월 1일(일) 00:20 내전 모집</div>
-        <div class="dc-msg"><div class="dc-av">퍼</div><div class="dc-body"><div class="dc-head"><b>퍼그나봇</b><i>앱</i><time>오전 1:10</time></div><div class="dc-text"><span class="at">@운영진1</span>님이 결과를 입력했지만, 이 경기는 시즌 종료(<span class="ts">2026년 11월 1일 오전 12:00</span>) 뒤에 시작해서 기록하지 않았어요. 순위와 MMR은 바뀌지 않습니다.</div></div></div>
+        <div class="dc-msg"><div class="dc-av">퍼</div><div class="dc-body"><div class="dc-head"><b>퍼그나봇</b><i>앱</i><time>오전 1:10</time></div><div class="dc-text"><span class="at">@운영진1</span>님이 결과를 입력했지만, 이 경기는 시즌 종료(<span class="ts">2026년 11월 1일 오전 12:00</span>) 뒤에 시작해서 기록하지 않았어요. 순위와 MMR은 바뀌지 않습니다.<br><span class="sub">이 글은 10분 뒤(<span class="ts">오전 1:20</span>)에 잠기고 닫혀요.</span></div></div></div>
         <div class="dc-used"><span class="dc-mini">운</span><b>운영진1</b> 님이 <span class="dc-cmd">/승리</span> 사용함</div>
         <div class="dc-msg me"><div class="dc-av">퍼</div><div class="dc-body"><div class="dc-head"><b>퍼그나봇</b><i>앱</i><time>오전 1:10</time></div><div class="dc-text"><span class="at">@운영진1</span>님, 이 경기는 시즌 종료(<span class="ts">2026년 11월 1일 오전 12:00</span>) 뒤에 시작한 경기라 결과를 기록하지 않았어요. 순위와 MMR은 바뀌지 않고, 이 판은 정리했어요. 시즌 종료 날짜가 잘못돼 있다면 리그 관리자에게 알려 주세요.</div><div class="dc-only">👁 이 메시지는 나만 볼 수 있어요</div></div></div>
       </div>
@@ -395,6 +400,13 @@
         <div class="dc-msg me"><div class="dc-av">퍼</div><div class="dc-body"><div class="dc-head"><b>퍼그나봇</b><i>앱</i><time>오후 9:55</time></div><div class="dc-text"><span class="at">@운영진1</span>님이 결과 기록을 취소하고 MMR을 되돌렸어요. 다시 기록하려면 <code>/승리</code> 를 쓰세요.</div><div class="dc-only">👁 이 메시지는 나만 볼 수 있어요</div></div></div>
       </div>
     </figure>
+
+    <h3>글이 닫힌 뒤에는</h3>
+    <p>결과를 기록하고 10분이 지나 글이 잠기고 닫히면, 스레드 관리 권한이 없는 리그 운영진은 그 글에 입력할 수 없습니다. 그때는 이렇게 합니다.</p>
+    <ul>
+      <li>봇이 결과를 기록한 판이 그것 하나뿐이면(이틀 안) <strong>#💚퍼그나봇-콘솔</strong>에서 <code>/승리취소</code>를 입력해도 됩니다. 여럿이면 봇이 고르지 않고 글을 알려 줍니다.</li>
+      <li>그렇지 않으면 리그 관리자(또는 스레드 관리 권한이 있는 사람)에게 부탁합니다. 그 사람이 닫힌 글에서 <code>/승리취소</code>를 쓰면 봇이 글을 다시 엽니다. 다시 <code>/승리</code>로 기록하면 그때부터 10분 뒤에 또 닫힙니다.</li>
+    </ul>
 
     <h3>되돌릴 수 없다고 나올 때</h3>
     <p>되돌리려는 경기의 선수가 <strong>그 뒤에 기록된 다른 경기</strong>에도 뛰었다면, 봇이 되돌리지 않고 순서를 알려 주며 리그 관리자를 부릅니다. 뒤 경기의 점수가 앞 경기의 결과 위에서 계산됐기 때문입니다.</p>
@@ -505,7 +517,7 @@
         <thead><tr><th>내전에서 생긴 일</th><th>오라클 봇이 하는 일</th></tr></thead>
         <tbody>
           <tr><td>마감되어 팀 편성이 올라옴</td><td>그 바로 아래에 승부 예측을 열고 20분 동안 받습니다. 20분이 지나면 마감하고 배당률을 올립니다.</td></tr>
-          <tr><td><code>/승리</code>로 이긴 팀을 기록</td><td>건 포인트를 정산해 그 글에 올립니다. 그 판에 뛴 선수 열 명에게 <strong>참가 포인트</strong>(한 판에 100)도 줍니다.</td></tr>
+          <tr><td><code>/승리</code>로 이긴 팀을 기록</td><td>건 포인트를 정산해 그 글에 올립니다. 그 판에 뛴 선수 열 명에게 <strong>참가 포인트</strong>(한 판에 100, 그날의 첫 내전은 300)도 줍니다.</td></tr>
           <tr><td><code>/승리취소</code></td><td>정산을 되돌리고 참가 포인트를 거둡니다. 다시 <code>/승리</code>하면 다시 정산하고 다시 줍니다.</td></tr>
           <tr><td><code>/승리</code>의 <strong>경기 안 함</strong>, <code>/취소</code>, <code>/재모집</code>, 마감한 뒤의 <code>/연장</code></td><td>그 판이 없던 일이 됐으므로 건 포인트를 모두 돌려줍니다.</td></tr>
         </tbody>
@@ -524,7 +536,7 @@
       <li>대타가 뛰어서 리그 관리자가 리그 매니저로 기록하는 판은 오라클 봇이 승패를 알 수 없습니다. 그 글에서 <code>/승리</code>의 <strong>경기 안 함</strong>으로 정리하면 건 포인트가 돌아갑니다. 이런 판에는 참가 포인트도 주지 못합니다.</li>
       <li>결과를 기록하지 않은 채 이틀이 지나면 건 포인트가 저절로 돌아갑니다.</li>
       <li>그 경기에 뛰는 선수는 걸 수 없습니다. 리그 운영진도 리그 선수처럼 포인트를 받고 걸 수 있습니다.</li>
-      <li><strong>참가 포인트</strong>는 결과가 기록될 때 그 판에 뛴 선수가 승패와 상관없이 받는 포인트입니다. 아무도 걸지 않은 판에서도 줍니다. 한 판에 얼마를 줄지는 운영자가 리그 관리자 페이지에서 정합니다(0이면 주지 않습니다).</li>
+      <li><strong>참가 포인트</strong>는 결과가 기록될 때 그 판에 뛴 선수가 승패와 상관없이 받는 포인트입니다. 아무도 걸지 않은 판에서도 줍니다. <strong>그날의 첫 내전</strong>(오전 6시에 하루가 바뀌고, 그날 결과가 가장 먼저 기록된 내전)에 뛴 선수는 300을 받습니다. 한 판에 얼마를 줄지는 운영자가 리그 관리자 페이지에서 정합니다(0이면 주지 않습니다).</li>
       <li>시즌이 끝난 뒤에 짠 팀에는 승부 예측이 열리지 않습니다.</li>
       <li>포인트는 시즌이 바뀌어도 그대로입니다. 새로 시작하려면 운영자가 리그 관리자 페이지에서 <strong>승부 예측 포인트 초기화</strong>를 누릅니다. 그러면 모든 포인트와 전적, 랭킹이 지워지고, 그때 걸려 있던 포인트는 없던 일이 됩니다.</li>
       <li>봇을 돌리는 컴퓨터가 꺼져 있는 동안에는 걸 수 없고, 다시 켜졌을 때 20분이 지나 있으면 바로 마감합니다.</li>
@@ -568,10 +580,10 @@
     <p>정상입니다. 선수들이 봐야 하는 내용은 봇이 그 글에 따로 올립니다.</p>
 
     <h3>마감한 지 오래된 글에서 명령어가 입력되지 않아요</h3>
-    <p>글이 잠겨 있으면 디스코드가 입력을 막을 수 있습니다. 진행 중인 내전이 그것 하나뿐이면 <strong>#💚퍼그나봇-콘솔</strong>에서 같은 명령어를 입력해도 됩니다. 취소한 내전의 글은 언제나 잠깁니다.</p>
+    <p>글이 잠겨 있으면 디스코드가 입력을 막을 수 있습니다. 진행 중인 내전이 그것 하나뿐이면 <strong>#💚퍼그나봇-콘솔</strong>에서 같은 명령어를 입력해도 됩니다. 취소한 내전의 글은 잠기고 10분 뒤에 지워지며, 결과를 기록한 내전의 글은 10분 뒤에 잠기고 닫힙니다(<a href="#undo">8번</a>의 "글이 닫힌 뒤에는").</p>
 
     <h3>선수가 "이 명령어를 사용할 권한이 없어요"라고 나온다고 해요</h3>
-    <p><code>/참여</code>, <code>/참여취소</code>, <code>/내전하자</code>, <code>/포지션변경</code>, <code>/도움말</code>은 <strong>리그 선수 역할이 있는 사람만</strong> 쓸 수 있습니다(리그 운영진과 리그 관리자는 역할이 없어도 씁니다). 그 선수에게 리그 선수 역할이 있는지 확인해 주세요.</p>
+    <p><code>/참여</code>, <code>/참여취소</code>, <code>/내전하자</code>, <code>/포지션변경</code>, <code>/내전알림</code>, <code>/도움말</code>은 <strong>리그 선수 역할이 있는 사람만</strong> 쓸 수 있습니다(리그 운영진과 리그 관리자는 역할이 없어도 씁니다). 그 선수에게 리그 선수 역할이 있는지 확인해 주세요.</p>
     <ul>
       <li>아직 승인 전이면 리그 관리자가 승인해야 합니다.</li>
       <li>방금 승인됐다면 봇이 역할을 줄 때까지 5분쯤 걸립니다.</li>

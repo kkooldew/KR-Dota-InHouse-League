@@ -191,6 +191,19 @@ class World:
         mod.bot.wants, mod.bot.want_joined, mod.bot.want_alerted, mod.bot.want_channel_id, mod.bot.want_role_id = {}, set(), False, 0, 0
         mod.bot.want_board, mod.bot.want_alert_at, mod.bot.want_seq, mod.bot.want_fresh, mod.bot.want_lock = None, 0.0, 0, False, asyncio.Lock()
         mod.bot.season_no, mod.bot.season_end = None, 0.0
+        mod.bot.alert_role_id, mod.bot.alert_members, mod.bot.alert_note = 0, set(), ""
+        # 가짜 디스코드 서버: 역할이 하나도 없다('내전 알림' 역할을 아직 만들지 않았다). 역할을 보는 시험은 따로 바꿔 끼운다.
+        # 시험이 끼워 둔 다른 가짜 서버(음성 채널, 역할 등)는 그대로 둔다 (진짜 것이거나 앞의 World 가 끼운 것일 때만 바꾼다)
+        self.guild = Mock()
+        self.guild.roles, self.guild.me = [], None
+        self.guild.get_role = Mock(return_value=None)
+
+        async def get_guild():
+            return self.guild
+
+        get_guild.world = True
+        if getattr(mod.get_guild, "__module__", None) == mod.__name__ or getattr(mod.get_guild, "world", False):
+            mod.get_guild = get_guild
         mod.STATE_PATH.unlink(missing_ok=True)
 
     def texts(self, mock):
@@ -363,8 +376,9 @@ async def main():
 
     t, _ = await run(mod.cancel, 100, ADMIN)
     check(rec.cancelled and t.startswith("<@1>님이 내전을 취소했어요.") and w.message.jump_url in t, "마감 뒤 /취소")
-    check(w.texts(w.thread.send)[-1] == "<@1>님이 이번 내전을 취소했어요.\n<@11> <@12> <@13>"
-          and [x.id for x in w.thread.send.call_args.kwargs["allowed_mentions"].users] == [11, 12, 13], "취소 알림: 취소한 운영진을 맨 앞에, 알림은 참여자에게만")
+    check(w.texts(w.thread.send)[-1] == f"<@1>님이 이번 내전을 취소했어요.\n🗑️ 이 글은 10분 뒤(<t:{int(rec.delete_at)}:t>)에 지워져요.\n<@11> <@12> <@13>"
+          and [x.id for x in w.thread.send.call_args.kwargs["allowed_mentions"].users] == [11, 12, 13] and 595 < rec.delete_at - time.time() <= 600,
+          "취소 알림: 취소한 운영진을 맨 앞에, 알림은 참여자에게만. 글이 10분 뒤에 지워진다고 알린다")
     check("취소됐어요" in w.message.edit.call_args.kwargs["content"], "본문이 취소 상태로 바뀜")
     t, _ = await run(mod.extend, 100, ADMIN)
     check("연장할 내전이 없어요" in t and rec.closed, "취소 뒤 /연장 거절")
@@ -468,7 +482,7 @@ async def main():
     check(real_problem().startswith("꺼짐 (config.json 에 sync_url"), "서버 연결 설정이 없으면 자동 팀 편성은 꺼짐")
     named(w.signup, "내전모집", view_channel=True, send_messages=False, send_messages_in_threads=True, manage_threads=False)
     out = await startup(w)
-    check(out[1] == "참여 신청 채널: #내전모집 (포럼) [확인 필요] 봇에 없는 권한: 글 올리기, 스레드 관리(글 잠그기)", "켤 때 확인: 없는 권한 안내")
+    check(out[1] == "참여 신청 채널: #내전모집 (포럼) [확인 필요] 봇에 없는 권한: 글 올리기, 스레드 관리(글 잠그기·지우기)", "켤 때 확인: 없는 권한 안내")
     # 운영진 역할을 정하지 않았는데 운영진 채널이 모두에게 보이면, 누구나 운영진 명령어를 쓸 수 있다고 알린다
     named(w.admin, "운영진", everyone=True, view_channel=True, send_messages=True)
     named(w.signup, "내전모집", everyone=True, view_channel=True, send_messages=True, send_messages_in_threads=True, manage_threads=True)
@@ -891,8 +905,12 @@ async def main():
           "선수별 MMR 변동 (선수는 디스코드 멘션으로만)")
     check(mod.result_text("r", [{"id": "p0", "name": "가*나", "side": "r", "role": 1, "before": 3000, "delta": 20, "after": 3020}], {}).split("\n")[3]
           == "`1 캐리` · 가\\*나 · 3000 → **3020** (+20)", "디스코드 계정을 모르는 선수만 닉네임으로 적는다")
-    check(w.thread.send.call_args.kwargs.get("allowed_mentions") is not None and shown in t and "/승리취소" in t and i.followup.send.call_args.kwargs.get("allowed_mentions") is not None,
-          "결과 공지는 알림을 울리지 않고, 운영진에게 되돌리는 방법도 알린다")
+    body, _, tail = shown.partition("\n-# 이 글은 ")
+    check(w.thread.send.call_args.kwargs.get("allowed_mentions") is not None and body in t and "이 글이 닫히기 전(10분 안)에 그 글에서 `/승리취소` 로 되돌릴 수 있어요." in t
+          and i.followup.send.call_args.kwargs.get("allowed_mentions") is not None,
+          "결과 공지는 알림을 울리지 않고, 운영진에게 되돌리는 방법도 알린다 (글이 닫히기 전에)")
+    check(tail == f"10분 뒤(<t:{int(mod.rec_of(entry).close_at)}:t>)에 잠기고 닫혀요." and 595 < mod.rec_of(entry).close_at - time.time() <= 600,
+          "결과를 기록한 내전의 글은 10분 뒤에 잠기고 닫힌다고 결과 공지 끝에 작게 적는다")
     check(entry["result"] == {"winner": "r", "match_id": "m1"} and json.loads(mod.STATE_PATH.read_text(encoding="utf-8"))["lineups"][0]["result"]["winner"] == "r", "기록한 결과를 적어 둔다")
     t, _ = await run(mod.record_win, 100, ADMIN, "d")
     check("결과를 기다리는 팀이 없어요" in t and "/승리취소" in t and w.rev == 2, "같은 판을 두 번 기록하지 않는다")
@@ -948,7 +966,9 @@ async def main():
     t, i = await run(mod.record_win, 300, ADMIN, "x")
     check(mod.bot.lineups == [real] and w.rev == 1 and not any(p["action"] in ("saveLeague", "pushLineup") for p in w.server[n:]),
           "경기 안 함: 그 글의 판을 기록 없이 치운다 (리그 기록은 그대로, 서버에 올려 둔 나중 판의 편성도 그대로)")
-    check(w.texts(w.thread.send)[sent:] == ["<@1>님이 이 판을 경기 없이 정리했어요. 결과는 기록되지 않습니다."] and t.startswith("<@1>님이 <#300> 의 판을 경기 없이 정리했어요.")
+    check(w.texts(w.thread.send)[sent:] == ["<@1>님이 이 판을 경기 없이 정리했어요. 결과는 기록되지 않습니다.\n"
+                                            f"-# 이 글은 10분 뒤(<t:{int(mod.rec_of(ghost).close_at)}:t>)에 잠기고 닫혀요."]
+          and t.startswith("<@1>님이 <#300> 의 판을 경기 없이 정리했어요.")
           and "결과를 기다리는 판이 1개 더 있어요. 그 내전의 글에서 `/승리` 로 정리해 주세요: <#301>" in t, "모집 글과 운영진에게 알리고, 남은 판이 있으면 그 글과 함께 알린다")
     check(i.response.defer.call_args.kwargs == {"ephemeral": True}, "내전의 글에서 입력한 리그 운영진 명령어의 답은 본인에게만 보인다 (그 글에는 봇이 알림을 따로 올린다)")
     check(json.loads(mod.STATE_PATH.read_text(encoding="utf-8"))["lineups"] == [real], "치운 판은 상태 파일에서도 지운다")
@@ -1190,11 +1210,12 @@ async def main():
         m = Mock()
         m.id, m.name, m.nick, m.discriminator, m.mention, m.roles = uid, name, None, "0", f"<@{uid}>", list(roles)
 
-        async def add_roles(role, reason=None):
-            m.roles.append(role)
+        async def add_roles(*roles, reason=None):
+            m.roles.extend(roles)
 
-        async def remove_roles(role, reason=None):
-            m.roles.remove(role)
+        async def remove_roles(*roles, reason=None):
+            for role in roles:
+                m.roles.remove(role)
 
         m.add_roles, m.remove_roles = AsyncMock(side_effect=add_roles), AsyncMock(side_effect=remove_roles)
         return m
@@ -1283,6 +1304,19 @@ async def main():
     w.registered[2]["status"] = "승인"
     await mod.role_tick()
     check(PLAYER in lee.roles and "역할을 줬어요: <@23>" in admin_said()[-1], "대기로 돌렸던 선수를 다시 승인하면 역할을 다시 준다")
+    ALERT = Role(57, "내전 알림", 3)                                   # /내전알림 으로 받은 역할 (2026-10-21)
+    guild.roles[57] = ALERT
+    mod.bot.alert_role_id, mod.bot.alert_members = 57, {23}
+    lee.roles.append(ALERT)
+    w.registered[2]["status"] = "제외"
+    await mod.role_tick()
+    check(PLAYER not in lee.roles and ALERT not in lee.roles and 23 not in mod.bot.alert_members and "역할을 뺐어요: <@23>" in admin_said()[-1],
+          "승인을 풀면 내전 알림 역할도 함께 뺀다 (리그 선수가 아니면 /내전알림 도 쓸 수 없다)")
+    w.registered[2]["status"] = "승인"
+    await mod.role_tick()
+    check(PLAYER in lee.roles and ALERT not in lee.roles, "다시 승인해도 내전 알림 역할은 저절로 주지 않는다 (본인이 /내전알림 으로 켠다)")
+    del guild.roles[57]
+    mod.bot.alert_role_id, mod.bot.alert_members = 0, set()
 
     ghost = member(26, "ghost")
     guild.members[26] = ghost                                             # 찾지 못했던 사람이 서버에 들어왔다
@@ -2130,8 +2164,8 @@ async def main():
           "/도움말: 리그 선수 역할이 없는 사람은 쓰지 못한다 (등록하고 승인을 받으라고 알린다)")
     mine = helps["선수"]
     check("**리그 선수**가 쓸 수 있는 명령어예요." in mine and "`/내전하자` — <#400> 에서 써요." in mine
-          and mine.index("\n\n**리그 선수**\n") < mine.index("`/참여` · `/참여취소` —") < mine.index("`/내전하자` —") < mine.index("`/포지션변경` —") < mine.index("`/도움말` —")
-          and "`/내전생성`" not in mine and "`/선수역할`" not in mine, "/도움말: 선수가 쓰는 명령어(/참여·/참여취소·/내전하자·/포지션변경·/도움말)는 모두 리그 선수 칸에 있다")
+          and mine.index("\n\n**리그 선수**\n") < mine.index("`/참여` · `/참여취소` —") < mine.index("`/내전하자` —") < mine.index("`/포지션변경` —") < mine.index("`/내전알림` —") < mine.index("`/도움말` —")
+          and "`/내전생성`" not in mine and "`/선수역할`" not in mine, "/도움말: 선수가 쓰는 명령어(/참여·/참여취소·/내전하자·/포지션변경·/내전알림·/도움말)는 모두 리그 선수 칸에 있다")
     check(all("누구나" not in h for h in helps.values()) and all(helps[k].count("**리그 선수**\n") == 1 for k in ("선수", "운영진", "관리자")),
           "/도움말: '누구나' 칸은 없고, 리그 선수 칸은 쓸 수 있는 모든 사람에게 한 번 보인다")
     check("**리그 운영진**이 쓸 수 있는 명령어예요." in helps["운영진"] and "`/내전생성` — <#100> 에서 써요." in helps["운영진"] and "동시에 3개까지" in helps["운영진"]
@@ -2168,16 +2202,40 @@ async def main():
     await run(mod.cancel, 300, ADMIN)
     mod.bot.player_role_id = 0
 
-    # ── 모집 글에서 리그 선수 부르기 (운영자가 2026-10-12에 요청): /내전생성 으로 글을 만들면 그 글에서 리그 선수 역할을 멘션한다 ──
-    PING = "<@1>: <@&55> 내전 모집이 열렸어요! 여기에서 `/참여` 로 신청하세요."
-    PROLE.mentionable = False
+    # ── 모집 글에서 '내전 알림' 역할 부르기 (운영자가 2026-10-21에 바꿈. 2026-10-12부터는 리그 선수 역할을 불렀다) ──
+    def arole(rid, name, position=3):
+        r = Role(rid, name, position)
+        r.mentionable = False
+        return r
+
+    AROLE, BOTTOP = arole(57, "내전 알림"), Role(90, "퍼그나봇", 10)
+    PING = "<@1>: <@&57> 내전 모집이 열렸어요! 여기에서 `/참여` 로 신청하세요."
     pings = lambda mock: [c for c in mock.call_args_list if getattr(c.kwargs.get("allowed_mentions"), "roles", False)]   # 역할의 알림을 허용한 글
 
-    async def opened(setup=None, forum=True, can_ping=False):
-        """새 가짜 서버에서 리그 선수 역할(55)을 정해 둔 채 /내전생성 을 한 번 한다. can_ping 은 봇에 모든 역할을 멘션하는 권한이 있는지.
+    class Club:   # 가짜 서버: 역할들과 봇 자신 (봇의 역할은 '내전 알림'보다 위에 있다)
+        def __init__(self, roles=(AROLE,), can_ping=False, can_manage=True):
+            self.roles = [PROLE, *roles]
+            self.me = Mock()
+            self.me.guild_permissions = Mock(mention_everyone=can_ping, manage_roles=can_manage)
+            self.me.top_role = BOTTOP
+
+        def get_role(self, rid):
+            return next((r for r in self.roles if r.id == rid), None)
+
+    def club(**kw):
+        town = Club(**kw)
+
+        async def get_town():
+            return town
+
+        mod.get_guild = get_town
+        return town
+
+    async def opened(setup=None, forum=True, can_ping=False, roles=(AROLE,)):
+        """새 가짜 서버에서 /내전생성 을 한 번 한다. can_ping 은 봇에 모든 역할을 멘션하는 권한이 있는지.
         돌려주는 값: (가짜 서버, 리그 운영진에게 한 답)"""
         world = World(mod, forum=forum)
-        hall(can_ping=can_ping)
+        club(roles=roles, can_ping=can_ping)
         mod.bot.player_role_id = 55
         world.signup.permissions_for = Mock(return_value=Mock(mention_everyone=can_ping))
         if setup:
@@ -2187,9 +2245,10 @@ async def main():
 
     w, t = await opened(can_ping=True)
     sent = w.thread.send.call_args_list
-    check(len(sent) == 1 and sent[0].args[0] == PING and [r.id for r in sent[0].kwargs["allowed_mentions"].roles] == [55]
-          and sent[0].kwargs["allowed_mentions"].users is False and sent[0].kwargs["allowed_mentions"].everyone is False,
-          "/내전생성: 모집 글에서 리그 선수 역할을 멘션한다 (그 역할의 알림만 울리고, 모집을 연 리그 운영진에게는 울리지 않는다)")
+    check(len(sent) == 1 and sent[0].args[0] == PING and [r.id for r in sent[0].kwargs["allowed_mentions"].roles] == [57]
+          and sent[0].kwargs["allowed_mentions"].users is False and sent[0].kwargs["allowed_mentions"].everyone is False and mod.bot.alert_role_id == 57,
+          "/내전생성: 모집 글에서 내전 알림 역할을 멘션한다 (그 역할의 알림만 울리고, 모집을 연 리그 운영진에게는 울리지 않는다. 찾은 역할의 ID를 적어 둔다)")
+    check(all("<@&55>" not in c.args[0] for c in sent), "/내전생성: 리그 선수 역할은 더 부르지 않는다")
     kw = w.signup.create_thread.call_args.kwargs
     check("<@&" not in kw["content"] and kw["allowed_mentions"].roles is False and "⚠️" not in t and t.startswith("<@1>님이 모집을 시작했어요! "),
           "본문에는 역할 멘션을 넣지 않고 글을 하나 더 올린다 (본문은 참여자가 바뀔 때마다 고치는 글이다). 문제가 없으면 답은 전과 같다")
@@ -2212,68 +2271,151 @@ async def main():
         world.thread.send = AsyncMock(side_effect=send)
 
     await opened(setup=watch, can_ping=True)
-    check(state == [(1, 1, True)], "선수들을 부르기 전에 모집을 등록해 둔다 (알림을 받고 바로 /참여 를 입력해도 받는다)")
+    check(state == [(1, 1, True)], "부르기 전에 모집을 등록해 둔다 (알림을 받고 바로 /참여 를 입력해도 받는다)")
 
-    w = World(mod, forum=True)
-    t, _ = await run(mod.create_inhouse, 100, ADMIN)
-    check(not w.thread.send.await_count and "⚠️" not in t, "리그 선수 역할을 정해 두지 않았으면(/선수역할 을 끈 동안) 전처럼 아무도 부르지 않는다")
+    w, t = await opened(roles=())
+    check(not w.thread.send.await_count and "⚠️" not in t and mod.bot.current is not None and not mod.bot.current.closed,
+          "아직 내전 알림 역할을 만들지 않았으면 아무도 부르지 않고 리그 운영진에게 알리지도 않는다 (켤 때 창에 알린다. 모집은 그대로 열린다)")
 
-    def gone(world):
-        mod.bot.player_role_id = 77                           # 지워진 역할
+    def known(world):
+        mod.bot.alert_role_id = 57                            # 전에 찾아 둔 역할이 지워졌다
 
-    w, t = await opened(setup=gone)
-    check(not w.thread.send.await_count and "\n⚠️ 정해 둔 리그 선수 역할을 찾지 못해 모집 글에서 선수들을 멘션하지 못했어요. 리그 관리자에게 알려 주세요" in t
-          and mod.bot.current is not None and not mod.bot.current.closed, "정해 둔 역할이 지워졌으면 부르지 않고 리그 운영진에게 알린다 (모집은 그대로 열린다)")
+    w, t = await opened(setup=known, roles=())
+    check(not w.thread.send.await_count and "\n⚠️ 모집 글에서 아무도 부르지 않았어요. 리그 관리자에게 알려 주세요: **내전 알림** 역할을 찾지 못했어요." in t
+          and mod.bot.current is not None and not mod.bot.current.closed, "찾아 두었던 역할이 지워졌으면 부르지 않고 리그 운영진에게 알린다 (모집은 그대로 열린다)")
+    w, t = await opened(can_ping=True, roles=(arole(58, "내전알림"),))
+    check(w.texts(w.thread.send) == ["<@1>: <@&58> 내전 모집이 열렸어요! 여기에서 `/참여` 로 신청하세요."] and mod.bot.alert_role_id == 58,
+          "역할 이름의 띄어쓰기는 보지 않는다")
+    w, t = await opened(can_ping=True, roles=(arole(57, "내전 알림"), arole(59, "내전 알림")))
+    check(not w.thread.send.await_count and "이라는 이름의 역할이 2개 있어요. 하나만 남겨 주세요." in t, "같은 이름의 역할이 여럿이면 고르지 않고 리그 운영진에게 알린다")
 
     w, t = await opened()
-    check(len(pings(w.thread.send)) == 1 and "\n⚠️ 봇이 **리그 선수** 역할을 멘션해도 알림이 울리지 않아요." in t and "모든 역할 멘션하기" in t,
+    check(len(pings(w.thread.send)) == 1 and "\n⚠️ 봇이 **내전 알림** 역할을 멘션해도 알림이 울리지 않아요." in t and "모든 역할 멘션하기" in t,
           "멘션해도 알림이 울리지 않는 역할이면 고치는 법을 리그 운영진에게 알린다 (글은 올린다)")
-    PROLE.mentionable = True
+    AROLE.mentionable = True
     w, t = await opened()
     check(len(pings(w.thread.send)) == 1 and "⚠️" not in t, "누구나 멘션할 수 있게 해 둔 역할이면 봇에 그 권한이 없어도 문제없다")
-    PROLE.mentionable = False
+    AROLE.mentionable = False
 
     def broken(world):
         world.thread.send = AsyncMock(side_effect=discord.Forbidden(Mock(status=403, reason="Forbidden"), "Missing Permissions"))
 
     with contextlib.redirect_stdout(io.StringIO()) as out:
         w, t = await opened(setup=broken, can_ping=True)
-    check(t.startswith("<@1>님이 모집을 시작했어요! ") and "\n⚠️ 모집 글에서 리그 선수 역할을 멘션하지 못했어요. 선수들에게 알림이 가지 않았어요." in t
+    check(t.startswith("<@1>님이 모집을 시작했어요! ") and "\n⚠️ 모집 글에서 내전 알림 역할을 멘션하지 못했어요. 선수들에게 알림이 가지 않았어요." in t
           and mod.bot.current is not None and not mod.bot.current.closed and "멘션하지 못했습니다" in out.getvalue(),
           "멘션하는 글을 올리지 못해도 모집은 그대로 열리고, 리그 운영진에게 알린다")
 
     def crowd(n):
         def fill(world):
-            mod.bot.role_seen = {f"s:{k}": {"status": "승인", "discord": f"u{k}", "ok": True, "tried": 0} for k in range(n)}
-            mod.bot.role_seen.update({"s:x": {"status": "제외", "discord": "x", "ok": True, "tried": 0},      # 제외한 등록
-                                      "s:y": {"status": "승인", "discord": "y", "ok": False, "tried": 0}})     # 디스코드 서버에서 찾지 못한 선수
+            mod.bot.alert_members = set(range(1000, 1000 + n))
 
         return fill
 
     w, t = await opened(setup=crowd(99), can_ping=True)
-    check(mod.role_holders() == 99 and "⚠️" not in t, "역할이 있는 선수가 99명까지는 알리지 않는다 (제외한 등록과 서버에서 찾지 못한 선수는 세지 않는다)")
+    check("⚠️" not in t, "/내전알림 으로 받은 사람이 99명까지는 알리지 않는다")
     w, t = await opened(setup=crowd(100), can_ping=True)
-    check(len(pings(w.thread.send)) == 1 and "\n⚠️ 리그 선수 역할이 있는 선수가 100명이에요. 디스코드는 글(스레드) 안에서 100명 이상인 역할을 멘션하면 알림을 보내지 않아서, "
-          "모집 글의 멘션이 선수들에게 가지 않을 수 있어요. 리그 관리자에게 알려 주세요." in t,
-          "역할이 있는 선수가 100명 이상이면 글 안의 멘션으로는 알림이 가지 않을 수 있다고 알린다 (디스코드의 제한)")
+    check(len(pings(w.thread.send)) == 1 and "\n⚠️ `/내전알림` 으로 **내전 알림** 역할을 받은 사람이 100명이에요. 디스코드는 글(스레드) 안에서 100명 이상인 역할을 멘션하면 "
+          "알림을 보내지 않아서, 모집 글의 멘션이 선수들에게 가지 않을 수 있어요. 리그 관리자에게 알려 주세요." in t,
+          "내전 알림 역할을 받은 사람이 100명 이상이면 글 안의 멘션으로는 알림이 가지 않을 수 있다고 알린다 (디스코드의 제한)")
 
     w, t = await opened(forum=False, can_ping=True)
     check(w.signup.send.await_count == 2 and len(pings(w.signup.send)) == 1 and w.texts(w.signup.send)[-1] == PING and "⚠️" not in t,
-          "일반 채널: 공지 아래에 글을 하나 더 올려 리그 선수 역할을 멘션한다")
+          "일반 채널: 공지 아래에 글을 하나 더 올려 내전 알림 역할을 멘션한다")
 
     # 켤 때 창에 찍는 상태
     w = World(mod, forum=True)
-    check((await mod.ping_status()).startswith("꺼짐 (리그 선수 역할을 정해 두지 않았습니다."), "켤 때 확인: 리그 선수 역할을 정해 두지 않았으면 멘션하지 않는다")
-    hall()
-    mod.bot.player_role_id = 55
-    mod.bot.role_seen = {"s:1": {"status": "승인", "discord": "a", "ok": True, "tried": 0}, "s:2": {"status": "승인", "discord": "b", "ok": True, "tried": 0}}
+    club(roles=())
+    check(await mod.ping_status() == "[확인 필요] **내전 알림** 역할을 찾지 못했어요. 디스코드 서버 설정 → 역할에서 **내전 알림** 이라는 이름으로 역할을 만들어 주세요. "
+          "그때까지는 모집 글에서 아무도 부르지 않고, `/내전알림` 도 쓸 수 없습니다.", "켤 때 확인: 내전 알림 역할을 아직 만들지 않았을 때")
+    club()
+    mod.bot.alert_members = {1, 2}
     w.signup.permissions_for = Mock(return_value=Mock(mention_everyone=True))
-    check(await mod.ping_status() == "@리그 선수 (봇이 역할을 확인한 선수 2명) - 권한 확인", "켤 때 확인: 모집 글에서 멘션할 역할과 봇이 역할을 확인한 선수 수")
+    check(await mod.ping_status() == "@내전 알림 (`/내전알림` 으로 받은 사람 2명) - 권한 확인", "켤 때 확인: 멘션할 역할과 /내전알림 으로 받은 사람 수")
     w.signup.permissions_for = Mock(return_value=Mock(mention_everyone=False))
-    check("[확인 필요] 봇이 **리그 선수** 역할을 멘션해도 알림이 울리지 않아요." in await mod.ping_status(), "켤 때 확인: 멘션해도 알림이 울리지 않을 때")
-    mod.bot.player_role_id = 77
-    check((await mod.ping_status()).startswith("[확인 필요] 정해 둔 리그 선수 역할을 찾지 못했습니다."), "켤 때 확인: 리그 선수 역할이 지워졌을 때")
-    mod.bot.player_role_id, mod.bot.role_seen = 0, {}
+    check("[확인 필요] 봇이 **내전 알림** 역할을 멘션해도 알림이 울리지 않아요." in await mod.ping_status(), "켤 때 확인: 멘션해도 알림이 울리지 않을 때")
+    w.signup.permissions_for = Mock(return_value=Mock(mention_everyone=True))
+    club(can_manage=False)
+    check((await mod.ping_status()).endswith("[확인 필요] `/내전알림`: 봇에 **역할 관리** 권한이 없어요. 서버 설정 → 역할에서 봇의 역할에 **역할 관리**를 켜 주세요."),
+          "켤 때 확인: /내전알림 으로 역할을 주고 뺄 수 없을 때 (역할 관리 권한)")
+    club(roles=(arole(57, "내전 알림", position=20),))
+    check("[확인 필요] `/내전알림`: 봇의 역할이 **내전 알림** 역할보다 아래에 있어요." in await mod.ping_status(), "켤 때 확인: 봇의 역할이 내전 알림 역할보다 아래에 있을 때")
+
+    # ── /내전알림: 리그 선수가 스스로 '내전 알림' 역할을 받고 뺀다 (운영자가 2026-10-21에 요청) ──
+    async def alert(u, channel=300):
+        i = inter(channel, u)
+        await mod.toggle_alert.callback(i)
+        return said(i), i
+
+    def fan(uid):
+        u = player(uid)
+
+        async def add(*roles, reason=None):
+            u.roles.extend(roles)
+
+        async def rem(*roles, reason=None):
+            for r in roles:
+                u.roles.remove(r)
+
+        u.add_roles, u.remove_roles = AsyncMock(side_effect=add), AsyncMock(side_effect=rem)
+        return u
+
+    busy = "지금은 내전 알림을 켜고 끌 수 없어요. 리그 관리자에게 알려 주세요."
+    w = World(mod, forum=True)
+    w.admin.permissions_for = Mock(return_value=Mock(view_channel=False, use_application_commands=False))
+    club()
+    mod.bot.player_role_id = 55
+    fan1 = fan(801)
+    t, i = await alert(fan1)
+    check(t == "🔔 **내전 알림**을 켰어요. 이제 내전 모집 글이 올라오면 알림을 받아요. 끄려면 `/내전알림` 을 한 번 더 입력하세요."
+          and AROLE in fan1.roles and fan1.add_roles.await_args.kwargs.get("reason") == "/내전알림: 내전 모집 알림 켜기"
+          and i.response.defer.call_args.kwargs == {"ephemeral": True} and i.followup.send.call_args.kwargs.get("ephemeral") is True
+          and mod.bot.alert_members == {801} and json.loads(mod.STATE_PATH.read_text(encoding="utf-8"))["alert"] == {"role_id": 57, "members": [801]},
+          "/내전알림: 처음 입력하면 내전 알림 역할을 준다 (본인에게만 답한다. 누가 받았는지 적어 둔다)")
+    t, i = await alert(fan1, channel=400)
+    check(t == "🔕 **내전 알림**을 껐어요. 이제 내전 모집 글이 올라와도 알림이 가지 않아요. 다시 받으려면 `/내전알림` 을 한 번 더 입력하세요."
+          and AROLE not in fan1.roles and PROLE in fan1.roles and mod.bot.alert_members == set(),
+          "/내전알림: 다시 입력하면 뺀다 (어느 채널에서나 쓴다. 리그 선수 역할은 그대로)")
+    stranger = user(809, "손님2")
+    t, _ = await alert(stranger)
+    check(t == mod.PLAYER_ONLY and mod.bot.alert_members == set(), "/내전알림: 리그 선수만 쓴다 (/참여·/내전하자 와 같다)")
+    check(mod.bot.tree.get_command("내전알림", guild=mod.GUILD) is mod.toggle_alert and mod.toggle_alert.parameters == [],
+          "/내전알림: 칸이 없는 명령어다 (입력할 때마다 켜고 끈다)")
+
+    club(roles=())
+    n = len(w.texts(w.admin.send))
+    t, _ = await alert(fan(802))
+    t2, _ = await alert(fan(803))
+    said_admin = w.texts(w.admin.send)[n:]
+    check(t == t2 == busy and said_admin == ["🔔 선수가 `/내전알림` 을 썼지만 **내전 알림** 역할을 주고 빼지 못했어요. **내전 알림** 역할을 찾지 못했어요. "
+                                             "디스코드 서버 설정 → 역할에서 **내전 알림** 이라는 이름으로 역할을 만들어 주세요."],
+          "/내전알림: 역할이 없으면 선수에게는 짧게 답하고, 운영진 채널에는 고치는 법을 한 번만 알린다")
+    club(can_manage=False)
+    t, _ = await alert(fan(804))
+    check(t == busy and "봇에 **역할 관리** 권한이 없어요" in w.texts(w.admin.send)[-1], "/내전알림: 봇에 역할 관리 권한이 없을 때")
+    club()
+    stuck = fan(805)
+    stuck.add_roles = AsyncMock(side_effect=discord.Forbidden(Mock(status=403, reason="Forbidden"), "Missing Permissions"))
+    t, _ = await alert(stuck)
+    check(t == busy and "봇의 역할이 **내전 알림** 역할보다 위에 있는지" in w.texts(w.admin.send)[-1] and 805 not in mod.bot.alert_members,
+          "/내전알림: 디스코드가 거절하면 역할을 받은 것으로 적지 않는다")
+    slow = fan(806)
+    slow.add_roles = AsyncMock(side_effect=discord.HTTPException(Mock(status=500, reason="Server Error"), "오류"))
+    with contextlib.redirect_stdout(io.StringIO()):
+        t, _ = await alert(slow)
+    check(t == "디스코드가 답하지 않아 바꾸지 못했어요. 잠시 뒤에 다시 입력해 주세요." and 806 not in mod.bot.alert_members, "/내전알림: 디스코드가 답하지 않을 때")
+    await alert(fan(807))
+    check(mod.bot.alert_note == "" and mod.bot.alert_members == {807}, "/내전알림: 다시 되면 앞의 문제는 잊는다 (또 생기면 다시 알린다)")
+    mod.bot.alert_role_id, mod.bot.alert_members = 0, set()
+    await mod.restore_state()
+    check(mod.bot.alert_role_id == 57 and mod.bot.alert_members == {807}, "/내전알림: 껐다 켜도 역할과 받은 사람을 기억한다")
+
+    async def bare():                                             # 역할이 없는 가짜 서버로 되돌린다 (다음 World 가 바꿔 끼울 수 있게)
+        return Mock(roles=[], me=None, get_role=Mock(return_value=None))
+
+    bare.world = True
+    mod.get_guild = bare
+    mod.bot.player_role_id, mod.bot.role_seen, mod.bot.alert_role_id, mod.bot.alert_members = 0, {}, 0, set()
     PROLE.mentionable = True
 
     # ── 시즌 종료 (서버 버전 16, 운영자가 2026-10-11에 정함): 시즌 종료 시각 전에 시작한 경기까지만 기록한다. 끝난 시각이 그 뒤여도 그 경기는 기록한다 ──
@@ -2337,7 +2479,8 @@ async def main():
     check(t.startswith(f"<@1>님, 이 경기는 시즌 종료(<t:{end}:f>) 뒤에 시작한 경기라 결과를 기록하지 않았어요. 순위와 MMR은 바뀌지 않고, 이 판은 정리했어요.")
           and "시즌 종료 날짜가 잘못돼 있다면 리그 관리자에게 알려 주세요." in t and saves() == 2 and w.league["matches"] == [],
           "시즌: 종료 시각 뒤에 시작한 경기는 /승리 를 입력해도 기록하지 않는다")
-    check(w.texts(w.thread.send)[n:] == [f"<@1>님이 결과를 입력했지만, 이 경기는 시즌 종료(<t:{end}:f>) 뒤에 시작해서 기록하지 않았어요. 순위와 MMR은 바뀌지 않습니다."]
+    check(w.texts(w.thread.send)[n:] == [f"<@1>님이 결과를 입력했지만, 이 경기는 시즌 종료(<t:{end}:f>) 뒤에 시작해서 기록하지 않았어요. 순위와 MMR은 바뀌지 않습니다.\n"
+                                         f"-# 이 글은 10분 뒤(<t:{int(rec.close_at)}:t>)에 잠기고 닫혀요."]
           and entry not in mod.bot.lineups and not rec.lineup and mod.pending_entry(100) is None and w.server[-1] == {"action": "pushLineup", "lineup": None},
           "시즌: 그 판은 치워서 선수들이 다음 내전에 참여할 수 있고, 모집 글에 까닭을 알린다")
     t, _ = await run(mod.record_win, 300, ADMIN, "r")
@@ -2407,13 +2550,91 @@ async def main():
     t, _ = await run(mod.record_win, 300, ADMIN, "r")
     check(t.startswith("<@1>님, 이 경기의 팀을 짠 뒤에 새 시즌이 시작돼서 결과를 기록하지 않았어요.") and "지난 시즌의 기록에 넣어야 하는 경기라면 리그 관리자에게 알려 주세요." in t
           and saves() == 0 and entry not in mod.bot.lineups
-          and w.texts(w.thread.send)[n:] == ["<@1>님이 결과를 입력했지만, 이 경기의 팀을 짠 뒤에 새 시즌이 시작돼서 기록하지 않았어요. 순위와 MMR은 바뀌지 않습니다."],
+          and w.texts(w.thread.send)[n:] == ["<@1>님이 결과를 입력했지만, 이 경기의 팀을 짠 뒤에 새 시즌이 시작돼서 기록하지 않았어요. 순위와 MMR은 바뀌지 않습니다.\n"
+                                             f"-# 이 글은 10분 뒤(<t:{int(rec.close_at)}:t>)에 잠기고 닫혀요."],
           "시즌: 팀을 짠 뒤에 새 시즌이 시작됐으면 그 판의 결과를 새 시즌에 기록하지 않는다")
     # 시즌 번호를 주지 않는 예전 서버에서는 아무것도 막지 않는다
     w, rec, entry = await lined(0, no=None)
     w.season_end = None
     t, _ = await run(mod.record_win, 300, ADMIN, "r")
     check("🏆" in t and entry["season"] is None and saves() == 1, "시즌: 시즌 번호와 종료 시각을 주지 않는 예전 서버에서는 전처럼 기록한다")
+    # ── 끝난 내전의 글 정리 (운영자가 2026-10-21에 요청): 결과를 기록한 글은 10분 뒤에 잠그고 닫고, 취소한 글은 10분 뒤에 지운다 ──
+    games_saved = lambda: json.loads(mod.STATE_PATH.read_text(encoding="utf-8"))["games"]
+    w, rec, entry = await lined(0)
+    await run(mod.record_win, 300, ADMIN, "r")
+    check(entry["result"] and 595 < rec.close_at - time.time() <= 600 and not rec.shut and games_saved()[-1]["close_at"] == rec.close_at,
+          "글 정리: 결과를 기록하면 10분 뒤에 닫기로 하고 파일에 적어 둔다")
+    edits = w.thread.edit.await_count
+    await mod.tidy_tick()
+    check(w.thread.edit.await_count == edits and rec.close_at, "글 정리: 10분이 되기 전에는 닫지 않는다")
+    rec.close_at = time.time() - 1
+    await mod.tidy_tick()
+    check(w.thread.edit.call_args.kwargs == {"locked": True, "archived": True} and rec.shut and rec.close_at == 0 and games_saved()[-1]["shut"] is True,
+          "글 정리: 10분이 지나면 잠그고 닫는다")
+    await mod.tidy_tick()
+    check(w.thread.edit.await_count == edits + 1, "글 정리: 한 번만 닫는다")
+    t, _ = await run(mod.undo_win, 300, ADMIN)
+    check("결과 기록을 취소" in t and w.thread.edit.call_args.kwargs == {"locked": mod.LOCK_CLOSED, "archived": False} and not rec.shut and rec.close_at == 0,
+          "글 정리: 닫은 글에서 /승리취소 를 쓰면(스레드 관리 권한이 있는 사람) 글을 다시 연다 (마감한 글을 잠가 두는 설정이면 잠긴 채로)")
+    await run(mod.record_win, 300, ADMIN, "d")
+    check(rec.close_at > time.time() + 590, "글 정리: 다시 기록하면 그때부터 10분 뒤에 닫는다")
+    edits = w.thread.edit.await_count
+    await run(mod.undo_win, 300, ADMIN)
+    check(rec.close_at == 0 and not rec.shut and w.thread.edit.await_count == edits, "글 정리: 닫기 전에 /승리취소 하면 닫지 않는다 (글은 건드리지 않는다)")
+    await run(mod.record_win, 300, ADMIN, "r")
+    due = rec.close_at
+    mod.bot.games = []
+    await mod.restore_state()
+    back = mod.bot.games[-1]
+    check(back.close_at == due and back.thread is w.thread and not back.shut, "글 정리: 껐다 켜도 닫을 때를 기억한다")
+    back.close_at = time.time() - 1
+    await mod.tidy_tick()
+    check(back.shut and w.thread.edit.call_args.kwargs == {"locked": True, "archived": True}, "글 정리: 봇이 꺼져 있던 사이에 때가 지났으면 켜자마자 닫는다")
+
+    w, rec, entry = await lined(0)
+    await run(mod.record_win, 300, ADMIN, "x")
+    due = rec.close_at
+    await run(mod.restart, 300, ADMIN)
+    check(due and rec.close_at == 0 and not rec.closed, "글 정리: 경기 없이 정리한 판을 /재모집 으로 다시 열면 닫지 않는다")
+    t, _ = await run(mod.cancel, 300, ADMIN)
+    check(rec.cancelled and rec.close_at == 0 and 595 < rec.delete_at - time.time() <= 600 and t.endswith(" 이 글은 10분 뒤에 지워져요.")
+          and games_saved()[-1]["delete_at"] == rec.delete_at, "글 정리: 취소하면 10분 뒤에 글을 지운다고 리그 운영진에게도 알린다 (파일에 적어 둔다)")
+    w.thread.delete = AsyncMock()
+    await mod.tidy_tick()
+    check(not w.thread.delete.await_count and rec in mod.bot.games, "글 정리: 10분이 되기 전에는 지우지 않는다")
+    rec.delete_at = time.time() - 1
+    await mod.tidy_tick()
+    check(w.thread.delete.await_count == 1 and rec not in mod.bot.games and not games_saved(), "글 정리: 10분이 지나면 취소한 글을 지우고 그 내전을 잊는다")
+
+    async def cancelled_post(problem=None):
+        """새 가짜 서버에서 내전을 열고 취소한 뒤, 지울 때가 된 것으로 둔다. problem 은 글을 지울 때 디스코드가 낼 오류"""
+        world = World(mod, forum=True)
+        await run(mod.create_inhouse, 100, ADMIN)
+        rec = mod.bot.current
+        await run(mod.cancel, 300, ADMIN)
+        rec.delete_at = time.time() - 1
+        world.thread.delete = AsyncMock(side_effect=problem)
+        return world, rec
+
+    w, rec = await cancelled_post(discord.NotFound(Mock(status=404, reason="Not Found"), "Unknown Channel"))
+    await mod.tidy_tick()
+    check(rec not in mod.bot.games, "글 정리: 누가 이미 글을 지웠으면 그대로 잊는다")
+    w, rec = await cancelled_post(discord.Forbidden(Mock(status=403, reason="Forbidden"), "Missing Permissions"))
+    await mod.tidy_tick()
+    await mod.tidy_tick()
+    check(rec in mod.bot.games and rec.delete_at == 0 and w.thread.delete.await_count == 1 and "취소한 내전의 글을 지우지 못했어요." in w.texts(w.admin.send)[-1]
+          and "스레드 관리" in w.texts(w.admin.send)[-1], "글 정리: 지울 권한이 없으면 운영진 채널에 한 번 알리고 다시 지우지 않는다")
+    with contextlib.redirect_stdout(io.StringIO()):
+        w, rec = await cancelled_post(discord.HTTPException(Mock(status=500, reason="Server Error"), "오류"))
+        await mod.tidy_tick()
+    check(rec in mod.bot.games and rec.delete_at > time.time() + 590, "글 정리: 디스코드가 답하지 않으면 10분 뒤에 다시 지운다")
+    w = World(mod, forum=False)
+    await run(mod.create_inhouse, 100, ADMIN)
+    rec = mod.bot.current
+    t, _ = await run(mod.cancel, 100, ADMIN)
+    check(rec.cancelled and rec.delete_at == 0 and "지워져요" not in w.texts(w.signup.send)[-1] and "지워져요" not in t,
+          "글 정리: 일반 채널의 공지는 지우지 않는다 (포럼 글만)")
+
     # ── 오라클 봇(승부 예측)에게 알려 주기: 팀을 짰을 때, 결과를 기록하거나 되돌렸을 때, 팀 편성이 없던 일이 됐을 때 ──
     check(not mod.oracle.enabled() and mod.oracle.status_line().startswith("꺼짐 (config.json 에 oracle_token"), "오라클 봇의 토큰을 넣지 않았으면 오라클은 꺼져 있다 (퍼그나봇만 돈다)")
     told = []
@@ -2422,7 +2643,7 @@ async def main():
         def enabled(self):
             return True
 
-        def hear(self, value, play=None, reset=None):   # 리그 기록의 답에 실려 오는 '켜 두었는지', 참가 포인트, 포인트 초기화 표시
+        def hear(self, value, play=None, reset=None, first=None):   # 리그 기록의 답에 실려 오는 '켜 두었는지', 참가 포인트, 포인트 초기화 표시, 첫 내전의 참가 포인트
             pass
 
         async def on_lineup(self, entry):
@@ -2481,6 +2702,10 @@ async def main():
     play1 = mod.oracle.S.play
     mod.note_season({"seasonNo": 3, "oracleOn": False})
     check(play0 == 100 and play1 == 70 and mod.oracle.S.play == 70, "오라클: 리그 기록의 답에 실린 참가 포인트도 오라클에게 알린다 (처음에는 100. 그 값이 없는 답은 건드리지 않는다)")
+    first0 = mod.oracle.S.first_play
+    with contextlib.redirect_stdout(io.StringIO()):
+        mod.note_season({"seasonNo": 3, "oracleOn": False, "oracleFirst": 250})
+    check(first0 == 300 and mod.oracle.S.first_play == 250, "오라클: 리그 기록의 답에 실린 그날의 첫 내전의 참가 포인트도 오라클에게 알린다 (처음에는 300)")
     mod.note_season({"seasonNo": 3, "oracleOn": False, "oracleReset": ""})
     none = mod.oracle.S.reset_wanted
     mod.note_season({"seasonNo": 3, "oracleOn": False, "oracleReset": "2026-10-13T05:00:00.000Z"})

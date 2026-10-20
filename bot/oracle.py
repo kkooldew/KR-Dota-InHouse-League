@@ -12,13 +12,15 @@
   건 포인트를 모두 모아 이긴 쪽이 건 만큼 나눠 갖는다(많이 건 사람이 많이 딴다). 한쪽에만 걸렸으면 모두 돌려준다.
 - 퍼그나봇의 /승리 로 결과가 기록되면 정산한다. /승리취소 면 정산을 되돌리고(그사이 딴 포인트를 써 버렸으면 0보다 적어질 수 있다),
   다시 /승리 하면 다시 정산한다. 경기가 없던 일이 되면(/취소·/재모집·다시 열기·경기 안 함) 건 포인트를 돌려준다.
-- 포인트를 받은 적이 있는 사람들의 순위를 리그 서버에 올린다(saveOracle, 서버 버전 17). rank/oracle.html(승부의 신 랭킹)이 그것을 보여 준다.
+- 포인트를 받거나 승부 예측에 한 번이라도 건 사람들의 순위를 리그 서버에 올린다(saveOracle, 서버 버전 17). rank/oracle.html(승부의 신 랭킹)이 그것을 보여 준다.
+  모든 사람의 포인트 기록은 리그 서버가 구글 시트에도 적는다(선수 등록 탭의 '승부예측포인트' 칸과 '승부 예측 포인트' 탭, 서버 버전 21).
 - 주인이 리그 관리자 페이지에서 켜고 끈다(서버 버전 18, 운영자가 2026-10-13에 요청). 처음에는 꺼져 있고, 켜 두었는지는 리그 서버에 5분마다 물어본다.
   꺼져 있으면 새 승부 예측을 열지 않고 포인트 받기와 걸기를 받지 않는다. 이미 받던 판은 끝까지 처리한다(마감, 정산, 돌려주기).
 - 포인트 초기화(서버 버전 20, 운영자가 2026-10-13에 요청): 주인이 리그 관리자 페이지에서 누르면 리그 서버가 그 표시를 알려 주고,
   봇이 모든 사람의 포인트와 전적을 지운다. 그때 걸려 있던 포인트는 없던 일이 되고, 누구나 이번 주 포인트를 다시 받을 수 있다.
 - 참가 포인트(서버 버전 19, 운영자가 2026-10-13에 요청): 결과가 기록되면 그 판에 뛴 선수 열 명이 승패와 상관없이 포인트를 받는다.
   처음에는 한 판에 100이고 주인이 리그 관리자 페이지에서 바꾼다(0이면 주지 않는다). /승리취소 면 거두고, 다시 기록되면 다시 준다.
+  그날의 첫 내전(하루는 한국 시간 오전 6시에 바뀐다)은 300을 준다(서버 버전 21, 운영자가 2026-10-21에 요청. 이것도 주인이 바꾼다).
 
 이 파일은 bot.py 를 불러오지 않는다(bot.py 가 이 파일을 불러와 setup 으로 필요한 것을 넘겨준다). 그래서 따로 시험할 수 있다(tests/oracle.test.py).
 """
@@ -46,7 +48,9 @@ PUBLISH_GAP = 20          # 순위를 서버에 올린 뒤 이만큼은 다시 �
 PUBLISH_RETRY = 600       # 서버에 올리지 못했으면 이만큼 뒤에 다시 올린다
 SWITCH_POLL = 300         # 주인이 켜 두었는지를 리그 서버에 이만큼마다 물어본다
 PLAY_POINTS = 100         # 참가 포인트의 처음 값: 결과가 기록되면 그 판에 뛴 선수가 승패와 상관없이 받는다 (주인이 리그 관리자 페이지에서 바꾼다)
+FIRST_POINTS = 300        # 그날의 첫 내전에 뛴 선수가 받는 참가 포인트의 처음 값 (주인이 리그 관리자 페이지에서 바꾼다)
 PLAY_MAX = 10000          # 참가 포인트로 받아들이는 가장 큰 값 (리그 서버와 같다)
+DAY_STARTS_AT = 6         # 하루는 한국 시간 오전 6시에 바뀐다 (퍼그나봇의 팀 편성과 같은 기준)
 AMOUNTS = (100, 300, 500, 1000)  # 금액 버튼
 MESSAGE_LIMIT = 1900      # 디스코드 메시지는 2000자까지라 조금 남겨 두고 나눈다
 SIDES = {"r": "🟢 래디언트", "d": "🔴 다이어"}
@@ -68,6 +72,7 @@ class State:
         self.on = False                 # 주인이 리그 관리자 페이지에서 켜 두었는지 (리그 서버가 알려 준다. 알기 전에는 꺼진 것으로 둔다)
         self.asked = 0.0                # 켜 두었는지를 마지막으로 물어본(또는 들은) 시각
         self.play = PLAY_POINTS         # 참가 포인트: 한 판에 얼마 (리그 서버가 알려 준다. 0이면 주지 않는다)
+        self.first_play = FIRST_POINTS  # 그날의 첫 내전에 주는 참가 포인트 (리그 서버가 알려 준다)
         self.reset = ""                 # 마지막으로 따른 '포인트 초기화'의 표시 (리그 서버가 알려 준 값. 초기화한 적이 없으면 빈 글)
         self.reset_wanted: str | None = None  # 리그 서버가 알려 온, 아직 따르지 않은 초기화의 표시 (곧 tick 이 따른다)
         self.loaded = False             # 상태 파일을 읽었는지 (못 읽었으면 켤 때 서버의 사본을 받아 본다)
@@ -75,7 +80,9 @@ class State:
         self.task: asyncio.Task | None = None
         self.channel_id = 0             # 매주 '포인트 받기' 글을 올리는 채널 (/오라클설정)
         self.round: dict | None = None  # 이번 주 {"start": 주가 시작한 시각, "message_id", "channel_id", "stale": 지워야 할 앞의 글들 [[채널, 글], …]}
-        self.accounts: dict[str, dict] = {}  # 디스코드 ID(글자) → {"points", "claimed", "week", "name", "username", "nick", "bets", "hits", "profit", "played", "earned"}
+        # 디스코드 ID(글자) → {"points", "claimed", "week", "name", "username", "nick", "bets", "hits", "profit", "played", "earned", "listed"}
+        # listed: 승부의 신 랭킹에 오르는지. 포인트를 받거나 승부 예측에 한 번이라도 걸면 오른다(운영자가 2026-10-21에 정함)
+        self.accounts: dict[str, dict] = {}
         self.books: list[dict] = []     # 승부 예측 한 판씩 (open → closed → settled, 또는 void)
         self.dirty = False              # 서버에 올려야 할 바뀐 순위가 있는지
         self.publish_at = 0.0           # 이 시각 전에는 서버에 올리지 않는다
@@ -121,7 +128,8 @@ def signed(n: int) -> str:
 
 # ── 상태 파일 ─────────────────────────────────────────────────
 def snapshot() -> dict:
-    return {"on": S.on, "play": S.play, "reset": S.reset, "channel_id": S.channel_id, "round": S.round, "accounts": S.accounts, "books": S.books, "dirty": S.dirty}
+    return {"on": S.on, "play": S.play, "first_play": S.first_play, "reset": S.reset, "channel_id": S.channel_id, "round": S.round,
+            "accounts": S.accounts, "books": S.books, "dirty": S.dirty}
 
 
 def save() -> None:
@@ -158,6 +166,8 @@ def adopt(data: dict) -> None:
     S.on = data.get("on") is True  # 마지막으로 알던 값. 켠 뒤 곧 리그 서버에 다시 물어본다
     amount = play_amount(data.get("play"))
     S.play = PLAY_POINTS if amount is None else amount
+    first = play_amount(data.get("first_play"))
+    S.first_play = FIRST_POINTS if first is None else first
     S.reset = data.get("reset") if isinstance(data.get("reset"), str) else ""
     S.channel_id = whole(data.get("channel_id"))
     r = data.get("round")
@@ -173,7 +183,9 @@ def adopt(data: dict) -> None:
             S.accounts[str(uid)] = {"points": whole(a.get("points")), "claimed": whole(a.get("claimed")), "week": whole(a.get("week")),
                                     "name": str(a.get("name") or ""), "username": str(a.get("username") or ""), "nick": str(a.get("nick") or ""),
                                     "bets": whole(a.get("bets")), "hits": whole(a.get("hits")), "profit": whole(a.get("profit")),
-                                    "played": whole(a.get("played")), "earned": whole(a.get("earned"))}
+                                    "played": whole(a.get("played")), "earned": whole(a.get("earned")),
+                                    # 랭킹에 오르는지. 이 칸이 생기기 전의 기록은 포인트를 받았거나 정산된 예측이 있으면 오른 것으로 본다(걸어 둔 판은 아래에서)
+                                    "listed": a.get("listed") is True or whole(a.get("claimed")) > 0 or whole(a.get("bets")) > 0}
     S.books = []
     for b in books:
         if not (isinstance(b, dict) and b.get("key") and b.get("state") in ("open", "closed", "settled", "void")):
@@ -185,7 +197,12 @@ def adopt(data: dict) -> None:
                         "players": [whole(x) for x in b.get("players") or []], "bets": bets, "message_id": whole(b.get("message_id")),
                         "winner": b.get("winner") if b.get("winner") in SIDES else None,
                         "paid": {str(uid): whole(v) for uid, v in (b.get("paid") or {}).items()},
-                        "play": {str(uid): whole(v) for uid, v in (b.get("play") or {}).items() if whole(v) > 0}, "off": b.get("off") is True})
+                        "play": {str(uid): whole(v) for uid, v in (b.get("play") or {}).items() if whole(v) > 0}, "off": b.get("off") is True,
+                        "first": b.get("first") is True})
+    for b in S.books:  # 걸어 둔 사람도 랭킹에 오른다
+        for uid in b["bets"]:
+            if uid in S.accounts:
+                S.accounts[uid]["listed"] = True
     S.dirty = bool(data.get("dirty"))
 
 
@@ -204,8 +221,9 @@ def load() -> bool:
 
 
 # ── 켜고 끄기 (주인이 리그 관리자 페이지에서) ───────────────────
-def hear(value, play=None, reset=None) -> None:
-    """리그 서버가 알려 준 값: 주인이 오라클 봇을 켜 두었는지(value), 참가 포인트(play), 포인트를 초기화하라는 표시(reset).
+def hear(value, play=None, reset=None, first=None) -> None:
+    """리그 서버가 알려 준 값: 주인이 오라클 봇을 켜 두었는지(value), 참가 포인트(play), 포인트를 초기화하라는 표시(reset),
+    그날의 첫 내전에 주는 참가 포인트(first, 서버 버전 21).
     퍼그나봇이 팀을 짜기 직전에 받는 리그 기록에도 실려 온다. 그 값이 실려 있지 않은 답(예전 서버)으로는 바꾸지 않는다"""
     if isinstance(reset, str) and reset != S.reset:
         S.reset_wanted = reset  # 글을 고치고 올려야 해서 여기서 하지 않고, 곧 tick 이 한다 (apply_reset)
@@ -215,6 +233,12 @@ def hear(value, play=None, reset=None) -> None:
         save()
         print(f"[{datetime.fromtimestamp(now(), KST):%m-%d %H:%M}] 오라클 봇: 리그 관리자 페이지에서 참가 포인트를 "
               + (f"한 판에 {amount:,} 포인트로 정했습니다." if amount else "주지 않기로 했습니다(0)."))
+    amount = play_amount(first)
+    if amount is not None and amount != S.first_play:
+        S.first_play = amount
+        save()
+        print(f"[{datetime.fromtimestamp(now(), KST):%m-%d %H:%M}] 오라클 봇: 리그 관리자 페이지에서 그날의 첫 내전의 참가 포인트를 "
+              + (f"{amount:,} 포인트로 정했습니다." if amount else "주지 않기로 했습니다(0)."))
     if not isinstance(value, bool):
         return
     S.asked = now()
@@ -237,7 +261,7 @@ async def check_switch(force: bool = False) -> None:
         note(f"오라클: 리그 서버에서 켜 두었는지 확인하지 못했습니다. 알고 있던 대로 둡니다. ({e})")
         return
     if isinstance(got.get("oracleOn"), bool):
-        hear(got["oracleOn"], got.get("oraclePlay"), got.get("oracleReset"))
+        hear(got["oracleOn"], got.get("oraclePlay"), got.get("oracleReset"), got.get("oracleFirst"))
     else:  # 예전 서버(버전 17까지)는 이 값을 모른다
         note("오라클: 리그 서버가 오라클 봇을 켜 두었는지 알려 주지 않습니다(서버 버전 18부터). Code.gs 를 새 버전으로 배포하기 전에는 꺼진 채로 둡니다.")
 
@@ -250,9 +274,16 @@ def week_start(at: float | None = None) -> int:
     return int(monday.timestamp())
 
 
+def day_start(at: float | None = None) -> int:
+    """그 시각이 든 날이 시작한 때: 한국 시간 오전 6시 (퍼그나봇이 '오늘 뛴 사람'을 가리는 기준과 같다)"""
+    at = now() if at is None else at
+    shift = (9 - DAY_STARTS_AT) * 3600
+    return int((at + shift) // 86400 * 86400 - shift)
+
+
 def account(uid: int) -> dict:
     return S.accounts.setdefault(str(uid), {"points": 0, "claimed": 0, "week": 0, "name": "", "username": "", "nick": "",
-                                            "bets": 0, "hits": 0, "profit": 0, "played": 0, "earned": 0})
+                                            "bets": 0, "hits": 0, "profit": 0, "played": 0, "earned": 0, "listed": False})
 
 
 def remember(uid: int, user) -> dict:
@@ -284,6 +315,7 @@ def claim(uid: int, user=None) -> tuple[bool, str]:
     acc["points"] += WEEKLY_POINTS
     acc["claimed"] += 1
     acc["week"] = week
+    acc["listed"] = True
     S.dirty = True
     save()
     return True, (f"✅ **{WEEKLY_POINTS:,} 포인트**를 받았어요. 보유 포인트는 **{num(acc['points'])}**이에요.\n"
@@ -312,8 +344,8 @@ def points_text(uid: int) -> str:
     lines.append(RESTING if not S.on
                  else f"이번 주 포인트는 받았어요. 다음 포인트는 <t:{week + 7 * 86400}:F>부터 받을 수 있어요." if acc["week"] == week
                  else "이번 주 포인트를 아직 받지 않았어요. **포인트 받기**를 눌러 받으세요.")
-    if not acc["claimed"]:  # 참가 포인트만 받은 사람: 랭킹에는 본인이 한 번이라도 '포인트 받기'를 눌러야 나온다
-        lines.append("승부의 신 랭킹에는 **포인트 받기**를 한 번이라도 누른 뒤부터 이름이 올라가요.")
+    if not acc["listed"]:  # 참가 포인트만 받은 사람: 랭킹에는 포인트를 받거나 승부 예측에 한 번이라도 걸어야 나온다
+        lines.append("승부의 신 랭킹에는 **포인트 받기**를 누르거나 승부 예측에 한 번이라도 걸면 이름이 올라가요.")
     if S.page:
         lines.append(f"승부의 신 랭킹: <{S.page}>")
     return "\n".join(lines)
@@ -355,7 +387,7 @@ def bet_block(book: dict | None, uid: int) -> str:
     if book is None or book["state"] != "open" or now() >= book["closes"]:
         return "이 경기의 승부 예측은 마감됐어요."
     if uid in book["players"]:
-        return "이 경기에 뛰는 선수는 걸 수 없어요." + play_promise()
+        return "이 경기에 뛰는 선수는 걸 수 없어요." + play_promise(book)
     return ""
 
 
@@ -379,7 +411,9 @@ def place(book: dict | None, uid: int, side: str, amount: int, user=None) -> tup
         return False, f"포인트가 모자라요. 걸 수 있는 포인트는 **{have:,}**이에요."
     acc = remember(uid, user)
     acc["points"] = have - amount
+    acc["listed"] = True  # 승부 예측에 한 번이라도 걸면 랭킹에 오른다
     book["bets"][str(uid)] = {"side": side, "amount": amount, "at": now()}
+    S.dirty = True  # 순위는 그대로지만(걸어 둔 포인트도 보유 포인트로 친다) 시트의 기록과 사본을 맞춘다
     save()
     end = int(book["closes"])
     return True, (f"✅ {SIDES[side]}에 **{amount:,} 포인트**를 걸었어요. 남은 포인트는 {num(acc['points'])}이에요.\n"
@@ -395,6 +429,7 @@ def cancel(book: dict | None, uid: int) -> tuple[bool, str]:
         return False, "이 경기에는 걸어 둔 포인트가 없어요."
     acc = account(uid)
     acc["points"] += bet["amount"]
+    S.dirty = True
     save()
     return True, f"건 포인트 {bet['amount']:,}을 돌려받았어요. 보유 포인트는 {num(acc['points'])}이에요."
 
@@ -451,23 +486,40 @@ def unsettle(book: dict) -> list[int]:
     return [int(uid) for uid in book["bets"] if points_of(int(uid)) < 0]
 
 
-def play_promise() -> str:
-    """그 경기에 뛰는 선수에게 하는 말: 걸 수는 없지만 참가 포인트를 받는다. 주지 않기로 했으면 빈 글"""
-    return f" 대신 결과가 기록되면 참가 포인트로 **{S.play:,} 포인트**를 받아요." if S.play > 0 else ""
+def first_taken(book: dict) -> bool:
+    """이 판이 열린 날의 첫 내전이 이미 정해졌는지: 그날 열린 다른 판이 먼저 결과를 받아 첫 내전의 참가 포인트를 가져갔다"""
+    day = day_start(book["opened"])
+    return any(b is not book and b.get("first") and day_start(b["opened"]) == day for b in S.books)
+
+
+def play_promise(book: dict) -> str:
+    """그 경기에 뛰는 선수에게 하는 말: 걸 수는 없지만 참가 포인트를 받는다. 주지 않기로 했으면 빈 글.
+    그날의 첫 내전이 아직 정해지지 않았으면 이 판이 첫 내전이 될 수 있다고 함께 알린다"""
+    first = S.first_play if S.first_play != S.play and not first_taken(book) else 0
+    if S.play > 0:
+        return (f" 대신 결과가 기록되면 참가 포인트로 **{S.play:,} 포인트**를 받아요"
+                + (f"(오늘의 첫 내전이면 **{first:,} 포인트**)." if first else "."))
+    return f" 대신 오늘의 첫 내전이면 결과가 기록될 때 참가 포인트로 **{first:,} 포인트**를 받아요." if first else ""
 
 
 def grant(book: dict) -> int:
     """참가 포인트: 결과가 기록된 판에 뛴 선수들에게 승패와 상관없이 준다. 준 사람 수를 돌려준다.
-    포인트를 받은 적이 없는 선수에게도 쌓인다(랭킹에는 본인이 '포인트 받기'를 한 번이라도 눌러야 나온다).
+    그날의 첫 내전(그날 열린 판 가운데 결과가 가장 먼저 기록된 판)에는 S.first_play 를, 그 밖의 판에는 S.play 를 준다(운영자가 2026-10-21에 요청).
+    포인트를 받은 적이 없는 선수에게도 쌓인다(랭킹에는 포인트를 받거나 승부 예측에 한 번이라도 걸어야 나온다).
     얼마를 줬는지 판에 적어 두어, 되돌릴 때는 그사이 금액이 바뀌었어도 준 만큼 그대로 거둔다"""
-    if S.play <= 0 or book["off"] or book["play"]:
+    if book["off"] or book["play"]:
+        return 0
+    first = not first_taken(book)
+    book["first"] = first  # 첫 내전의 자리는 금액이 0이어도 이 판이 차지한다. 되돌리면(ungrant) 비운다
+    amount = S.first_play if first else S.play
+    if amount <= 0:
         return 0
     for uid in book["players"]:
         acc = account(uid)
-        acc["points"] += S.play
+        acc["points"] += amount
         acc["played"] += 1
-        acc["earned"] += S.play
-        book["play"][str(uid)] = S.play
+        acc["earned"] += amount
+        book["play"][str(uid)] = amount
     if book["play"]:
         S.dirty = True
     return len(book["play"])
@@ -475,7 +527,7 @@ def grant(book: dict) -> int:
 
 def ungrant(book: dict) -> None:
     """준 참가 포인트를 거둔다 (/승리취소, 그 판이 없던 일이 됐을 때). 이미 써 버렸으면 0보다 적어질 수 있다(건 포인트의 정산을 되돌릴 때와 같다)"""
-    given, book["play"] = book["play"], {}
+    given, book["play"], book["first"] = book["play"], {}, False  # 첫 내전의 자리도 비운다. 다음에 결과가 기록되는 그날의 판이 받는다
     for uid, amount in given.items():
         acc = account(int(uid))
         acc["points"] -= amount
@@ -500,10 +552,10 @@ def void(book: dict) -> bool:
 
 # ── 글 ────────────────────────────────────────────────────────
 def open_text(book: dict) -> str:
-    end = int(book["closes"])
+    end, promise = int(book["closes"]), play_promise(book)
     return ("🔮 **승부 예측** — 이 경기에서 이길 팀에 포인트를 걸어 보세요.\n"
             f"⏰ **<t:{end}:t>까지** 걸 수 있어요. (<t:{end}:R> 마감) 마감하면 배당률을 알려 드려요.\n"
-            "이 경기에 뛰는 선수는 걸 수 없어요." + (play_promise() + "\n" if S.play > 0 else " ")
+            "이 경기에 뛰는 선수는 걸 수 없어요." + (promise + "\n" if promise else " ")
             + f"포인트가 없으면 {claim_place()} 이번 주 포인트를 먼저 받으세요.\n"
             f"지금까지 **{len(book['bets'])}명**이 걸었어요.")
 
@@ -554,7 +606,9 @@ def result_text(book: dict) -> str:
 
 def play_line(book: dict) -> str:
     """참가 포인트를 줬다고 알리는 한 줄"""
-    return f"🎮 **참가 포인트** — 이 경기에 뛴 선수 {len(book['play'])}명이 **{max(book['play'].values()):,} 포인트**씩 받았어요."
+    first = book.get("first") and S.first_play != S.play  # 두 값이 같으면 첫 내전이라고 따로 말하지 않는다
+    return (f"🎮 **참가 포인트** — " + ("오늘의 첫 내전이라 " if first else "")
+            + f"이 경기에 뛴 선수 {len(book['play'])}명이 **{max(book['play'].values()):,} 포인트**씩 받았어요.")
 
 
 def play_text(book: dict) -> str:
@@ -699,7 +753,8 @@ async def on_lineup(entry: dict) -> None:
         who = entry.get("who") or {}
         players = sorted({int(who[pid]) for pid in entry.get("ids") or [] if pid in who})  # 그 경기에 뛰는 열 명의 디스코드 ID
         book = {"key": book_key(entry), "place_id": int(entry.get("place_id") or 0), "opened": now(), "closes": now() + BET_SECONDS, "ended": 0.0,
-                "state": "open", "players": players, "bets": {}, "message_id": 0, "winner": None, "paid": {}, "play": {}, "off": False}
+                "state": "open", "players": players, "bets": {}, "message_id": 0, "winner": None, "paid": {}, "play": {}, "off": False,
+                "first": False}
         S.books.append(book)
         save()
         await announce_open(book)
@@ -817,19 +872,40 @@ async def post_round(force: bool = False) -> None:
 
 # ── 포인트 순위를 리그 서버에 올리기 ────────────────────────────
 def board() -> dict:
-    """순위 페이지에 보일 것: 포인트를 받은 적이 있는 사람들. 보유 포인트에는 아직 정산되지 않은 판에 걸어 둔 포인트도 넣는다
+    """순위 페이지에 보일 것: 포인트를 받았거나 승부 예측에 한 번이라도 건 사람들(listed. 운영자가 2026-10-21에 정함. 그 전에는 포인트를 받은 사람만).
+    참가 포인트만 받은 사람은 오르지 않지만 포인트는 그대로 쌓인다. 보유 포인트에는 아직 정산되지 않은 판에 걸어 둔 포인트도 넣는다
     (경기가 끝나기 전에는 순위가 바뀌지 않게). 이름은 리그 닉네임이고, 모르면 디스코드 서버 별명이다. 디스코드 ID는 싣지 않는다"""
     rows = []
     for uid, acc in S.accounts.items():
-        if not acc["claimed"]:
+        name_of(uid, acc)
+        if not acc["listed"]:
             continue
-        nick = S.host.nickname(int(uid), acc["username"]) if S.host is not None else None
-        if nick:
-            acc["nick"] = str(nick)
         rows.append({"name": acc["nick"] or acc["name"] or "이름 없음", "points": acc["points"] + staked(int(uid)), "profit": acc["profit"],
                      "bets": acc["bets"], "hits": acc["hits"], "claimed": acc["claimed"]})
     rows.sort(key=lambda x: (-x["points"], -x["profit"], x["name"]))
-    return {"updatedAt": datetime.fromtimestamp(now(), timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), "weekly": WEEKLY_POINTS, "play": S.play, "players": rows}
+    return {"updatedAt": datetime.fromtimestamp(now(), timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), "weekly": WEEKLY_POINTS, "play": S.play,
+            "first": S.first_play, "players": rows}
+
+
+def name_of(uid: str, acc: dict) -> None:
+    """순위와 시트에 적을 리그 닉네임을 지금 것으로 맞춘다 (모르면 적어 둔 것을 그대로 둔다)"""
+    nick = S.host.nickname(int(uid), acc["username"]) if S.host is not None else None
+    if nick:
+        acc["nick"] = str(nick)
+
+
+def ledger() -> list[dict]:
+    """리그 서버가 구글 시트에 적는 포인트 기록(비공개. 서버 버전 21, 운영자가 2026-10-21에 요청): 선수 등록 탭의 '승부예측포인트' 칸과
+    '승부 예측 포인트' 탭. 공개 순위와 달리 모든 사람(참가 포인트만 받은 사람도)을 싣고, 등록과 맞춰 보려고 디스코드 ID와 사용자명도 싣는다"""
+    rows = []
+    for uid, acc in S.accounts.items():
+        name_of(uid, acc)
+        out = staked(int(uid))
+        rows.append({"id": uid, "username": acc["username"], "name": acc["nick"] or acc["name"], "points": acc["points"] + out, "staked": out,
+                     "profit": acc["profit"], "bets": acc["bets"], "hits": acc["hits"], "claimed": acc["claimed"],
+                     "played": acc["played"], "earned": acc["earned"], "listed": acc["listed"]})
+    rows.sort(key=lambda x: (-x["points"], -x["profit"], x["name"]))
+    return rows
 
 
 async def publish() -> None:
@@ -837,7 +913,8 @@ async def publish() -> None:
     if not S.dirty or S.host is None or S.host.server is None or now() < S.publish_at:
         return
     try:
-        got = await S.host.server({"action": "saveOracle", "board": board(), "state": snapshot(), "reset": S.reset})
+        shown = board()
+        got = await S.host.server({"action": "saveOracle", "board": shown, "ledger": ledger(), "state": snapshot(), "reset": S.reset})
     except Exception as e:
         S.publish_at = now() + PUBLISH_RETRY
         note(f"오라클: 포인트 순위를 리그 서버에 올리지 못했습니다. 10분 뒤에 다시 올려 봅니다. ({e})")
@@ -1141,12 +1218,13 @@ async def cmd_setup(interaction: discord.Interaction, channel: Optional[discord.
         await interaction.response.defer()
         await check_switch(force=True)  # 리그 관리자 페이지에서 방금 켜고 껐으면 여기서 바로 반영된다
         where = f"<#{S.channel_id}>" if S.channel_id else "정하지 않음 (정하면 그 채널에 이번 주 글을 올려요)"
-        got = sum(1 for a in S.accounts.values() if a["claimed"])
+        got = sum(1 for a in S.accounts.values() if a["listed"])
         await interaction.followup.send(f"{actor}님, 오라클 봇의 설정이에요.\n"
                                         f"승부 예측: {'**켜짐**' if S.on else '**꺼짐**'} (주인이 리그 관리자 페이지에서 켜고 꺼요. 바꾸면 5분 안에 반영돼요)\n"
-                                        f"참가 포인트: {f'한 판에 **{S.play:,}**' if S.play else '**주지 않음**'} "
+                                        f"참가 포인트: {f'한 판에 **{S.play:,}**' if S.play else '**주지 않음**'}, "
+                                        f"그날의 첫 내전은 {f'**{S.first_play:,}**' if S.first_play else '**주지 않음**'} "
                                         "(결과가 기록되면 그 판에 뛴 선수가 받아요. 주인이 리그 관리자 페이지에서 바꿔요)\n"
-                                        f"'포인트 받기' 글을 올리는 채널: {where}\n포인트를 받은 적이 있는 사람: {got}명", allowed_mentions=QUIET)
+                                        f"'포인트 받기' 글을 올리는 채널: {where}\n승부의 신 랭킹에 오른 사람: {got}명", allowed_mentions=QUIET)
         return
     S.channel_id = channel.id
     save()
@@ -1209,7 +1287,8 @@ def status() -> list[str]:
     signup = guild.get_channel(S.host.signup_channel_id)
     lines = ["오라클 봇: " + ("켜짐 (승부 예측을 받습니다)" if S.on
                            else "꺼짐 (주인이 리그 관리자 페이지에서 오라클 봇을 켜면 5분 안에 승부 예측을 받습니다)"),
-             "오라클 참가 포인트(결과가 기록되면 그 판에 뛴 선수에게 줍니다): " + (f"한 판에 {S.play:,}" if S.play else "주지 않음 (0)"),
+             "오라클 참가 포인트(결과가 기록되면 그 판에 뛴 선수에게 줍니다): " + (f"한 판에 {S.play:,}" if S.play else "주지 않음 (0)")
+             + f", 그날의 첫 내전은 {S.first_play:,}",
              "오라클 승부 예측(팀 편성 아래에 올립니다): " + (
         f"#{signup.name}" + missing(signup, {"view_channel": "채널 보기", "send_messages_in_threads": "스레드에서 메시지 보내기"}
                                     if isinstance(signup, discord.ForumChannel) else {"view_channel": "채널 보기", "send_messages": "메시지 보내기"})

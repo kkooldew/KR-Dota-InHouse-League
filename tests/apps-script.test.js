@@ -286,7 +286,7 @@ assert(props.ADMIN_KEY === key, 'running setup again keeps the admin key');
   S.env.setup();
   const key = S.props.ADMIN_KEY;
   const ping = () => post({ action: 'ping', key });
-  assert(tabNames() === '선수등록 (시즌 1)' && S.tabs[0].grid[0].join() === '등록시각,수정시각,상태,닉네임,스팀프로필,스팀키,디스코드,MMR,1지망,2지망,3지망,4지망,비고,최고MMR,처리자,처리시각',
+  assert(tabNames() === '선수등록 (시즌 1)' && S.tabs[0].grid[0].join() === '등록시각,수정시각,상태,닉네임,스팀프로필,스팀키,디스코드,MMR,1지망,2지망,3지망,4지망,비고,최고MMR,처리자,처리시각,승부예측포인트',
     'fresh install: the first season gets its own tab');
   S.steam.vanity.returner = steamId(5);
   [1, 3, 4, 6, 7, 8, 9, 10].forEach(n => reg(n));
@@ -1214,7 +1214,7 @@ assert(props.ADMIN_KEY === key, 'running setup again keeps the admin key');
     'dates: a day starts at 0:00 Korean time; days that do not exist are not dates');
 
   let st = status();
-  assert(st.open === true && st.regClose === '' && st.seasonEnd === '' && st.seasonEnded === false && st.version === 20 && !('registered' in st),
+  assert(st.open === true && st.regClose === '' && st.seasonEnd === '' && st.seasonEnded === false && st.version === 21 && !('registered' in st),
     'dates: nothing set at first (the public status carries both dates)');
 
   // 모집 종료 날짜
@@ -1320,8 +1320,8 @@ assert(props.ADMIN_KEY === key, 'running setup again keeps the admin key');
   r = get('oracle');
   const text = JSON.stringify(r.oracle);
   assert(r.ok && r.oracle.weekly === 1000 && r.oracle.play === 100 && r.oracle.updatedAt !== 'ignored' && r.oracle.players.length === 2
-    && JSON.stringify(r.oracle.players[0]) === JSON.stringify({ name: '가나다', points: 1250, profit: 250, bets: 1, hits: 1, claimed: 1, earned: 300 })
-    && r.oracle.players[1].name.length === 40 && r.oracle.players[1].points === -750 && r.oracle.players[1].profit === -1750 && r.oracle.players[1].earned === 0,
+    && JSON.stringify(r.oracle.players[0]) === JSON.stringify({ name: '가나다', points: 1250, profit: 250, bets: 1, hits: 1, claimed: 1 })
+    && r.oracle.players[1].name.length === 40 && r.oracle.players[1].points === -750 && r.oracle.players[1].profit === -1750 && !('earned' in r.oracle.players[1]),
     'oracle: the public ranking keeps only the public fields (negative points are allowed)');
   assert(!text.includes('100000000000000001') && !text.includes('secret') && !text.includes('discord') && !text.includes('channel_id'), 'oracle: no Discord IDs in the public ranking');
   r = post({ action: 'adminOracle', key });
@@ -1355,7 +1355,7 @@ assert(props.ADMIN_KEY === key, 'running setup again keeps the admin key');
   const staffKey = post({ action: 'adminStaffAdd', key, name: '봇' }).key;
   assert(post({ action: 'saveOracle', key: staffKey, board: { players: [] } }).ok && get('oracle').oracle.players.length === 0, 'oracle: a staff key can save too');
   const st = get('status');
-  assert(st.version === 20 && !('oracle' in st) && !('oracleOn' in st) && !('oracleSeen' in st) && !('oraclePlay' in st), 'oracle: the public status is unchanged');
+  assert(st.version === 21 && !('oracle' in st) && !('oracleOn' in st) && !('oracleSeen' in st) && !('oraclePlay' in st), 'oracle: the public status is unchanged');
 
   // 켜고 끄기 (버전 18): 주인이 리그 관리자 페이지에서 켜고 끈다. 처음에는 꺼져 있다
   const logs = () => (S.sheets['운영 기록'] ? S.sheets['운영 기록'].grid.slice(1).map(r => r[2] + '|' + r[3]) : []);
@@ -1428,7 +1428,7 @@ assert(props.ADMIN_KEY === key, 'running setup again keeps the admin key');
   assert(!r.ok && r.code === 'confirm' && get('oracle').oracle.players.length === 1, 'reset: other words are refused');
   r = post({ action: 'adminOracleReset', key, confirm: '포인트 초기화' });
   const rid = S.props.ORACLE_RESET;
-  assert(r.ok && /^\d{4}-\d\d-\d\dT/.test(rid) && r.oracleResetAt === rid && 'registered' in r && r.version === 20
+  assert(r.ok && /^\d{4}-\d\d-\d\dT/.test(rid) && r.oracleResetAt === rid && 'registered' in r && r.version === 21
     && logs().filter(l => l === '주인|승부 예측 포인트 초기화').length === 1, 'reset: the owner resets (logged; the admin page is told when)');
   r = get('oracle');
   assert(r.ok && r.oracle.players.length === 0 && r.oracle.weekly === 1000 && r.oracle.play === 100 && /^\d{4}-/.test(r.oracle.updatedAt), 'reset: the public ranking is emptied at once');
@@ -1444,4 +1444,86 @@ assert(props.ADMIN_KEY === key, 'running setup again keeps the admin key');
   r = post({ action: 'saveOracle', key, board: { players: [] } });
   assert(r.ok && !r.stale && get('oracle').oracle.players.length === 0, 'reset: a save without a reset mark is still accepted');
   assert(!('oracleResetAt' in get('status')) && !('oracleReset' in get('status')), 'reset: nothing about it in the public status');
+})();
+/* ---- 버전 21: 그날의 첫 내전의 참가 포인트, 포인트 기록을 시트에 (등록 탭의 승부예측포인트 칸과 '승부 예측 포인트' 탭) ---- */
+(() => {
+  const S = makeEnv({ fresh: true });
+  const post = body => JSON.parse(S.env.doPost({ postData: { contents: JSON.stringify(body) } }).text);
+  const get = action => JSON.parse(S.env.doGet({ parameter: action ? { action } : {} }).text);
+  S.env.setup();
+  const key = S.props.ADMIN_KEY;
+  const logs = () => (S.sheets['운영 기록'] ? S.sheets['운영 기록'].grid.slice(1).map(r => r[2] + '|' + r[3]) : []);
+  const staffKey = post({ action: 'adminStaffAdd', key, name: '봇' }).key;
+  const PT = 16;                                                     // 승부예측포인트 칸 (17번째)
+
+  // 그날의 첫 내전의 참가 포인트: 처음에는 300이고 주인이 바꾼다
+  let r = post({ action: 'ping', key });
+  assert(r.ok && r.version === 21 && r.oracleFirst === 300 && !('ORACLE_FIRST' in S.props), 'first game points: 300 at first');
+  assert(post({ action: 'adminOracle', key, brief: true }).oracleFirst === 300 && post({ action: 'adminOracle', key }).oracleFirst === 300
+    && post({ action: 'adminLeague', key }).oracleFirst === 300 && post({ action: 'saveOracle', key, board: { players: [] } }).oracleFirst === 300,
+    'first game points: the bot is told wherever it is told the switch');
+  r = post({ action: 'adminConfig', key: staffKey, oracleFirst: 500 });
+  assert(!r.ok && r.code === 'owner' && post({ action: 'ping', key }).oracleFirst === 300, 'first game points: only the owner key can change it');
+  for (const bad of [-1, 10001, 2.5, 'many', '', null, true]) {
+    r = post({ action: 'adminConfig', key, oracleFirst: bad, oraclePlay: 50 });
+    assert(!r.ok && r.code === 'oracleFirst' && post({ action: 'ping', key }).oracleFirst === 300 && post({ action: 'ping', key }).oraclePlay === 100,
+      'first game points: ' + JSON.stringify(bad) + ' is refused and nothing else in the request is changed');
+  }
+  r = post({ action: 'adminConfig', key, oracleFirst: 500 });
+  assert(r.ok && r.oracleFirst === 500 && r.oraclePlay === 100 && S.props.ORACLE_FIRST === '500' && logs().filter(l => l === '주인|첫 내전 참가 포인트').length === 1,
+    'first game points: the owner changes it (logged, the other value stays)');
+  r = post({ action: 'adminConfig', key, oracleFirst: '500' });
+  assert(r.ok && logs().filter(l => l === '주인|첫 내전 참가 포인트').length === 1 && post({ action: 'adminOracle', key, brief: true }).oracleFirst === 500,
+    'first game points: the same value again is not logged twice; the bot is told the new value');
+  S.props.ORACLE_FIRST = 'x';
+  assert(post({ action: 'ping', key }).oracleFirst === 300 && !('oracleFirst' in get('status')), 'first game points: a broken stored value falls back to 300; nothing in the public status');
+
+  // 공개 순위: 첫 내전의 값을 싣고, 누가 참가 포인트로 얼마를 받았는지(earned)는 버린다
+  r = post({ action: 'saveOracle', key, board: { weekly: 1000, play: 100, first: 300, players: [{ name: '가', points: 900, profit: 0, bets: 1, hits: 0, claimed: 1, earned: 300 }] } });
+  let o = get('oracle').oracle;
+  assert(r.ok && o.first === 300 && o.play === 100 && JSON.stringify(o.players[0]) === JSON.stringify({ name: '가', points: 900, profit: 0, bets: 1, hits: 0, claimed: 1 }),
+    'oracle: the public ranking carries the first-game points and no longer the participation totals');
+  assert(!S.sheets['승부 예측 포인트'], 'oracle sheet: a bot that sends no ledger leaves the sheet alone');
+
+  // 등록 탭의 승부예측포인트 칸
+  const steamId = n => '7656119800000' + String(9000 + n);
+  const reg = (n, discord) => {
+    Object.keys(S.cache).filter(k => k.startsWith('rl:')).forEach(k => delete S.cache[k]);
+    return post({ action: 'register', nickname: '선수' + n, steam: 'https://steamcommunity.com/profiles/' + steamId(n), discord, mmr: 3000, prefs: [1, 2, 3, 4] });
+  };
+  assert(reg(1, 'kim').ok && reg(2, '123456789012345678').ok && reg(3, 'lee').ok && reg(4, 'park').ok, 'oracle sheet: four registrations');
+  const tab = S.tabs[0];
+  assert(tab.grid[0][PT] === '승부예측포인트' && tab.grid[0].length === 17 && tab.grid[1].length === 17 && tab.grid[1][PT] === '',
+    'oracle sheet: the registration tab has the new column (empty for a new registration)');
+  const ledger = [
+    { id: '111111111111111111', username: 'Kim', name: '김', points: 1300, staked: 300, profit: 200, bets: 2, hits: 1, claimed: 1, played: 1, earned: 100, listed: true },
+    { id: '123456789012345678', username: 'choi', name: '최', points: 400, staked: 0, profit: 0, bets: 0, hits: 0, claimed: 0, played: 1, earned: 300, listed: false },
+    { id: '222222222222222222', username: 'lee', name: '=이', points: -50, staked: 0, profit: -150, bets: 1, hits: 0, claimed: 1, played: 0, earned: 0, listed: true },
+    { id: 'not-an-id', username: 'park', points: 5 }, null, 'x'];
+  r = post({ action: 'saveOracle', key, board: { weekly: 1000, players: [] }, ledger });
+  assert(r.ok && [1, 2, 3, 4].map(i => tab.grid[i][PT]).join() === '1300,400,-50,', 'oracle sheet: each registration shows the points of its Discord account (by ID or username; unknown rows are empty)');
+  const view = S.sheets['승부 예측 포인트'];
+  assert(view && view.warnOnly && view.grid[0][0].startsWith('이 탭은 오라클 봇이') && view.grid[1].join('|') ===
+    '순위|이름|디스코드 사용자명|디스코드 ID|보유 포인트|걸어 둔 포인트|예측 손익|예측|맞힘|포인트 받은 주|참가한 내전|참가 포인트 합|랭킹'
+    && view.grid.length === 5 && view.grid[2].join('|') === '1|김|kim|111111111111111111|1300|300|200|2|1|1|1|100|오름'
+    && view.grid[3].slice(0, 5).join('|') === '-|최|choi|123456789012345678|400' && view.grid[3][12].startsWith('안 오름')
+    && view.grid[4][0] === 2 && view.grid[4][1] === '=이' && view.grid[4][3] === '222222222222222222',
+    'oracle sheet: a view-only tab lists everyone (rank only for those on the ranking; long IDs and names stay as text; bad rows are dropped)');
+  assert(!JSON.stringify(get('oracle')).includes('111111111111111111'), 'oracle sheet: the ledger never reaches the public ranking');
+  reg(1, 'kim');                                                     // 본인이 등록을 고쳐도 포인트 칸은 그대로
+  assert(tab.grid[1][PT] === 1300 && tab.grid[1][3] === '선수1', 'oracle sheet: editing a registration keeps the points cell');
+  r = post({ action: 'saveOracle', key, board: { players: [] }, ledger: [] });
+  assert(r.ok && [1, 2, 3, 4].map(i => tab.grid[i][PT]).join() === ',,,' && view.grid.length === 2, 'oracle sheet: after a reset (empty ledger) the cells and the tab are emptied');
+  r = post({ action: 'saveOracle', key, board: { players: [] }, ledger: 'x' });
+  assert(!r.ok, 'oracle sheet: a malformed ledger is refused');
+  const realName = S.env.SpreadsheetApp.getActiveSpreadsheet;
+  S.env.SpreadsheetApp.getActiveSpreadsheet = () => { throw new Error('시트 오류'); };
+  r = post({ action: 'saveOracle', key, board: { players: [{ name: '나', points: 1 }] }, ledger });
+  S.env.SpreadsheetApp.getActiveSpreadsheet = realName;
+  assert(r.ok && get('oracle').oracle.players[0].name === '나', 'oracle sheet: if the sheet cannot be written, the ranking is still saved');
+
+  // 칸이 늘어난 버전으로 올렸을 때: 이미 있는 탭에 새 머리글을 채운다
+  delete S.props.LAYOUT; tab.grid[0][PT] = '';
+  post({ action: 'ping', key });
+  assert(S.props.LAYOUT === '4' && tab.grid[0][PT] === '승부예측포인트' && tab.grid[1][3] === '선수1', 'upgrade: the new header is filled in, rows untouched');
 })();

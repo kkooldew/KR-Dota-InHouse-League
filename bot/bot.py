@@ -85,6 +85,9 @@ AUTO_MATCH = bool(config.get("auto_match", True))  # 마감하면 팀을 짜서 
 NODE_PATH = str(config.get("node_path", "") or "node").strip()
 # 승인한 선수에게 줄 역할. 보통은 비워 두고 디스코드에서 /선수역할 로 정한다(그 값은 state.json 에 남는다)
 PLAYER_ROLE_ID = int(config.get("player_role_id", 0) or 0)
+# 모집 글에서 멘션하는 '내전 알림' 역할. 선수가 /내전알림 으로 스스로 받고 뺀다. 보통은 비워 두고 이름(ALERT_ROLE_NAME)으로 찾는다
+ALERT_ROLE_ID = int(config.get("alert_role_id", 0) or 0)
+ALERT_ROLE_NAME = "내전 알림"
 # 오라클 봇(승부 예측)의 토큰. 넣어 두면 퍼그나봇과 함께 켜진다. 비워 두면 퍼그나봇만 돈다
 ORACLE_TOKEN = str(config.get("oracle_token", "") or "").strip()
 ORACLE_PAGE = str(config.get("oracle_page", "") or "").strip()  # 포인트 순위 페이지의 주소. 오라클 봇이 정산 글에 적는다
@@ -116,6 +119,9 @@ OFFSEASON_NOTE = "ℹ️ 시즌이 종료되어 이 내전의 결과는 순위�
 # 디스코드는 글(스레드) 안에서 멘션한 역할의 인원이 이 수보다 적을 때만 그 사람들을 글에 넣고 알림을 보낸다 (디스코드 도움말의 Threads FAQ:
 # "These roles must have less than 100 members each"). 모집 글에서 리그 선수 역할을 부를 때 이 수를 넘었는지 본다
 ROLE_PING_LIMIT = 100
+# 결과를 기록한(또는 경기 없이 정리한) 내전의 글은 이만큼 뒤에 잠그고 닫고, 취소한 내전의 글은 이만큼 뒤에 지운다 (운영자가 2026-10-21에 요청)
+TIDY_SECONDS = 600
+TIDY_TICK_SECONDS = 30  # 정리할 글이 있는지 이만큼마다 본다
 
 
 # ── 모집 상태 ────────────────────────────────────────────────
@@ -140,7 +146,11 @@ class Recruitment:
         self.synced = False  # 리그 서버에 명단이 올라가 있는지
         self.lineup = False  # 팀을 짜서 알렸는지
         self.offseason = False  # 시즌이 끝난 뒤에 만든 내전. 결과를 기록하지 않는다고 모집 글에 적는다
+        self.close_at = 0.0  # 이 시각이 되면 글을 잠그고 닫는다(결과를 기록한 내전). 0이면 닫을 일이 없다
+        self.delete_at = 0.0  # 이 시각이 되면 글을 지운다(취소한 내전). 0이면 지울 일이 없다
+        self.shut = False  # 봇이 글을 잠그고 닫았는지 (/승리취소 면 다시 연다)
         self.edit_lock = asyncio.Lock()
+        self.tidy_lock = asyncio.Lock()  # 글을 닫는 일과 /승리취소 로 다시 여는 일이 겹치지 않게 한다
 
     @property
     def place_id(self) -> int:
@@ -160,6 +170,9 @@ class Recruitment:
             "synced": self.synced,
             "lineup": self.lineup,
             "offseason": self.offseason,
+            "close_at": self.close_at,
+            "delete_at": self.delete_at,
+            "shut": self.shut,
         }
 
 
@@ -182,6 +195,12 @@ class InhouseBot(discord.Client):
         # 리그 선수 역할 자동 부여. player_role_id 가 0이면 꺼져 있다.
         # role_seen 은 등록마다 마지막으로 맞춘 내용 {스팀키: {"status", "discord", "ok", "tried"}}, role_season 은 그때의 시즌 이름이다
         self.player_role_id = PLAYER_ROLE_ID
+        # '내전 알림' 역할(/내전알림). 이름으로 한 번 찾으면 ID를 적어 두어, 나중에 역할 이름을 바꿔도 찾는다.
+        # alert_members 는 /내전알림 으로 그 역할을 받은 사람들이다(인원을 세는 데만 쓴다. 디스코드에서 손으로 준 사람은 세지 못한다)
+        self.alert_role_id = ALERT_ROLE_ID
+        self.alert_members: set[int] = set()
+        self.alert_note = ""  # 마지막으로 운영진 채널에 알린 '내전 알림' 역할의 문제 (같은 문제를 되풀이해 알리지 않게)
+        self.tidy_task: asyncio.Task | None = None
         self.role_seen: dict[str, dict] = {}
         self.role_season = ""
         # 마지막으로 맞춘 시즌의 번호(서버가 알려 준다. 아직 모르면 None). 서버의 번호가 더 크면 시즌이 넘어간 것이라 역할을 거둔다.
@@ -250,12 +269,13 @@ class InhouseBot(discord.Client):
                     print(f"꺼지기 전의 상태를 이어받지 못해 새로 시작합니다. ({e!r})")
             print(f"리그 선수 역할 자동 부여: {await role_status()}")
             print(f"리그 관리자(/선수역할 을 쓸 수 있는 사람): {await manager_status()}")
-            print(f"모집 글에서 리그 선수 멘션(/내전생성): {await ping_status()}")
+            print(f"모집 글에서 내전 알림 멘션(/내전생성·/내전알림): {await ping_status()}")
             print(f"내전하자(/내전하자): {await want_status()}")
             print(f"음성 채널 이동(/시작·/종료): {await voice_status()}")
             print(f"오라클 봇(승부 예측): {oracle.status_line()}")
             self.role_task = asyncio.create_task(role_loop())
             self.want_task = asyncio.create_task(want_loop())
+            self.tidy_task = asyncio.create_task(tidy_loop())
 
 
 bot = InhouseBot()
@@ -280,7 +300,7 @@ async def check_setup() -> None:
         forum = isinstance(channel, discord.ForumChannel)
         wanted = {"view_channel": "채널 보기", "send_messages": "글 올리기" if forum else "메시지 보내기"}
         if forum:
-            wanted.update(send_messages_in_threads="스레드에서 메시지 보내기", manage_threads="스레드 관리(글 잠그기)")
+            wanted.update(send_messages_in_threads="스레드에서 메시지 보내기", manage_threads="스레드 관리(글 잠그기·지우기)")
         perms = channel.permissions_for(channel.guild.me)
         missing = [name for attr, name in wanted.items() if not getattr(perms, attr)]
         print(f"{label}: #{channel.name} ({'포럼' if forum else '일반 채널'})"
@@ -573,8 +593,8 @@ def save_state() -> None:
     """진행 중인 내전들과 짠 팀을 파일에 적는다. 실패해도 모집은 계속한다."""
     keep_from = time.time() - 2 * 86400  # 결과를 다음 날 기록하는 일도 있어 이틀 치를 남긴다
     bot.lineups = [x for x in bot.lineups if x.get("at", 0) >= keep_from]
-    # 끝난 지 이틀이 지난 내전은 잊는다. 그 글에서는 더 명령어를 받지 않는다
-    bot.games = [g for g in bot.games if not (g.closed and g.end_ts < keep_from)]
+    # 끝난 지 이틀이 지난 내전은 잊는다. 그 글에서는 더 명령어를 받지 않는다 (글을 닫거나 지울 일이 남았으면 그것을 마칠 때까지 둔다)
+    bot.games = [g for g in bot.games if not (g.closed and g.end_ts < keep_from and not g.close_at and not g.delete_at)]
     bot.unrestored = [x for x in bot.unrestored if not (x.get("closed") and x.get("end_ts", 0) < keep_from)]
     try:
         data = {
@@ -584,6 +604,7 @@ def save_state() -> None:
                       "seen": bot.role_seen},
             "voice": bot.voice,
             "manager_role_id": bot.manager_role_id,
+            "alert": {"role_id": bot.alert_role_id, "members": sorted(bot.alert_members)},
             "want": {"users": {str(uid): at for uid, at in bot.wants.items()}, "joined": sorted(bot.want_joined), "alerted": bot.want_alerted,
                      "channel_id": bot.want_channel_id, "role_id": bot.want_role_id, "board": bot.want_board, "alert_at": bot.want_alert_at},
         }
@@ -621,6 +642,10 @@ async def restore_state() -> None:
         bot.voice = {k: v for k, v in voice.items() if k in VOICE_ROOMS and isinstance(v, int)}
     if isinstance(data.get("manager_role_id"), int):  # /선수역할 의 관리자역할 칸으로 정한 리그 관리자 역할
         bot.manager_role_id = data["manager_role_id"] or MANAGER_ROLE_ID
+    alert = data.get("alert")
+    if isinstance(alert, dict):  # '내전 알림' 역할과 /내전알림 으로 받은 사람들
+        bot.alert_role_id = int(alert.get("role_id") or 0) or ALERT_ROLE_ID
+        bot.alert_members = {uid for uid in alert.get("members") or [] if isinstance(uid, int)}
     want = data.get("want")
     if isinstance(want, dict):  # /내전하자 로 알려 둔 사람들과 /내전하자설정 으로 정한 대화방·역할
         users = want.get("users") if isinstance(want.get("users"), dict) else {}
@@ -645,6 +670,8 @@ async def restore_state() -> None:
         rec.closed, rec.cancelled, rec.extended = bool(cur.get("closed")), bool(cur.get("cancelled")), bool(cur.get("extended"))
         rec.synced, rec.lineup = bool(cur.get("synced")), bool(cur.get("lineup"))
         rec.offseason = bool(cur.get("offseason"))
+        rec.close_at, rec.delete_at = float(cur.get("close_at") or 0), float(cur.get("delete_at") or 0)
+        rec.shut = bool(cur.get("shut"))
         try:
             place = await get_channel(int(cur.get("thread_id") or SIGNUP_CHANNEL_ID))
         except discord.NotFound:
@@ -741,6 +768,7 @@ async def extend_recruitment(rec: Recruitment, by: int) -> None:
     rec.end_ts = deadline_after(EXTEND_SECONDS, None if reopened else rec.end_ts)
     rec.closed = False
     rec.extended = True
+    rec.close_at, rec.shut = 0.0, False  # 경기 없이 정리한 판을 다시 열었다. 닫지 않는다 (아래에서 글을 다시 연다)
     stop_timer(rec)
     rec.task = asyncio.create_task(close_when_due(rec))
 
@@ -759,10 +787,15 @@ async def cancel_recruitment(rec: Recruitment, by: int) -> None:
     rec.closed = True
     rec.cancelled = True
     stop_timer(rec)
+    # 취소한 내전의 글(포럼)은 10분 뒤에 지운다(운영자가 2026-10-21에 요청). 그때까지는 잠가 두고, 지운다는 것을 글에 알린다
+    rec.close_at = 0.0
+    if rec.thread is not None:
+        rec.delete_at = time.time() + TIDY_SECONDS
 
     await refresh_announcement(rec)
     mentions = " ".join(f"<@{uid}>" for uid in rec.participants)
-    await post(rec, f"<@{by}>님이 이번 내전을 취소했어요." + (f"\n{mentions}" if mentions else ""), skip=by)
+    gone = f"\n🗑️ 이 글은 {minutes_text(TIDY_SECONDS)} 뒤(<t:{int(rec.delete_at)}:t>)에 지워져요." if rec.delete_at else ""
+    await post(rec, f"<@{by}>님이 이번 내전을 취소했어요.{gone}" + (f"\n{mentions}" if mentions else ""), skip=by)
     if rec.synced:  # 매니저가 취소된 내전의 명단을 불러오지 않게 서버의 명단을 비운다
         await push_roster(rec, clear=True)
         rec.synced = False
@@ -780,6 +813,7 @@ async def restart_recruitment(rec: Recruitment, by: int) -> list[int]:
     rec.end_ts = deadline_after(RESTART_SECONDS)
     rec.closed = False
     rec.extended = False
+    rec.close_at, rec.shut = 0.0, False  # 경기 없이 정리한 판을 다시 받는다. 닫지 않는다 (아래에서 글을 다시 연다)
     stop_timer(rec)
     rec.task = asyncio.create_task(close_when_due(rec))
 
@@ -1128,7 +1162,7 @@ def note_season(data: dict) -> None:
     if isinstance(at, (int, float)) and not isinstance(at, bool):
         bot.season_end = at / 1000 if at > 0 else 0.0
     # 주인이 리그 관리자 페이지에서 오라클 봇을 켜 두었는지 (서버 버전 18. 팀을 짜기 직전에 받는 리그 기록에 실려 온다)
-    oracle.hear(data.get("oracleOn"), data.get("oraclePlay"), data.get("oracleReset"))
+    oracle.hear(data.get("oracleOn"), data.get("oraclePlay"), data.get("oracleReset"), data.get("oracleFirst"))
 
 
 def season_over(at: float | None = None) -> bool:
@@ -1139,6 +1173,95 @@ def season_over(at: float | None = None) -> bool:
 def match_start(entry: dict) -> float:
     """그 판의 경기를 시작한 시각: /시작 으로 선수를 처음 옮긴 때, 쓰지 않았으면 팀을 짜서 알린 때"""
     return float(entry.get("began") or entry.get("at") or 0)
+
+
+# ── 끝난 내전의 글 정리 (운영자가 2026-10-21에 요청) ──
+# 결과를 기록한 내전의 글은 10분 뒤에 잠그고 닫는다(디스코드의 '게시물 잠그기'와 '게시물 닫기'). 경기 없이 정리한 판(경기 안 함,
+# 시즌이 끝난 뒤의 경기)도 끝난 내전으로 보고 같게 한다(내가 정했다). 그 10분 안에는 글에서 /승리취소 로 되돌릴 수 있다.
+# 잠긴 글에는 스레드 관리 권한이 있는 사람만 명령어를 쓸 수 있다. 그런 사람이 /승리취소 를 쓰면 봇이 글을 다시 연다.
+# 취소한 내전의 글은 10분 뒤에 지운다(cancel_recruitment). 둘 다 포럼 글일 때만 한다(일반 채널의 공지는 그대로 둔다).
+def rec_of(entry: dict) -> Recruitment | None:
+    """그 편성을 짠 내전"""
+    return next((g for g in bot.games if g.message is not None and g.message.id == entry.get("message_id")), None)
+
+
+def close_later(entry: dict) -> str:
+    """그 판의 내전 글을 10분 뒤에 잠그고 닫기로 한다. 돌려주는 값: 글에 붙일 안내(닫을 글이 없으면 빈 글)"""
+    rec = rec_of(entry)
+    if rec is None or rec.thread is None or rec.cancelled:
+        return ""
+    rec.close_at = time.time() + TIDY_SECONDS
+    return f"\n-# 이 글은 {minutes_text(TIDY_SECONDS)} 뒤(<t:{int(rec.close_at)}:t>)에 잠기고 닫혀요."
+
+
+async def reopen_post(rec: Recruitment) -> None:
+    """/승리취소: 닫기로 한 글을 닫지 않고, 이미 닫았으면 다시 연다(결과를 다시 기록할 수 있게)"""
+    async with rec.tidy_lock:
+        rec.close_at = 0.0
+        if rec.shut:
+            rec.shut = False
+            await set_locked(rec, LOCK_CLOSED)  # 마감한 글을 잠가 두는 설정이면 잠긴 채로 펴기만 한다
+
+
+async def shut_post(rec: Recruitment) -> None:
+    """결과를 기록하고 10분이 지난 내전의 글을 잠그고 닫는다"""
+    async with rec.tidy_lock:
+        if not rec.close_at or time.time() < rec.close_at:  # 그사이 /승리취소 로 닫지 않기로 했다
+            return
+        rec.close_at = 0.0
+        try:
+            await awake(rec.thread, lambda: rec.thread.edit(locked=True, archived=True))
+            rec.shut = True
+        except discord.NotFound:  # 누가 이미 글을 지웠다
+            pass
+        except discord.HTTPException as e:
+            print(f"끝난 내전의 글을 잠그고 닫지 못했습니다: {e}")
+    save_state()
+
+
+async def delete_post(rec: Recruitment) -> None:
+    """취소하고 10분이 지난 내전의 글을 지우고 그 내전을 잊는다"""
+    async with rec.lock:
+        if not rec.delete_at or time.time() < rec.delete_at or rec not in bot.games:
+            return
+        try:
+            await rec.thread.delete()
+        except discord.NotFound:  # 누가 이미 지웠다
+            pass
+        except discord.Forbidden as e:
+            rec.delete_at = 0.0
+            save_state()
+            await tell_admins(f"취소한 내전의 글을 지우지 못했어요. 봇의 역할에 **스레드 관리** 권한이 있는지 확인하고, 이 글은 손으로 지워 주세요: <#{rec.place_id}> ({e})")
+            return
+        except discord.HTTPException as e:  # 디스코드가 잠깐 답하지 않았다. 조금 뒤에 다시 지운다
+            print(f"취소한 내전의 글을 지우지 못했습니다. {minutes_text(TIDY_SECONDS)} 뒤에 다시 지웁니다: {e}")
+            rec.delete_at = time.time() + TIDY_SECONDS
+            save_state()
+            return
+        bot.games.remove(rec)
+    save_state()
+
+
+async def tidy_tick() -> None:
+    """때가 된 글을 정리한다"""
+    now = time.time()
+    for rec in list(bot.games):
+        if rec.thread is None:
+            continue
+        if rec.delete_at and now >= rec.delete_at:
+            await delete_post(rec)
+        elif rec.close_at and now >= rec.close_at:
+            await shut_post(rec)
+
+
+async def tidy_loop() -> None:
+    """켜 둔 동안 끝난 내전의 글을 정리한다. 봇이 꺼져 있던 사이에 때가 지났으면 켜자마자 정리한다"""
+    while True:
+        try:
+            await tidy_tick()
+        except Exception as e:  # 디스코드가 잠깐 답하지 않아도 다음 차례에 다시 한다
+            print(f"끝난 내전의 글을 이번에는 정리하지 못했습니다. 다음 차례에 다시 합니다. ({e!r})")
+        await asyncio.sleep(TIDY_TICK_SECONDS)
 
 
 async def clear_entry(entry: dict) -> None:
@@ -1317,8 +1440,9 @@ async def role_status() -> str:
     return f"[확인 필요] {problem}" if problem else f"켜짐 (@{role.name})"
 
 
-# ── 모집 글에서 리그 선수 부르기 ─────────────────────────────────
-# /내전생성 으로 모집 글을 만들면 그 글에서 리그 선수 역할을 멘션해 선수들에게 알린다 (운영자가 2026-10-12에 요청).
+# ── 모집 글에서 '내전 알림' 역할 부르기 ─────────────────────────────
+# /내전생성 으로 모집 글을 만들면 그 글에서 '내전 알림' 역할을 멘션해, /내전알림 으로 알림을 켜 둔 선수들에게 알린다
+# (운영자가 2026-10-21에 바꿈. 2026-10-12부터는 리그 선수 역할을 불렀다). 그 역할은 운영자가 디스코드에 그 이름으로 만든다.
 def silent_ping(guild: discord.Guild, role: discord.Role, channel=None) -> str:
     """봇이 이 역할을 멘션해도 알림이 울리지 않는 까닭. 울리면 빈 글.
     누구나 멘션할 수 있게 해 둔 역할이 아니면, 봇에 모든 역할을 멘션하는 권한이 있어야 알림이 울린다. channel 을 주면 그 채널에서의 권한으로 본다."""
@@ -1332,58 +1456,81 @@ def silent_ping(guild: discord.Guild, role: discord.Role, channel=None) -> str:
             "**누구나 이 역할을 멘션할 수 있도록 허용**을 켜거나, 봇의 역할에 **@everyone, @here, 모든 역할 멘션하기**를 켜 주세요.")
 
 
-def role_holders() -> int:
-    """리그 선수 역할이 있는 것을 봇이 확인한 승인 선수의 수(봇이 역할을 줬거나 이미 갖고 있던 사람). 리그 관리자가 손으로 준 사람은 세지 못한다"""
-    return sum(1 for v in bot.role_seen.values() if v.get("status") == "승인" and v.get("ok"))
+def alert_role(guild: discord.Guild) -> tuple[discord.Role | None, str]:
+    """'내전 알림' 역할과, 찾지 못했을 때의 까닭. 적어 둔 ID가 없거나 그 역할이 지워졌으면 이름(띄어쓰기는 보지 않는다)으로 찾고 ID를 적어 둔다"""
+    if bot.alert_role_id:
+        role = guild.get_role(bot.alert_role_id)
+        if role is not None:
+            return role, ""
+    key, roles = ALERT_ROLE_NAME.replace(" ", ""), getattr(guild, "roles", None)
+    found = [r for r in roles if isinstance(getattr(r, "name", None), str) and r.name.replace(" ", "") == key] if isinstance(roles, (list, tuple)) else []
+    if len(found) == 1:
+        if bot.alert_role_id != found[0].id:
+            if bot.alert_role_id:  # 다른 역할이 됐다. 예전 역할을 받은 사람들의 수는 버린다
+                bot.alert_members = set()
+            bot.alert_role_id = found[0].id
+            save_state()
+        return found[0], ""
+    if found:
+        return None, f"**{ALERT_ROLE_NAME}** 이라는 이름의 역할이 {len(found)}개 있어요. 하나만 남겨 주세요."
+    return None, NO_ALERT_ROLE
+
+
+NO_ALERT_ROLE = f"**{ALERT_ROLE_NAME}** 역할을 찾지 못했어요. 디스코드 서버 설정 → 역할에서 **{ALERT_ROLE_NAME}** 이라는 이름으로 역할을 만들어 주세요."
 
 
 def crowded_role() -> str:
-    """리그 선수 역할의 인원이 많아, 글 안에서 멘션해도 디스코드가 알림을 보내지 않는 까닭. 괜찮으면 빈 글 (ROLE_PING_LIMIT 의 설명)"""
-    count = role_holders()
+    """'내전 알림' 역할의 인원이 많아, 글 안에서 멘션해도 디스코드가 알림을 보내지 않는 까닭. 괜찮으면 빈 글 (ROLE_PING_LIMIT 의 설명).
+    봇은 역할의 인원을 바로 알 수 없어서(특권 인텐트를 쓰지 않는다) /내전알림 으로 받은 사람을 센다"""
+    count = len(bot.alert_members)
     if count < ROLE_PING_LIMIT:
         return ""
-    return (f"리그 선수 역할이 있는 선수가 {count}명이에요. 디스코드는 글(스레드) 안에서 {ROLE_PING_LIMIT}명 이상인 역할을 멘션하면 알림을 보내지 않아서, "
-            "모집 글의 멘션이 선수들에게 가지 않을 수 있어요. 리그 관리자에게 알려 주세요.")
+    return (f"`/내전알림` 으로 **{ALERT_ROLE_NAME}** 역할을 받은 사람이 {count}명이에요. 디스코드는 글(스레드) 안에서 {ROLE_PING_LIMIT}명 이상인 역할을 멘션하면 "
+            "알림을 보내지 않아서, 모집 글의 멘션이 선수들에게 가지 않을 수 있어요. 리그 관리자에게 알려 주세요.")
 
 
 async def ping_status() -> str:
-    """모집 글에서 리그 선수 역할을 멘션하는 설정을 한 줄로 (켤 때 창에 찍는다)"""
-    if not bot.player_role_id:
-        return "꺼짐 (리그 선수 역할을 정해 두지 않았습니다. `/선수역할` 로 정하면 모집 글에서 그 역할을 멘션합니다)"
+    """모집 글에서 '내전 알림' 역할을 멘션하는 설정과, /내전알림 으로 그 역할을 주고 뺄 수 있는지를 한 줄로 (켤 때 창에 찍는다)"""
     try:
         guild = await get_guild()
         signup = await get_channel(SIGNUP_CHANNEL_ID)
     except discord.HTTPException as e:
         return f"[확인 필요] 디스코드 서버를 확인하지 못했습니다 ({e})"
-    role = guild.get_role(bot.player_role_id)
+    role, missing = alert_role(guild)
     if role is None:
-        return "[확인 필요] 정해 둔 리그 선수 역할을 찾지 못했습니다. `/선수역할` 로 다시 정해 주세요."
-    problem = silent_ping(guild, role, signup) or crowded_role()
-    return f"@{role.name} (봇이 역할을 확인한 선수 {role_holders()}명)" + (f" [확인 필요] {problem}" if problem else " - 권한 확인")
+        return f"[확인 필요] {missing} 그때까지는 모집 글에서 아무도 부르지 않고, `/내전알림` 도 쓸 수 없습니다."
+    problem, trouble = silent_ping(guild, role, signup) or crowded_role(), role_problem(guild, role)
+    return (f"@{role.name} (`/내전알림` 으로 받은 사람 {len(bot.alert_members)}명)" + (f" [확인 필요] {problem}" if problem else "")
+            + (f" [확인 필요] `/내전알림`: {trouble}" if trouble else "") + ("" if problem or trouble else " - 권한 확인"))
 
 
 async def call_players(rec: Recruitment, actor: str) -> str:
-    """방금 만든 모집 글에서 리그 선수 역할(/선수역할 로 정한 역할)을 멘션해 선수들에게 알린다. actor 는 모집을 연 리그 운영진의 멘션이다.
+    """방금 만든 모집 글에서 '내전 알림' 역할을 멘션해, /내전알림 으로 알림을 켜 둔 선수들에게 알린다. actor 는 모집을 연 리그 운영진의 멘션이다.
     본문에 넣지 않고 그 글에 글을 하나 더 올린다: 본문은 누가 /참여 할 때마다 고치는 글이라, 고치면서 멘션이 풀릴 수 있다(받은 멘션함에서 사라진다).
     봇의 다른 글은 역할 알림을 막아 두었으므로 이 글에만 그 역할의 알림을 허용한다. 모집을 연 리그 운영진에게는 알림이 가지 않는다.
-    리그 선수 역할을 정해 두지 않았으면 전처럼 아무도 부르지 않는다. 부르지 못해도 모집은 그대로 진행한다.
+    그 역할이 없으면 아무도 부르지 않는다(다른 역할로 대신 부르지 않는다). 부르지 못해도 모집은 그대로 진행한다.
+    아직 그 역할을 만들지 않았으면(찾은 적이 없으면) 리그 운영진에게 알리지 않는다(켤 때 창에 찍는다. 리그 선수 역할을 정해 두지 않았을 때와 같다).
     돌려주는 값: 리그 운영진에게 알릴 문제. 없으면 빈 글."""
-    role_id = bot.player_role_id
-    if not role_id:
-        return ""
     try:
         guild = await get_guild()
-        role = guild.get_role(role_id)
+        role, missing = alert_role(guild)
         if role is None:
-            return "정해 둔 리그 선수 역할을 찾지 못해 모집 글에서 선수들을 멘션하지 못했어요. 리그 관리자에게 알려 주세요(`/선수역할` 로 다시 정합니다)."
+            return "" if missing == NO_ALERT_ROLE and not bot.alert_role_id else f"모집 글에서 아무도 부르지 않았어요. 리그 관리자에게 알려 주세요: {missing}"
         signup = await get_channel(SIGNUP_CHANNEL_ID)
         place = rec.thread or signup
-        mentions = discord.AllowedMentions(everyone=False, users=False, roles=[discord.Object(id=role_id)])
-        await place.send(f"{actor}: <@&{role_id}> 내전 모집이 열렸어요! 여기에서 `/참여` 로 신청하세요.", allowed_mentions=mentions)
+        mentions = discord.AllowedMentions(everyone=False, users=False, roles=[discord.Object(id=role.id)])
+        await place.send(f"{actor}: <@&{role.id}> 내전 모집이 열렸어요! 여기에서 `/참여` 로 신청하세요.", allowed_mentions=mentions)
     except discord.HTTPException as e:
-        print(f"모집 글에서 리그 선수 역할을 멘션하지 못했습니다: {e}")
-        return f"모집 글에서 리그 선수 역할을 멘션하지 못했어요. 선수들에게 알림이 가지 않았어요. ({e})"
+        print(f"모집 글에서 내전 알림 역할을 멘션하지 못했습니다: {e}")
+        return f"모집 글에서 내전 알림 역할을 멘션하지 못했어요. 선수들에게 알림이 가지 않았어요. ({e})"
     return silent_ping(guild, role, signup) or crowded_role()
+
+
+async def alert_trouble(problem: str) -> None:
+    """'내전 알림' 역할을 주고 빼지 못한 까닭을 운영진 채널에 알린다. 같은 문제는 한 번만"""
+    if problem != bot.alert_note:
+        bot.alert_note = problem
+        await tell_admins(f"🔔 선수가 `/내전알림` 을 썼지만 **{ALERT_ROLE_NAME}** 역할을 주고 빼지 못했어요. {problem}")
 
 
 async def find_member(guild: discord.Guild, name: str) -> discord.Member | None:
@@ -1426,6 +1573,10 @@ async def sync_roles(force: bool = False) -> dict:
         out["problem"] = role_problem(guild, role)
         if out["problem"]:
             return out
+        # 승인을 푼 선수에게서는 '내전 알림' 역할도 뺀다(리그 선수가 아니면 /내전알림 도 쓸 수 없다). 봇이 그 역할을 다룰 수 있을 때만
+        alert = alert_role(guild)[0]
+        if alert is not None and role_problem(guild, alert):
+            alert = None
 
         season, no = str(data.get("season") or ""), data.get("seasonNo")
         if not isinstance(no, int):  # 시즌 번호를 주지 않는 예전 서버: 이름이 바뀌면 명단을 처음부터 다시 맞추기만 한다
@@ -1472,8 +1623,11 @@ async def sync_roles(force: bool = False) -> dict:
                     await member.add_roles(role, reason="인하우스 리그 등록 승인")
                     out["added"].append(member)
                 elif status != "승인" and role in member.roles:
-                    await member.remove_roles(role, reason="인하우스 리그 등록 " + ("제외" if status == "제외" else "승인 취소(대기)"))
+                    gone = [role] + ([alert] if alert is not None and alert in member.roles else [])
+                    await member.remove_roles(*gone, reason="인하우스 리그 등록 " + ("제외" if status == "제외" else "승인 취소(대기)"))
                     out["removed"].append(member)
+                    if alert in gone:
+                        bot.alert_members.discard(member.id)
             except discord.Forbidden:
                 out["problem"] = "역할을 바꿀 권한이 없어요. 봇에 **역할 관리** 권한이 있는지, 봇의 역할이 그 역할보다 위에 있는지 확인해 주세요."
                 break
@@ -1898,7 +2052,8 @@ async def cancel(interaction: discord.Interaction) -> None:
             await answer(interaction, f"{actor}님, 이미 경기 결과를 기록한 내전이에요. 결과를 되돌리려면 `/승리취소` 를 쓰세요.")
             return
         await cancel_recruitment(rec, by=interaction.user.id)
-    await answer(interaction, f"{actor}님이 내전을 취소했어요." + (f" {rec.message.jump_url}" if rec.message else ""))
+    await answer(interaction, f"{actor}님이 내전을 취소했어요." + (f" {rec.message.jump_url}" if rec.message else "")
+                 + (f" 이 글은 {minutes_text(TIDY_SECONDS)} 뒤에 지워져요." if rec.delete_at else ""))
 
 
 @bot.tree.command(
@@ -2076,13 +2231,15 @@ async def record_win(interaction: discord.Interaction, team: str) -> None:
         more = f"\n결과를 기다리는 판이 {len(others)}개 더 있어요. 그 내전의 글에서 `/승리` 로 정리해 주세요: {links(others)}" if others else ""
         if team == "x":
             # 팀만 짜고 열리지 않은 판은 기록 없이 치운다. 그대로 두면 이 판의 열 명이 오늘 뛴 사람으로 남고, 다른 내전에 참여하지 못한다
+            shut = close_later(entry)
             await clear_entry(entry)
-            await send_to(entry["place_id"], f"{actor}님이 이 판을 경기 없이 정리했어요. 결과는 기록되지 않습니다.")
+            await send_to(entry["place_id"], f"{actor}님이 이 판을 경기 없이 정리했어요. 결과는 기록되지 않습니다.{shut}")
             await answer(interaction, f"{actor}님이 <#{entry['place_id']}> 의 판을 경기 없이 정리했어요. 결과와 MMR은 바뀌지 않습니다.{more}")
             return
         try:
             result = await change_league({"mode": "result", "lanes": entry["lanes"], "winner": team}, entry.setdefault("tried", []), entry)
         except SeasonOver as e:  # 이 시즌의 경기가 아니다. 기록하지 않고 이 판을 치운다
+            shut = close_later(entry)
             await clear_entry(entry)
             if e.why == "changed":
                 public = f"{actor}님이 결과를 입력했지만, 이 경기의 팀을 짠 뒤에 새 시즌이 시작돼서 기록하지 않았어요. 순위와 MMR은 바뀌지 않습니다."
@@ -2093,7 +2250,7 @@ async def record_win(interaction: discord.Interaction, team: str) -> None:
                 public = f"{actor}님이 결과를 입력했지만, 이 경기는 시즌 종료({end}) 뒤에 시작해서 기록하지 않았어요. 순위와 MMR은 바뀌지 않습니다."
                 mine = (f"{actor}님, 이 경기는 시즌 종료({end}) 뒤에 시작한 경기라 결과를 기록하지 않았어요. 순위와 MMR은 바뀌지 않고, 이 판은 정리했어요. "
                         "시즌 종료 날짜가 잘못돼 있다면 리그 관리자에게 알려 주세요.")
-            await send_to(entry["place_id"], public)
+            await send_to(entry["place_id"], public + shut)
             await answer(interaction, mine + more)
             return
         except ServerGlitch as e:  # 서버가 답하지 않았다. 올린 기록이 들어갔는지 모른다
@@ -2108,14 +2265,17 @@ async def record_win(interaction: discord.Interaction, team: str) -> None:
         # 앞서 올리고 답을 받지 못한 기록이 서버에 들어가 있었으면, 그때 고른 팀이 기록돼 있다
         winner = result["match"].get("winner") if result["match"].get("winner") in ("r", "d") else team
         entry["result"] = {"winner": winner, "match_id": result["match"]["id"]}
+        shut = close_later(entry)  # 결과를 기록한 내전의 글은 10분 뒤에 잠그고 닫는다
         save_state()
         text = f"{actor}님이 경기 결과를 기록했어요.\n" + result_text(winner, result["changes"], entry.get("who") or {})
-        await send_to(entry["place_id"], text)
+        await send_to(entry["place_id"], text + shut)
         await oracle.on_result(entry, winner)  # 오라클 봇이 승부 예측을 정산한다
         if winner != team:
             more = ("\n⚠️ 이 판은 앞서 입력한 대로 이미 기록돼 있었어요(그때는 서버의 답을 받지 못했습니다). 지금 고른 팀과 다르니, "
                     "바꾸려면 `/승리취소` 로 되돌린 뒤 다시 기록하세요." + more)
-    await answer(interaction, f"{text}\n\n순위 페이지와 구글 시트에 반영했어요. 잘못 기록했다면 `/승리취소` 로 되돌릴 수 있어요.{more}")
+    undo = (f"잘못 기록했다면 이 글이 닫히기 전({minutes_text(TIDY_SECONDS)} 안)에 그 글에서 `/승리취소` 로 되돌릴 수 있어요." if shut
+            else "잘못 기록했다면 `/승리취소` 로 되돌릴 수 있어요.")
+    await answer(interaction, f"{text}\n\n순위 페이지와 구글 시트에 반영했어요. {undo}{more}")
 
 
 async def undo_blocked(interaction: discord.Interaction, actor: str, match_ids: list[str]) -> None:
@@ -2169,6 +2329,9 @@ async def undo_win(interaction: discord.Interaction) -> None:
             await answer(interaction, f"{actor}님, 결과를 되돌리지 못했어요. 리그 관리자에게 리그 매니저로 고쳐 달라고 알려 주세요. ({e})")
             return
         entry["result"] = None
+        rec = rec_of(entry)
+        if rec is not None:  # 결과를 다시 기록할 수 있게 글을 닫지 않는다(이미 닫았으면 다시 연다). 다시 기록하면 그때부터 10분 뒤에 닫는다
+            await reopen_post(rec)
         save_state()
         await send_to(entry["place_id"], f"{actor}님이 경기 결과 기록을 취소했어요. MMR과 전적을 기록하기 전으로 되돌렸어요.")
         await oracle.on_undo(entry)  # 오라클 봇이 승부 예측의 정산을 되돌린다
@@ -2364,6 +2527,46 @@ async def player_only(interaction: discord.Interaction) -> bool:
         return True
     await interaction.response.send_message(PLAYER_ONLY, ephemeral=True)
     return False
+
+
+@bot.tree.command(name="내전알림", description="내전 모집 글이 올라올 때 알림을 받을지 켜고 끕니다. 한 번 입력하면 켜지고, 다시 입력하면 꺼집니다 (리그 선수)", guild=GUILD)
+async def toggle_alert(interaction: discord.Interaction) -> None:
+    """/내전알림 (운영자가 2026-10-21에 요청): 입력한 사람에게 '내전 알림' 역할을 주거나, 있으면 뺀다. /내전생성 이 모집 글에서 이 역할을 멘션한다.
+    쓸 수 있는 사람은 /참여·/내전하자 와 같다(player_only). 답은 본인에게만 보인다"""
+    if not await player_only(interaction):
+        return
+    await interaction.response.defer(ephemeral=True)  # 디스코드에 역할을 바꾸는 데 3초를 넘길 수 있다
+    user = interaction.user
+    busy = "지금은 내전 알림을 켜고 끌 수 없어요. 리그 관리자에게 알려 주세요."
+    try:
+        guild = await get_guild()
+        role, problem = alert_role(guild)
+        problem = problem or role_problem(guild, role)
+        if problem:
+            await alert_trouble(problem)
+            await interaction.followup.send(busy, ephemeral=True)
+            return
+        on = not any(r.id == role.id for r in user.roles)
+        if on:
+            await user.add_roles(role, reason="/내전알림: 내전 모집 알림 켜기")
+            bot.alert_members.add(user.id)
+        else:
+            await user.remove_roles(role, reason="/내전알림: 내전 모집 알림 끄기")
+            bot.alert_members.discard(user.id)
+    except discord.Forbidden:
+        await alert_trouble(f"봇의 역할에 **역할 관리** 권한이 있는지, 봇의 역할이 **{ALERT_ROLE_NAME}** 역할보다 위에 있는지 확인해 주세요.")
+        await interaction.followup.send(busy, ephemeral=True)
+        return
+    except discord.HTTPException as e:
+        print(f"/내전알림 을 처리하지 못했습니다: {e}")
+        await interaction.followup.send("디스코드가 답하지 않아 바꾸지 못했어요. 잠시 뒤에 다시 입력해 주세요.", ephemeral=True)
+        return
+    bot.alert_note = ""
+    save_state()
+    await interaction.followup.send(
+        f"🔔 **{ALERT_ROLE_NAME}**을 켰어요. 이제 내전 모집 글이 올라오면 알림을 받아요. 끄려면 `/내전알림` 을 한 번 더 입력하세요." if on
+        else f"🔕 **{ALERT_ROLE_NAME}**을 껐어요. 이제 내전 모집 글이 올라와도 알림이 가지 않아요. 다시 받으려면 `/내전알림` 을 한 번 더 입력하세요.",
+        ephemeral=True)
 
 
 def want_problem(guild: discord.Guild) -> str:
@@ -2715,6 +2918,7 @@ async def show_help(interaction: discord.Interaction) -> None:
                  f"`/내전하자` — {where}지금 내전을 하고 싶다고 알려요. 대화방의 모집판에 이름이 올라가고 한 시간 동안 유지돼요. "
                  f"모집판의 **참여 희망** 버튼을 눌러도 돼요. {PLAYERS_NEEDED}명이 모이면 리그 운영진에게 알려요.\n"
                  "`/포지션변경` — 등록한 포지션 순서를 바꿔요. 1지망부터 차례로 골라요.\n"
+                 "`/내전알림` — 내전 모집 글이 올라올 때 알림을 받을지 켜고 꺼요. 한 번 입력하면 켜지고, 다시 입력하면 꺼져요.\n"
                  "`/도움말` — 이 안내를 다시 봐요.")
     if staff:
         parts.append("**리그 운영진**\n"
@@ -2723,11 +2927,11 @@ async def show_help(interaction: discord.Interaction) -> None:
                      "`/마감` — 지금까지 모인 인원으로 바로 마감해요.\n"
                      f"`/연장` — 마감을 {minutes_text(EXTEND_SECONDS)} 뒤로 미뤄요. 마감한 뒤에도 다시 열 수 있어요.\n"
                      f"`/재모집` — 모인 사람을 모두 참여 취소로 돌리고 {minutes_text(RESTART_SECONDS)} 동안 처음부터 다시 받아요.\n"
-                     "`/취소` — 이 내전을 취소해요.\n"
+                     f"`/취소` — 이 내전을 취소해요. 글은 {minutes_text(TIDY_SECONDS)} 뒤에 지워져요.\n"
                      "`/시작` — 로비 음성 채널에 있는 이 내전의 선수를 팀 음성 채널로 옮겨요.\n"
                      "`/종료` — 이 내전의 팀 음성 채널에 있는 사람을 모두 로비로 옮겨요.\n"
-                     "`/승리` — 이긴 팀을 골라 결과를 기록해요. 열리지 않은 판은 **경기 안 함**으로 치워요.\n"
-                     "`/승리취소` — 이 내전에 기록한 결과를 되돌려요.")
+                     f"`/승리` — 이긴 팀을 골라 결과를 기록해요. 열리지 않은 판은 **경기 안 함**으로 치워요. 글은 {minutes_text(TIDY_SECONDS)} 뒤에 잠기고 닫혀요.\n"
+                     "`/승리취소` — 이 내전에 기록한 결과를 되돌려요. 글이 닫히기 전에 써요.")
     if manager:
         parts.append(f"**리그 관리자** (<#{ADMIN_CHANNEL_ID}> 에서 써요)\n"
                      "`/선수역할` — 승인한 선수에게 자동으로 줄 역할을 정해요.\n"

@@ -183,14 +183,22 @@ details.by-file[open] summary{margin-bottom:10px}
       </div>
       <p class="season-note" id="oracleNote" hidden>오라클 봇은 내전의 <b>승부 예측</b>(포인트 걸기)을 맡는 봇입니다. 켜고 끄는 것은 <b>5분 안에</b> 봇에 반영됩니다.
         끄면 새 승부 예측이 열리지 않고 포인트 받기와 걸기가 멈춥니다. 이미 받고 있거나 결과를 기다리는 판은 끝까지 처리합니다(마감, 정산, 돌려주기).
-        주인 키로만 바꿀 수 있습니다. <a href="rank/oracle.html">승부의 신 랭킹 보기</a></p>
+        주인 키로만 바꿀 수 있습니다. <a href="rank/oracle.html">승부의 신 랭킹 보기</a>
+        <span id="oracleSheetNote" hidden>모든 사람의 포인트 기록은 구글 시트의 <b>승부 예측 포인트</b> 탭과, 등록 탭의 <b>승부예측포인트</b> 칸에서도 볼 수 있습니다(보기용. 오라클 봇이 포인트가 바뀔 때마다 다시 씁니다).</span></p>
       <div class="season-row" id="oraclePlayRow" hidden>
         <label for="oraclePlay" class="dim" style="font-size:13.5px">참가 포인트</label>
         <input type="number" id="oraclePlay" min="0" max="10000" step="10" inputmode="numeric" aria-describedby="oraclePlayState">
         <button class="btn sm" type="button" id="btnOraclePlay">저장</button>
         <span class="state" id="oraclePlayState"></span>
       </div>
+      <div class="season-row" id="oracleFirstRow" hidden>
+        <label for="oracleFirst" class="dim" style="font-size:13.5px">첫 내전 참가 포인트</label>
+        <input type="number" id="oracleFirst" min="0" max="10000" step="10" inputmode="numeric" aria-describedby="oracleFirstState">
+        <button class="btn sm" type="button" id="btnOracleFirst">저장</button>
+        <span class="state" id="oracleFirstState"></span>
+      </div>
       <p class="season-note" id="oraclePlayNote" hidden><b>참가 포인트</b>는 내전의 결과가 기록될 때 그 판에 뛴 선수 열 명이 <b>승패와 상관없이</b> 받는 포인트입니다(쉬는 사람은 받지 않습니다).
+        <span id="oracleFirstNote" hidden><b>첫 내전 참가 포인트</b>는 그날(오전 6시에 바뀝니다) 결과가 가장 먼저 기록된 내전에 뛴 선수가 참가 포인트 대신 받는 포인트입니다. 보통 내전과 같게 하려면 같은 값을 넣으세요.</span>
         바꾸면 <b>5분 안에</b> 봇에 반영되고, 그 뒤에 기록되는 결과부터 새 값으로 줍니다. 이미 준 포인트는 그대로입니다. 0으로 두면 주지 않습니다.
         주인 키로만 바꿀 수 있습니다.</p>
       <div class="season-row" id="oracleResetRow" hidden>
@@ -421,6 +429,7 @@ details.by-file[open] summary{margin-bottom:10px}
     // 오라클 봇(서버 버전 18): 주인 키로만 켜고 끈다. 봇은 이 값을 5분마다 읽으러 오고, 서버는 봇이 마지막으로 다녀간 때를 알려 준다
     const canOracle = owner && (status.version || 0) >= 18;
     $('#oracleRow').hidden = !canOracle; $('#oracleNote').hidden = !canOracle;
+    $('#oracleSheetNote').hidden = (status.version || 0) < 21;
     $('#oraclePill').textContent = status.oracleOn ? '켜짐' : '꺼짐';
     $('#oraclePill').className = 'pill ' + (status.oracleOn ? 'on' : 'off');
     $('#btnOracle').textContent = status.oracleOn ? '오라클 봇 끄기' : '오라클 봇 켜기';
@@ -435,6 +444,14 @@ details.by-file[open] summary{margin-bottom:10px}
     $('#oraclePlayState').textContent = play
       ? '결과가 기록되면 그 판에 뛴 선수 열 명이 ' + play.toLocaleString('ko-KR') + ' 포인트씩 받습니다.'
       : '지금은 참가 포인트를 주지 않습니다(0).';
+    // 그날의 첫 내전의 참가 포인트(서버 버전 21): 주인 키로만 바꾼다
+    const canFirst = owner && (status.version || 0) >= 21;
+    const first = Number.isInteger(status.oracleFirst) && status.oracleFirst > 0 ? status.oracleFirst : 0;
+    $('#oracleFirstRow').hidden = !canFirst; $('#oracleFirstNote').hidden = !canFirst;
+    if(document.activeElement !== $('#oracleFirst')) $('#oracleFirst').value = first;
+    $('#oracleFirstState').textContent = first
+      ? '그날 결과가 가장 먼저 기록된 내전에 뛴 선수 열 명이 ' + first.toLocaleString('ko-KR') + ' 포인트씩 받습니다.'
+      : '그날의 첫 내전에도 참가 포인트를 주지 않습니다(0).';
     // 승부 예측 포인트 초기화(서버 버전 20): 주인 키로만. 서버는 누른 때를 적어 두고, 봇이 그것을 보고 포인트를 지운다
     const canReset = owner && (status.version || 0) >= 20;
     const resetAt = status.oracleResetAt || '';
@@ -516,6 +533,26 @@ details.by-file[open] summary{margin-bottom:10px}
     finally{ $('#btnOraclePlay').disabled = false; }
   });
   $('#oraclePlay').addEventListener('keydown', e => { if(e.key === 'Enter'){ e.preventDefault(); $('#btnOraclePlay').click(); } });
+  /* ---------- 첫 내전 참가 포인트: 그날 결과가 가장 먼저 기록된 내전에 뛴 선수가 받는 포인트 (주인 키로만) ---------- */
+  $('#btnOracleFirst').addEventListener('click', async () => {
+    const raw = $('#oracleFirst').value.trim();
+    const n = /^\d+$/.test(raw) ? Number(raw) : NaN;
+    if(!(Number.isInteger(n) && n <= 10000)){
+      toast('첫 내전 참가 포인트는 0부터 10000까지의 숫자로 적어 주세요. 0이면 주지 않습니다.');
+      $('#oracleFirst').focus();
+      return;
+    }
+    $('#btnOracleFirst').disabled = true;
+    try{
+      status = await adminPost({action: 'adminConfig', oracleFirst: n});
+      $('#oracleFirst').blur();
+      renderStatus();
+      toast(n ? '그날의 첫 내전에 ' + n.toLocaleString('ko-KR') + ' 포인트를 주기로 했습니다. 5분 안에 봇에 반영됩니다.'
+              : '그날의 첫 내전에도 참가 포인트를 주지 않기로 했습니다. 5분 안에 봇에 반영됩니다.', 5000);
+    }catch(err){ toast(err.message); }
+    finally{ $('#btnOracleFirst').disabled = false; }
+  });
+  $('#oracleFirst').addEventListener('keydown', e => { if(e.key === 'Enter'){ e.preventDefault(); $('#btnOracleFirst').click(); } });
   /* ---------- 승부 예측 포인트 초기화: 주인 키로만. 되돌릴 수 없어서 확인 문구를 직접 입력해야 한다 (서버도 확인한다) ---------- */
   const RESET_WORD = '포인트 초기화';
   $('#btnOracleReset').addEventListener('click', async () => {
