@@ -21,6 +21,9 @@
 - 참가 포인트(서버 버전 19, 운영자가 2026-10-13에 요청): 결과가 기록되면 그 판에 뛴 선수 열 명이 승패와 상관없이 포인트를 받는다.
   처음에는 한 판에 100이고 주인이 리그 관리자 페이지에서 바꾼다(0이면 주지 않는다). /승리취소 면 거두고, 다시 기록되면 다시 준다.
   그날의 첫 내전(하루는 한국 시간 오전 6시에 바뀐다)은 300을 준다(서버 버전 21, 운영자가 2026-10-21에 요청. 이것도 주인이 바꾼다).
+- 시간 등록 포인트(서버 버전 22, 운영자가 2026-10-23에 요청): 선수가 퍼그나봇의 /시간등록 링크로 내전 가능 시간을 처음 저장하면 처음 등록 포인트를,
+  시간 등록 이벤트 기간에 저장하면 이벤트 포인트를 받는다. 리그 서버가 줄 포인트를 적어 두었다가 5분마다 확인할 때 알려 주고, 오라클 봇이 넣는다(take_grants).
+  주인이 꺼 둔 동안에는 넣지 않고 서버에 남겨 둔다. 랭킹에 오르는 기준(listed)은 바꾸지 않는다(참가 포인트처럼 쌓이기만 한다).
 
 이 파일은 bot.py 를 불러오지 않는다(bot.py 가 이 파일을 불러와 setup 으로 필요한 것을 넘겨준다). 그래서 따로 시험할 수 있다(tests/oracle.test.py).
 """
@@ -47,6 +50,7 @@ POST_RETRY = 600          # 올리지 못한 글을 이만큼 뒤에 다시 올�
 PUBLISH_GAP = 20          # 순위를 서버에 올린 뒤 이만큼은 다시 올리지 않는다 (포인트 받기가 몰릴 때 한 번에 올리려고)
 PUBLISH_RETRY = 600       # 서버에 올리지 못했으면 이만큼 뒤에 다시 올린다
 SWITCH_POLL = 300         # 주인이 켜 두었는지를 리그 서버에 이만큼마다 물어본다
+GRANT_KEEP = 30 * 86400   # 넣은 시간 등록 포인트를 이만큼 기억한다 (서버가 같은 것을 다시 알려 와도 두 번 넣지 않게)
 PLAY_POINTS = 100         # 참가 포인트의 처음 값: 결과가 기록되면 그 판에 뛴 선수가 승패와 상관없이 받는다 (주인이 리그 관리자 페이지에서 바꾼다)
 FIRST_POINTS = 300        # 그날의 첫 내전에 뛴 선수가 받는 참가 포인트의 처음 값 (주인이 리그 관리자 페이지에서 바꾼다)
 PLAY_MAX = 10000          # 참가 포인트로 받아들이는 가장 큰 값 (리그 서버와 같다)
@@ -88,6 +92,9 @@ class State:
         self.publish_at = 0.0           # 이 시각 전에는 서버에 올리지 않는다
         self.notes: set[str] = set()    # 창에 한 번 찍은 문제. 같은 문제를 되풀이해 찍지 않는다
         self.looked: set[str] = set()   # 이름을 디스코드에 물어본 계정 (켠 동안 한 사람에 한 번만 묻는다. fill_names)
+        # 넣은 시간 등록 포인트 {이름(디스코드 ID:first 또는 디스코드 ID:이벤트 id): 넣은 시각}. 리그 서버가 같은 것을 다시 알려 와도 두 번 넣지 않는다.
+        # 포인트 초기화로도 지우지 않는다(지우면 초기화 전에 받은 처음 등록 포인트를 다시 받을 수 있다)
+        self.granted: dict[str, float] = {}
 
 
 S = State()
@@ -130,7 +137,7 @@ def signed(n: int) -> str:
 # ── 상태 파일 ─────────────────────────────────────────────────
 def snapshot() -> dict:
     return {"on": S.on, "play": S.play, "first_play": S.first_play, "reset": S.reset, "channel_id": S.channel_id, "round": S.round,
-            "accounts": S.accounts, "books": S.books, "dirty": S.dirty}
+            "accounts": S.accounts, "books": S.books, "dirty": S.dirty, "granted": S.granted}
 
 
 def save() -> None:
@@ -205,6 +212,8 @@ def adopt(data: dict) -> None:
             if uid in S.accounts:
                 S.accounts[uid]["listed"] = True
     S.dirty = bool(data.get("dirty"))
+    granted = data.get("granted") if isinstance(data.get("granted"), dict) else {}
+    S.granted = {str(k): float(v) for k, v in granted.items() if isinstance(v, (int, float)) and not isinstance(v, bool)}
 
 
 def load() -> bool:
@@ -265,6 +274,45 @@ async def check_switch(force: bool = False) -> None:
         hear(got["oracleOn"], got.get("oraclePlay"), got.get("oracleReset"), got.get("oracleFirst"))
     else:  # 예전 서버(버전 17까지)는 이 값을 모른다
         note("오라클: 리그 서버가 오라클 봇을 켜 두었는지 알려 주지 않습니다(서버 버전 18부터). Code.gs 를 새 버전으로 배포하기 전에는 꺼진 채로 둡니다.")
+    await take_grants(got.get("timeGrants"))
+
+
+async def take_grants(grants) -> None:
+    """리그 서버가 알려 온 시간 등록 포인트(서버 버전 22)를 넣고, 넣었다고 서버에 알린다(서버가 지운다).
+    grants: [{"g": 이름, "id": 디스코드 ID, "u": 사용자명, "n": 이름, "p": 포인트, "k": "first"|"event"}].
+    주인이 꺼 둔 동안에는 넣지 않는다(서버에 그대로 남아 있다가 켜진 뒤에 들어간다). 이미 넣은 것(granted)은 다시 넣지 않고 알리기만 한다.
+    서버에 알리지 못하면 다음에 같은 것이 다시 오고, 그때 다시 알린다"""
+    if not isinstance(grants, list) or not grants or not S.on:
+        return
+    done, added, people = [], 0, set()
+    for g in grants:
+        if not isinstance(g, dict):
+            continue
+        gid, uid, amount = str(g.get("g") or ""), str(g.get("id") or ""), play_amount(g.get("p"))
+        if not gid or not uid.isdigit() or amount is None:
+            continue
+        done.append(gid)
+        if gid in S.granted:
+            continue
+        acc = account(int(uid))
+        acc["username"] = acc["username"] or str(g.get("u") or "")
+        acc["name"] = acc["name"] or str(g.get("n") or "")
+        acc["points"] += amount
+        S.granted[gid] = now()
+        added += amount
+        people.add(uid)
+    if not done:
+        return
+    keep_from = now() - GRANT_KEEP
+    S.granted = {k: v for k, v in S.granted.items() if v >= keep_from}
+    if added:
+        S.dirty = True
+        print(f"[{datetime.fromtimestamp(now(), KST):%m-%d %H:%M}] 오라클 봇: 시간 등록 포인트를 {len(people)}명에게 넣었습니다 (모두 {added:,} 포인트).")
+    save()
+    try:
+        await S.host.server({"action": "adminTimeAck", "grants": done})
+    except Exception as e:
+        note(f"오라클: 시간 등록 포인트를 넣었다고 리그 서버에 알리지 못했습니다. 다음 확인 때 다시 알립니다(두 번 넣지는 않습니다). ({e})")
 
 
 # ── 포인트 ────────────────────────────────────────────────────

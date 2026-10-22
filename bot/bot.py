@@ -16,7 +16,7 @@
   (운영진 채널에서 입력하면 가리키는 내전이 하나뿐일 때만 적용하고, 여러 개면 글에서 입력하라고 알려 준다)
 - /마감 (지금 인원으로 바로 마감), /연장 (마감을 5분 뒤로, 마감한 뒤에도 가능), /재모집 (참여 신청을 모두 비우고 5분 동안 다시 모집), /취소 (내전 취소)
 - 한 사람은 한 번에 한 내전에만 들어간다: 모집 중인 다른 내전에 신청해 둔 사람과, 결과가 아직 기록되지 않은 판에서 뛰는 사람은 /참여 를 받지 않는다
-- 선수가 쓰는 명령어(/참여, /참여취소, /내전하자, /포지션변경, /도움말)는 리그 선수 역할이 있는 사람과 리그 운영진·리그 관리자만 쓴다
+- 선수가 쓰는 명령어(/참여, /참여취소, /내전하자, /포지션변경, /내전알림, /시간등록, /도움말)는 리그 선수 역할이 있는 사람과 리그 운영진·리그 관리자만 쓴다
 - 경기가 끝나면 /승리 (이긴 팀을 골라 결과 기록과 MMR 정산), /승리취소 (그 내전에 기록한 결과 되돌리기)
   · 정산도 리그 매니저의 로직 그대로 한다. 리그 기록의 원본은 서버에 있고, 봇은 받아서 고친 뒤 다시 올린다
   · /승리취소 는 그 판의 선수가 그 뒤에 기록된 경기에 뛰지 않았을 때만 된다. 뛰었으면 그 경기부터 되돌리라고 알리고 리그 관리자 역할을 부른다
@@ -33,6 +33,8 @@
   (대화방과 알릴 역할은 리그 관리자가 /내전하자설정 으로 정한다)
   · 대화방에 모집판(기다리는 사람들과 '참여 희망' 버튼이 있는 글)을 하나 둔다. 버튼을 누르면 /내전하자 와 같고, 누른 사람에게만 '참여 취소' 버튼이 보인다
 - /도움말  → 입력한 사람이 쓸 수 있는 명령어만 본인에게 보여 줌
+- /시간등록  → 내전에 참여할 수 있는 시간을 칠하는 사이트 페이지의 개인 링크를 본인에게만 줌 (참여 신청이 아니라 사전 시간 조사)
+  · 저장하면 그 답을 "참여 가능 시간 등록을 해주셔서 감사합니다…"로 바꾼다. 받을 포인트는 오라클 봇이 넣는다 (리그 서버 버전 22)
 - 리그 관리자 페이지에서 시즌 종료 날짜를 정해 두면, 그날 0시 전에 시작한 경기까지만 결과를 기록한다 (끝난 시각이 그 뒤여도 그 경기는 기록한다)
   · 경기를 시작한 시각은 /시작 을 처음 쓴 때이고, 쓰지 않았으면 팀을 짠 때다. 시즌이 끝난 뒤의 내전은 열 수 있지만 결과는 기록하지 않는다
 - 진행 중인 모집과 역할 설정은 state.json 에 적어 두어, 봇을 껐다 켜도 이어짐
@@ -92,6 +94,8 @@ ALERT_ROLE_NAME = "내전 알림"
 # 오라클 봇(승부 예측)의 토큰. 넣어 두면 퍼그나봇과 함께 켜진다. 비워 두면 퍼그나봇만 돈다
 ORACLE_TOKEN = str(config.get("oracle_token", "") or "").strip()
 ORACLE_PAGE = str(config.get("oracle_page", "") or "").strip()  # 포인트 순위 페이지의 주소. 오라클 봇이 정산 글에 적는다
+# 리그 사이트(GitHub Pages)의 주소. /시간등록 의 개인 링크(…/time/)에 쓴다. 비워 두면 oracle_page(…/rank/oracle.html)에서 알아낸다
+SITE_URL = str(config.get("site_url", "") or "").strip()
 ROLE_POLL_SECONDS = 300  # 등록 명단의 승인·제외를 이만큼마다 확인한다. 1분이었는데, 급할 것이 없어 구글 서버에 묻는 횟수를 줄였다(2026-10-11)
 ROLE_RETRY_SECONDS = 600  # 서버에서 찾지 못한 사람은 이만큼 지난 뒤에 다시 찾아본다
 ROLE_BATCH = 30  # 한 번에 찾아볼 사람 수. 디스코드에 몰아서 묻지 않게 나눠 한다
@@ -123,6 +127,20 @@ ROLE_PING_LIMIT = 100
 # 결과를 기록한(또는 경기 없이 정리한) 내전의 글은 이만큼 뒤에 잠그고 닫고, 취소한 내전의 글은 이만큼 뒤에 지운다 (운영자가 2026-10-21에 요청)
 TIDY_SECONDS = 600
 TIDY_TICK_SECONDS = 30  # 정리할 글이 있는지 이만큼마다 본다
+# /시간등록 의 답은 디스코드가 15분 동안만 고치게 한다. 그동안 그 사람이 시간표를 저장했는지 이만큼마다 리그 서버에 묻는다
+TIME_WAIT_SECONDS = 14 * 60
+TIME_TICK_SECONDS = 20
+
+
+def site_root() -> str:
+    """리그 사이트의 뿌리 주소(끝이 /). config.json 의 site_url, 없으면 oracle_page 에서 알아낸다. 모르면 빈 글"""
+    if SITE_URL:
+        return SITE_URL if SITE_URL.endswith("/") else SITE_URL + "/"
+    m = re.match(r"^(https?://\S+?/)(?:rank/)?oracle\.html$", ORACLE_PAGE)
+    return m.group(1) if m else ""
+
+
+TIME_PAGE = site_root() + "time/" if site_root() else ""  # /시간등록 의 개인 링크가 여는 페이지
 
 
 # ── 모집 상태 ────────────────────────────────────────────────
@@ -233,6 +251,11 @@ class InhouseBot(discord.Client):
         # 결과를 기록할 때는 그 자리에서 다시 받아 확인하고, 여기 적어 둔 값은 내전을 열 때와 팀을 알릴 때의 안내에 쓴다
         self.season_no: int | None = None
         self.season_end = 0.0
+        # /시간등록 으로 링크를 받은 사람 {디스코드 ID: {"interaction", "since": 링크를 만든 때(서버 시각, 밀리초), "until", "token"}}.
+        # 그 사람이 저장하면 그 답을 고치고 잊는다. 디스코드가 답을 고치게 하는 15분이 지나도 잊는다(time_loop)
+        self.time_waits: dict[int, dict] = {}
+        self.time_note = ""  # 마지막으로 운영진 채널에 알린 /시간등록 의 문제 (같은 문제를 되풀이해 알리지 않게)
+        self.time_task: asyncio.Task | None = None
 
     @property
     def current(self) -> Recruitment | None:
@@ -273,10 +296,12 @@ class InhouseBot(discord.Client):
             print(f"모집 글에서 내전 알림 멘션(/내전생성·/내전알림): {await ping_status()}")
             print(f"내전하자(/내전하자): {await want_status()}")
             print(f"음성 채널 이동(/시작·/종료): {await voice_status()}")
+            print(f"내전 가능 시간(/시간등록): {time_status()}")
             print(f"오라클 봇(승부 예측): {oracle.status_line()}")
             self.role_task = asyncio.create_task(role_loop())
             self.want_task = asyncio.create_task(want_loop())
             self.tidy_task = asyncio.create_task(tidy_loop())
+            self.time_task = asyncio.create_task(time_loop())
 
 
 bot = InhouseBot()
@@ -869,7 +894,7 @@ class ServerGlitch(RuntimeError):
 # 다시 보내도 결과가 같은 요청(읽기, 통째로 덮어쓰는 명단·편성). 답을 받지 못하면 조금 기다렸다가 몇 번 더 보낸다.
 # 리그 기록 올리기(saveLeague)는 넣지 않는다. 처리됐는지 모르는 채 다시 보내면 같은 경기가 두 번 기록될 수 있어서 change_league 가 따로 확인한다.
 REPEATABLE = {"adminList", "adminLeague", "adminLeagueRev", "adminRoster", "adminLineup", "pushRoster", "pushLineup", "ping", "adminSetPrefs",
-              "saveOracle", "adminOracle"}
+              "saveOracle", "adminOracle", "adminTimeLink", "adminTimeSaved"}
 SERVER_TRIES = 3  # 한 요청을 몇 번까지 보낼지
 SERVER_WAIT = 3  # 다시 보내기 전에 기다리는 시간(초). 두 번째는 그 두 배
 
@@ -2908,11 +2933,137 @@ async def change_positions(interaction: discord.Interaction, first: app_commands
     await interaction.followup.send(f"✅ 포지션 순서를 바꿨어요.\n{order}\n{tail}", ephemeral=True)
 
 
+# ── /시간등록: 내전 가능 시간 조사 (운영자가 2026-10-23에 요청) ───────────
+# 선수가 내전에 참여할 수 있는 시간을 사이트의 시간표(오늘부터 7일, 오전 10시~다음 날 새벽 3시)에 칠해 두면, 리그 관리자가 사람이 가장 많은
+# 시간을 보고 내전을 연다. 참여 신청이 아니라 사전 시간 조사다. 봇은 본인에게만 보이는 개인 링크를 준다. 링크에는 리그 서버가 서명한 표시가 들어 있어,
+# 사이트에서 로그인하지 않아도 그 링크로 저장한 시간표는 그 디스코드 계정의 것이 된다(리그 서버 버전 22. 저장과 모아 보기는 서버와 사이트가 한다).
+# 처음 등록하면, 그리고 시간 등록 이벤트 기간이면 포인트를 받는다(오라클 봇이 넣는다). 저장하면 봇이 그 답을 감사 인사로 바꾼다(문구는 운영자가 정했다).
+def time_status() -> str:
+    """켤 때 창에 찍는 /시간등록 의 상태"""
+    if not (SYNC_URL and SYNC_KEY):
+        return "[확인 필요] 리그 서버 설정(sync_url, sync_key)이 없어 링크를 만들 수 없습니다"
+    if not TIME_PAGE:
+        return "[확인 필요] 사이트 주소를 몰라 링크를 만들 수 없습니다. config.json 에 site_url (예: https://아이디.github.io/저장소/)을 넣어 주세요"
+    return f"링크 {TIME_PAGE}"
+
+
+def time_day(day: str) -> str:
+    """'2026-10-31' → '10월 31일'"""
+    m = re.match(r"^\d{4}-(\d{2})-(\d{2})$", str(day or ""))
+    return f"{int(m.group(1))}월 {int(m.group(2))}일" if m else str(day or "")
+
+
+def time_view(token: str) -> discord.ui.View:
+    """개인 링크 버튼 (누르면 사이트의 시간표가 열린다)"""
+    view = discord.ui.View(timeout=None)
+    view.add_item(discord.ui.Button(label="내 가능 시간 칠하기", url=f"{TIME_PAGE}#t={token}"))
+    return view
+
+
+def time_link_text(name: str, link: dict) -> str:
+    """/시간등록 의 답. 받을 수 있는 포인트(처음 등록 포인트, 시간 등록 이벤트)가 있으면 함께 알린다"""
+    lines = ["🗓️ **내전 가능 시간**을 알려 주세요. 참여 신청이 아니라, 내전을 열기 좋은 시간을 찾기 위한 시간 조사예요.",
+             f"아래 버튼은 **{safe_name(name)}**님 전용 링크예요. 다른 사람에게 보내지 마세요."]
+    first = link.get("first")
+    if isinstance(first, int) and first > 0:
+        lines.append(f"🎁 **처음 등록하면 {first:,} 포인트를 드려요.**")
+    ev = link.get("event")
+    if isinstance(ev, dict) and isinstance(ev.get("points"), int) and ev["points"] > 0:
+        lines.append(f"🎁 **시간 등록 이벤트 · {time_day(ev.get('end'))}까지 한 번 저장하거나 확인하면 {ev['points']:,} 포인트를 드려요.**")
+    lines.append("-# 이 링크는 24시간 동안 쓸 수 있어요. 고치고 싶을 때는 언제든지 `/시간등록` 으로 새 링크를 받으세요.")
+    return "\n".join(lines)
+
+
+def time_thanks(gained: int) -> str:
+    """시간표를 저장한 뒤의 답 (운영자가 정한 문구. 사이트에서 저장했을 때의 안내와 같다). 받을 포인트가 없으면 앞 문장만"""
+    text = "참여 가능 시간 등록을 해주셔서 감사합니다."
+    return text + (f" **{gained:,} 포인트**는 이후 오라클 봇이 지급할 예정입니다." if gained > 0 else "")
+
+
+async def time_trouble(problem: str) -> None:
+    """/시간등록 의 링크를 만들지 못한 까닭을 운영진 채널에 알린다. 같은 문제는 한 번만"""
+    if problem != bot.time_note:
+        bot.time_note = problem
+        await tell_admins(f"🗓️ 선수가 `/시간등록` 을 썼지만 링크를 만들지 못했어요. {problem}")
+
+
+@bot.tree.command(name="시간등록", description="내전에 참여할 수 있는 시간을 칠하는 내 시간표 링크를 받습니다. 참여 신청이 아니라 시간 조사예요 (리그 선수)", guild=GUILD)
+async def time_link(interaction: discord.Interaction) -> None:
+    """/시간등록: 내 시간표를 칠하는 사이트 페이지의 개인 링크를 본인에게만 준다. 쓸 수 있는 사람은 /참여 와 같다(player_only)"""
+    if not await player_only(interaction):
+        return
+    if not (SYNC_URL and SYNC_KEY and TIME_PAGE):
+        await interaction.response.send_message("지금은 시간 등록 링크를 만들 수 없어요. 리그 관리자에게 알려 주세요.", ephemeral=True)
+        return
+    await interaction.response.defer(ephemeral=True)  # 서버에 다녀오는 데 3초를 넘길 수 있다
+    user = interaction.user
+    name = league_nickname(user.id, user.name) or getattr(user, "display_name", "") or str(user.name)
+    try:
+        link = await call_server({"action": "adminTimeLink", "discord": [str(user.id), str(user.name)], "name": str(name)})
+        if not isinstance(link.get("token"), str) or not link["token"]:
+            raise ServerError("리그 서버가 링크의 표시를 주지 않았습니다")
+    except ServerError as e:
+        print(f"/시간등록 의 링크를 만들지 못했습니다: {e!r}")
+        if "알 수 없는 요청" in str(e):
+            await time_trouble("리그 서버가 시간 등록을 모르는 예전 버전이에요. `Code.gs` 를 버전 22 이상으로 배포해 주세요.")
+        await interaction.followup.send("링크를 만들지 못했어요. 리그 관리자에게 알려 주세요.", ephemeral=True)
+        return
+    except Exception as e:  # 서버가 답하지 않았다. 다시 입력하면 된다
+        print(f"/시간등록 의 링크를 만들지 못했습니다: {e!r}")
+        await interaction.followup.send("리그 서버가 답하지 않아 링크를 만들지 못했어요. 잠시 뒤에 다시 입력해 주세요.", ephemeral=True)
+        return
+    await interaction.followup.send(time_link_text(str(name), link), view=time_view(link["token"]), ephemeral=True)
+    since = link.get("issued") if isinstance(link.get("issued"), (int, float)) else time.time() * 1000
+    bot.time_waits[user.id] = {"interaction": interaction, "since": since, "until": time.time() + TIME_WAIT_SECONDS, "token": link["token"]}
+
+
+def saved_ms(at) -> float:
+    """리그 서버가 적은 시각(ISO)을 밀리초로. 읽지 못하면 0"""
+    try:
+        return datetime.fromisoformat(str(at).replace("Z", "+00:00")).timestamp() * 1000
+    except ValueError:
+        return 0.0
+
+
+async def time_tick() -> None:
+    """/시간등록 으로 링크를 받은 사람이 그 뒤에 시간표를 저장했으면, 그 답을 감사 인사(받을 포인트와 함께)로 바꾼다"""
+    now = time.time()
+    for uid in [uid for uid, w in bot.time_waits.items() if now >= w["until"]]:
+        bot.time_waits.pop(uid, None)
+    if not bot.time_waits:
+        return
+    try:
+        got = await call_server({"action": "adminTimeSaved", "ids": [str(uid) for uid in bot.time_waits]})
+    except Exception as e:  # 다음 차례에 다시 묻는다
+        print(f"/시간등록 의 저장 여부를 확인하지 못했습니다. 다음 차례에 다시 확인합니다. ({e!r})")
+        return
+    saved = got.get("saved") if isinstance(got.get("saved"), dict) else {}
+    for uid, w in list(bot.time_waits.items()):
+        mine = [x for x in saved.get(str(uid)) or [] if isinstance(x, dict) and saved_ms(x.get("at")) >= w["since"]]
+        if not mine:
+            continue
+        bot.time_waits.pop(uid, None)  # 한 번만 고친다 (다시 저장해도 받은 포인트를 지우지 않게)
+        gained = sum(x["gained"] for x in mine if isinstance(x.get("gained"), int) and x["gained"] > 0)
+        try:
+            await w["interaction"].edit_original_response(content=time_thanks(gained), view=time_view(w["token"]))
+        except discord.HTTPException as e:
+            print(f"/시간등록 의 답을 고치지 못했습니다: {e}")
+
+
+async def time_loop() -> None:
+    while True:
+        try:
+            await time_tick()
+        except Exception as e:
+            print(f"/시간등록 의 답을 이번에는 고치지 못했습니다. 다음 차례에 다시 합니다. ({e!r})")
+        await asyncio.sleep(TIME_TICK_SECONDS)
+
+
 # ── /도움말: 내가 쓸 수 있는 명령어 ─────────────────────────────
 @bot.tree.command(name="도움말", description="내가 쓸 수 있는 퍼그나봇 명령어를 보여 줍니다", guild=GUILD)
 async def show_help(interaction: discord.Interaction) -> None:
     """입력한 사람의 자리(리그 관리자, 리그 운영진, 리그 선수)에 맞춰, 쓸 수 있는 명령어만 본인에게 보여 준다.
-    선수가 쓰는 명령어(/참여·/참여취소·/내전하자·/포지션변경·/도움말)는 모두 '리그 선수' 칸에 모은다
+    선수가 쓰는 명령어(/참여·/참여취소·/내전하자·/포지션변경·/내전알림·/시간등록·/도움말)는 모두 '리그 선수' 칸에 모은다
     (운영자가 2026-10-12에 정함. 전에는 /참여·/참여취소·/포지션변경·/도움말 이 '누구나' 칸에 있었다).
     이 명령어도 리그 선수 역할이 있는 사람만 쓴다(player_only)."""
     if not await player_only(interaction):
@@ -2934,6 +3085,7 @@ async def show_help(interaction: discord.Interaction) -> None:
                  f"모집판의 **참여 희망** 버튼을 눌러도 돼요. {PLAYERS_NEEDED}명이 모이면 리그 운영진에게 알려요.\n"
                  "`/포지션변경` — 등록한 포지션 순서를 바꿔요. 1지망부터 차례로 골라요.\n"
                  "`/내전알림` — 내전 모집 글이 올라올 때 알림을 받을지 켜고 꺼요. 한 번 입력하면 켜지고, 다시 입력하면 꺼져요.\n"
+                 "`/시간등록` — 내전에 참여할 수 있는 시간을 칠하는 내 시간표 링크를 받아요. 참여 신청이 아니라 시간 조사예요.\n"
                  "`/도움말` — 이 안내를 다시 봐요.")
     if staff:
         parts.append("**리그 운영진**\n"

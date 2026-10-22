@@ -12,12 +12,13 @@
  *  - 리그 관리자가 승인한 선수를 리그 기록의 선수단에 바로 넣는다 (봇이 그 선수로 팀을 짤 수 있게)
  *  - 리그 매니저가 올린 경기 기록을 받아, 개인 정보를 뺀 공개용 기록으로 내보낸다
  *  - 디스코드 봇이 올린 참가 명단을 보관했다가 리그 매니저에 넘겨준다
+ *  - 선수가 봇의 /시간등록 링크로 칠한 내전 가능 시간을 모아 리그 관리자 페이지에 보여 준다 (버전 22)
  *
  * 처음 설치는 README.md의 "1. 구글 시트 서버 만들기"를 따라 하세요.
  * 코드를 고친 뒤에는 배포 → 배포 관리 → 수정(연필) → 버전: 새 버전 → 배포 를 눌러야 반영됩니다.
  */
 
-const SERVER_VERSION = 21;                         // 서버를 고칠 때마다 올린다. 상태 응답에 실려서 새 버전이 배포됐는지 밖에서 확인할 수 있다
+const SERVER_VERSION = 22;                        // 서버를 고칠 때마다 올린다. 상태 응답에 실려서 새 버전이 배포됐는지 밖에서 확인할 수 있다
 const SHEET_NAME = '선수등록';                             // 등록 탭 이름의 앞부분. 시즌마다 '선수등록 (시즌 이름)' 탭을 따로 쓴다
 // 칸을 더할 때는 맨 뒤에 붙이고 LAYOUT 을 올린다. 이미 있는 탭에는 ready_ 가 새 머리글을 채워 넣는다
 // 처리자·처리시각: 그 등록의 상태(승인·제외·대기)를 마지막으로 바꾼 리그 관리자와 그 시각 (버전 11)
@@ -129,6 +130,13 @@ function doPost(e) {
       case 'saveOracle': requireAdmin_(body); return saveOracle_(body);
       case 'adminOracle': requireAdmin_(body); return oracleState_(body);
       case 'adminOracleReset': requireOwner_(body); return oracleReset_(body);
+      // 내전 가능 시간 (버전 22). timeGet·timeSave 는 키 대신 봇이 준 개인 링크의 표시(token)로 누구인지 안다
+      case 'timeGet': return timeGet_(body);
+      case 'timeSave': return timeSave_(body);
+      case 'adminTimeLink': requireAdmin_(body); return timeLink_(body);
+      case 'adminTimeSaved': requireAdmin_(body); return timeSaved_(body);
+      case 'adminTimeView': requireAdmin_(body); return timeView_();
+      case 'adminTimeAck': requireAdmin_(body); return timeAck_(body);
       default: fail_('알 수 없는 요청입니다');
     }
   });
@@ -279,6 +287,8 @@ function adminStatus_() {
     oraclePlay: oraclePlay_(),      // 참가 포인트: 결과가 기록되면 그 판에 뛴 선수가 받는 포인트 (버전 19)
     oracleFirst: oracleFirst_(),    // 그날의 첫 내전의 참가 포인트 (버전 21)
     oracleResetAt: oracleResetId_(),    // 승부 예측 포인트를 마지막으로 초기화한 때 (없으면 빈 값. 버전 20)
+    timeFirst: timeFirst_(),            // 내전 가능 시간: 처음 등록 포인트와 시간 등록 이벤트 (버전 22)
+    timeEvent: Object.assign(timeEvent_(), { live: timeEventLive_(timeEvent_()) }),
     role: ACTOR && !ACTOR.owner ? 'staff' : 'owner',
     name: ACTOR ? ACTOR.name : OWNER_NAME
   });
@@ -300,6 +310,11 @@ function setConfig_(body) {
   const first = body.oracleFirst === undefined ? null : parsePoints_(body.oracleFirst, '첫 내전의 참가 포인트', 'oracleFirst');   // 버전 21
   if ((play !== null || first !== null) && !(ACTOR && ACTOR.owner))
     fail_('참가 포인트는 주인 키로만 바꿀 수 있습니다. 주인 키를 가진 리그 관리자에게 부탁해 주세요.', 'owner');
+  // 시간 등록 포인트(처음 등록 포인트, 시간 등록 이벤트)도 주인 키로만 바꾼다 (버전 22)
+  const timeFirst = body.timeFirst === undefined ? null : parsePoints_(body.timeFirst, '처음 등록 포인트', 'timeFirst');
+  const timeEvent = body.timeEvent === undefined ? null : parseTimeEvent_(body.timeEvent);
+  if ((timeFirst !== null || timeEvent !== null) && !(ACTOR && ACTOR.owner))
+    fail_('시간 등록 포인트는 주인 키로만 바꿀 수 있습니다. 주인 키를 가진 리그 관리자에게 부탁해 주세요.', 'owner');
   if (typeof body.open === 'boolean') {
     const was = regOpen_(props);
     props.setProperty('REG_OPEN', String(body.open));
@@ -340,6 +355,12 @@ function setConfig_(body) {
     props.setProperty('ORACLE_FIRST', String(first));
     if (was !== first) logAlone_('첫 내전 참가 포인트', String(first), was + ' → ' + first + (first ? ' · 그날 결과가 가장 먼저 기록된 내전에 뛴 선수가 받음' : ' · 주지 않음'));
   }
+  if (timeFirst !== null) {
+    const was = timeFirst_();
+    props.setProperty('TIME_FIRST', String(timeFirst));
+    if (was !== timeFirst) logAlone_('처음 등록 포인트', String(timeFirst), was + ' → ' + timeFirst + (timeFirst ? ' · 시간표를 처음 저장한 선수가 한 번 받음' : ' · 주지 않음'));
+  }
+  if (timeEvent !== null) setTimeEvent_(timeEvent);
   return adminStatus_();
 }
 
@@ -1691,12 +1712,366 @@ function oracleState_(body) {
   const props = PropertiesService.getScriptProperties();
   if (body && body.brief === true) {
     props.setProperty('ORACLE_SEEN', new Date().toISOString());
-    return oracleInfo_();
+    return Object.assign(oracleInfo_(), timeGrants_());     // 시간 등록으로 줄 포인트가 있으면 함께 (버전 22)
   }
   const id = props.getProperty('ORACLE_STATE_ID');
   if (!id) return Object.assign({ state: null }, oracleInfo_());
   const text = readFile_(id);
   return Object.assign({ state: text ? JSON.parse(text) : null }, oracleInfo_());
+}
+
+/* =========================================================
+   내전 가능 시간 (버전 22)
+   ========================================================= */
+// 운영자가 2026-10-23에 요청: 사람들이 주로 언제 시간이 되는지 알 수 없어서, 선수가 디스코드 계정을 아이디 삼아 일주일 시간표에
+// 내전에 참여할 수 있는 시간을 칠해 두고, 리그 관리자가 사람이 가장 많은 시간을 보고 내전을 연다. 참여 신청이 아니라 사전 시간 조사다.
+//  - 선수는 디스코드에서 /시간등록 을 입력해 본인에게만 보이는 개인 링크를 받는다. 봇이 adminTimeLink 로 링크의 표시(token)를 받아 간다.
+//    표시에는 그 디스코드 계정(숫자 ID, 사용자명, 이름)과 쓸 수 있는 기한(24시간)이 들어 있고, 서버만 아는 값(TIME_SECRET)으로 서명한다.
+//    그래서 사이트에서 로그인하지 않아도 그 링크로 저장한 시간표는 그 계정의 것이 되고, 남의 시간표는 고칠 수 없다.
+//  - 사이트(time/)가 그 표시로 시간표를 읽고(timeGet) 저장한다(timeSave). 리그 관리자 키는 쓰지 않는다.
+//  - 시간표는 오전 10시부터 다음 날 새벽 3시까지 1시간 칸 17개 × 7일이다. 하루는 오전 6시에 바뀐다(새벽 0~2시 칸은 전날 칸 아래에 있다).
+//    요일별(월~일)로 적어 두고, 매주 반복이면 매주 같은 요일에 그대로 이어진다. 매주 반복을 끄면 저장한 날부터 7일에만 등록된다.
+//  - 선수 화면에는 다른 선수들이 고른 정도를 진하기 네 단계(0~3)로만 보낸다. 사람 수와 이름은 보내지 않는다(timeLevels_).
+//  - 포인트(운영자가 정함): 처음 저장하면 한 번 처음 등록 포인트(처음 1000), 시간 등록 이벤트 기간 안에 저장하면(바꿀 것이 없으면 그대로 확인만 해도)
+//    이벤트마다 한 번 이벤트 포인트. 둘은 함께 받는다. 포인트는 오라클 봇이 갖고 있으므로, 서버는 줄 포인트(grants)를 적어 두고
+//    오라클 봇이 5분마다 받아 가서 넣는다(adminOracle {brief} 의 답 → adminTimeAck).
+//  - 원본은 드라이브 파일(TIME_FILE_ID, 인하우스_가능시간.json)이고, 시트의 '내전 가능 시간' 탭은 보기용이다.
+const TIME_HOURS = [10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 0, 1, 2];   // 칸이 시작하는 시각. 마지막 칸은 새벽 2시~3시
+const TIME_ROWS = TIME_HOURS.length;
+const TIME_CELLS = 7 * TIME_ROWS;
+const TIME_DAY_HOUR = 6;                                   // 하루가 바뀌는 시각 (퍼그나봇의 '오늘'과 같다)
+const TIME_LINK_MS = 24 * 3600000;                         // 개인 링크를 쓸 수 있는 시간
+const TIME_FIRST = 1000;                                   // 처음 등록 포인트의 처음 값
+const TIME_RECENT_MS = 30 * 60000;                         // 방금 저장한 것을 봇에게 알려 주려고 기억해 두는 시간 (adminTimeSaved)
+const TIME_TAB = '내전 가능 시간';
+const TIME_DAYS = ['월', '화', '수', '목', '금', '토', '일'];
+
+// 오늘(한국 시간, 오전 6시에 바뀐다)의 날짜 YYYY-MM-DD
+function timeToday_(at) {
+  return new Date((at == null ? Date.now() : at) + KST_MS - TIME_DAY_HOUR * 3600000).toISOString().slice(0, 10);
+}
+
+function addDays_(day, n) {
+  const m = DAY_RE.exec(day);
+  return new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3])) + n * 86400000).toISOString().slice(0, 10);
+}
+
+// 그 날짜의 요일. 월요일이 0, 일요일이 6
+function weekday_(day) {
+  const m = DAY_RE.exec(day);
+  return (new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]))).getUTCDay() + 6) % 7;
+}
+
+// 처음 등록 포인트: 시간표를 처음 저장한 선수가 한 번 받는다. 주인이 리그 관리자 페이지에서 바꾼다(adminConfig {timeFirst}). 0이면 주지 않는다
+function timeFirst_() {
+  return storedPoints_('TIME_FIRST', TIME_FIRST);
+}
+
+// 시간 등록 이벤트 {id, on, start, end, points}. 기간 안에 저장한 선수가 이벤트(id)마다 한 번 points 를 받는다. 날짜는 그날 0시가 기준이고 end 날까지다
+function timeEvent_() {
+  let ev = null;
+  try { ev = JSON.parse(PropertiesService.getScriptProperties().getProperty('TIME_EVENT') || 'null'); } catch (err) { ev = null; }
+  if (!ev || typeof ev !== 'object') return { id: '', on: false, start: '', end: '', points: 0 };
+  const day = v => Number.isFinite(dayStart_(v)) ? v : '';
+  const points = Number.isInteger(ev.points) && ev.points >= 0 && ev.points <= ORACLE_PLAY_MAX ? ev.points : 0;
+  return { id: String(ev.id || ''), on: ev.on === true, start: day(ev.start), end: day(ev.end), points };
+}
+
+// 지금 이벤트 포인트를 받을 수 있는가: 켜져 있고, 포인트가 있고, 기간 안이다
+function timeEventLive_(ev) {
+  const t = Date.now();
+  return ev.on && ev.points > 0 && !!ev.id && !!ev.start && !!ev.end && t >= dayStart_(ev.start) && t < dayStart_(ev.end) + 86400000;
+}
+
+// 리그 관리자 페이지가 보낸 이벤트 설정을 확인한다. 켤 때는 두 날짜가 있어야 하고 끝 날짜가 시작 날짜보다 앞일 수 없다
+function parseTimeEvent_(v) {
+  if (!v || typeof v !== 'object' || Array.isArray(v)) fail_('이벤트 설정 형식이 잘못됐습니다', 'timeEvent');
+  const ev = {
+    on: v.on === true,
+    start: parseDay_(v.start, '이벤트 시작'),
+    end: parseDay_(v.end, '이벤트 끝'),
+    points: parsePoints_(v.points, '이벤트 포인트', 'timeEvent')
+  };
+  if (ev.on && (!ev.start || !ev.end)) fail_('이벤트를 켜려면 시작 날짜와 끝 날짜를 모두 넣어 주세요.', 'timeEvent');
+  if (ev.start && ev.end && ev.end < ev.start) fail_('끝 날짜가 시작 날짜보다 앞입니다. 날짜를 확인해 주세요.', 'timeEvent');
+  return ev;
+}
+
+// 이벤트 설정을 바꾼다. 기간이 앞의 이벤트와 겹치면(날짜를 고치거나 늘린 것) 같은 이벤트로 보고, 겹치지 않으면 새 이벤트(새 id)다.
+// 같은 이벤트에서 이미 받은 선수는 다시 받지 않고, 새 이벤트에서는 모두 다시 받을 수 있다
+function setTimeEvent_(next) {
+  const was = timeEvent_();
+  const same = was.id && was.start && was.end && next.start && next.end && next.start <= was.end && was.start <= next.end;
+  const ev = { id: same ? was.id : (next.start && next.end ? 'e' + Date.now().toString(36) + Utilities.getUuid().slice(0, 4) : ''), on: next.on, start: next.start, end: next.end, points: next.points };
+  if (JSON.stringify(ev) === JSON.stringify(was)) return;
+  PropertiesService.getScriptProperties().setProperty('TIME_EVENT', JSON.stringify(ev));
+  logAlone_('시간 등록 이벤트', ev.on ? ev.start + ' ~ ' + ev.end : '꺼짐',
+    (ev.on ? '켬' : '끔') + ' · ' + (ev.start || '-') + ' ~ ' + (ev.end || '-') + ' · ' + ev.points + ' 포인트' + (was.id && ev.id !== was.id ? ' · 새 이벤트' : ''));
+}
+
+/* ---- 개인 링크의 표시 ---- */
+function timeSecret_() {
+  const props = PropertiesService.getScriptProperties();
+  let s = props.getProperty('TIME_SECRET');
+  if (!s) {
+    s = (Utilities.getUuid() + Utilities.getUuid()).replace(/-/g, '');
+    props.setProperty('TIME_SECRET', s);
+  }
+  return s;
+}
+
+function timeSign_(text) {
+  return Utilities.base64EncodeWebSafe(Utilities.computeHmacSha256Signature(text, timeSecret_(), Utilities.Charset.UTF_8)).replace(/=+$/, '');
+}
+
+// 그 디스코드 계정의 개인 링크에 넣는 표시: 계정(본문) + 서명. 본문은 누구나 읽을 수 있지만, 서명이 맞지 않으면 받지 않는다
+function timeToken_(who) {
+  const exp = Date.now() + TIME_LINK_MS;
+  const body = Utilities.base64EncodeWebSafe(JSON.stringify({ i: who.id, u: who.username, n: who.name, e: exp }), Utilities.Charset.UTF_8).replace(/=+$/, '');
+  return { token: body + '.' + timeSign_(body), exp };
+}
+
+// 사이트가 보낸 표시를 확인하고 그 디스코드 계정을 돌려준다
+function timeWho_(token) {
+  const bad = () => fail_('링크가 올바르지 않습니다. 디스코드에서 /시간등록 을 입력해 새 링크를 받아 주세요.', 'token');
+  const m = /^([A-Za-z0-9_-]{10,1500})\.([A-Za-z0-9_-]{20,100})$/.exec(String(token == null ? '' : token));
+  if (!m || timeSign_(m[1]) !== m[2]) bad();
+  let p = null;
+  try {
+    const padded = m[1] + '==='.slice((m[1].length + 3) % 4);
+    p = JSON.parse(Utilities.newBlob(Utilities.base64DecodeWebSafe(padded)).getDataAsString('UTF-8'));
+  } catch (err) { bad(); }
+  if (!p || typeof p !== 'object' || !/^\d{5,25}$/.test(String(p.i))) bad();
+  if (!(Number(p.e) > Date.now()))
+    fail_('이 링크는 쓸 수 있는 시간(24시간)이 지났습니다. 디스코드에서 /시간등록 을 다시 입력해 새 링크를 받아 주세요.', 'expired');
+  return { id: String(p.i), username: String(p.u || ''), name: String(p.n || ''), exp: Number(p.e) };
+}
+
+function timeName_(v) {
+  return String(v == null ? '' : v).replace(/[\u0000-\u001f\u007f<>]/g, '').replace(/\s+/g, ' ').trim().slice(0, 32);
+}
+
+/* ---- 기록 ---- */
+// {players: {디스코드 ID: {u: 사용자명, n: 이름, s: 요일별 칸(월~일 × 17, '0'·'1'), rep: 매주 반복, from: 저장한 날, at: 저장한 때,
+//   first: 처음 저장한 때, ev: {이벤트 id: 받은 때}}}, grants: 오라클 봇이 아직 넣지 않은 포인트 [{g, id, u, n, p, k, at}]}
+// 파일이 아직 없으면 빈 기록이다. 있는데 읽지 못하면 오류를 낸다(빈 기록으로 알고 새로 쓰면 모두의 시간표가 사라진다)
+function readTime_() {
+  const id = PropertiesService.getScriptProperties().getProperty('TIME_FILE_ID');
+  if (!id) return { players: {}, grants: [] };
+  const data = JSON.parse(readFile_(id) || '{}') || {};
+  const players = data.players && typeof data.players === 'object' && !Array.isArray(data.players) ? data.players : {};
+  return { players, grants: Array.isArray(data.grants) ? data.grants : [] };
+}
+
+// 잠금 안에서 부른다. 오라클 봇이 받아 갈 포인트가 있는지는 TIME_PENDING 에도 적어, 5분마다 오는 봇에게 파일을 읽지 않고 답한다
+function writeTime_(data) {
+  driveFile_('TIME_FILE_ID', '인하우스_가능시간.json').setContent(JSON.stringify(data));
+  PropertiesService.getScriptProperties().setProperty('TIME_PENDING', String(data.grants.length));
+}
+
+// 그 선수의 시간표를 today 부터 7일의 칸으로(날짜 순서, 날짜마다 17칸). 매주 반복을 껐으면 저장한 날부터 7일 밖의 날짜는 비어 있다
+function timeRow_(rec, today) {
+  const s = /^[01]+$/.test(String(rec.s || '')) && String(rec.s).length === TIME_CELLS ? String(rec.s) : '0'.repeat(TIME_CELLS);
+  const last = rec.from && Number.isFinite(dayStart_(rec.from)) ? addDays_(rec.from, 6) : '';
+  let out = '';
+  for (let k = 0; k < 7; k++) {
+    const day = addDays_(today, k);
+    const on = rec.rep !== false || (!!last && day >= rec.from && day <= last);
+    out += on ? s.substr(weekday_(day) * TIME_ROWS, TIME_ROWS) : '0'.repeat(TIME_ROWS);
+  }
+  return out;
+}
+
+// 선수 화면에 겹쳐 보이는 '다른 선수들이 고른 정도'. 칸마다 그 시간에 된다고 한 다른 선수(본인은 빼고)의 수를 세어,
+// 7일 가운데 가장 많은 칸을 기준으로 네 단계(0 없음, 1 기준의 1/3까지, 2 2/3까지, 3 그 위)로 바꾼다. 사람 수와 이름은 보내지 않는다
+function timeLevels_(data, today, skip) {
+  const count = new Array(TIME_CELLS).fill(0);
+  Object.keys(data.players).forEach(id => {
+    if (id === skip) return;
+    const row = timeRow_(data.players[id], today);
+    for (let i = 0; i < TIME_CELLS; i++) if (row[i] === '1') count[i]++;
+  });
+  const max = Math.max.apply(null, [1].concat(count));
+  return count.map(c => c ? Math.max(1, Math.ceil(3 * c / max)) : 0).join('');
+}
+
+// 17칸("0011…")을 "17시~21시, 22시~03시"처럼
+function timeSpans_(row) {
+  const pad = h => ('0' + h).slice(-2);
+  const out = [];
+  let from = -1;
+  for (let r = 0; r <= TIME_ROWS; r++) {
+    const on = r < TIME_ROWS && row[r] === '1';
+    if (on && from < 0) from = r;
+    if (!on && from >= 0) { out.push(pad(TIME_HOURS[from]) + '시~' + pad((TIME_HOURS[r - 1] + 1) % 24) + '시'); from = -1; }
+  }
+  return out.join(', ');
+}
+
+/* ---- 선수 화면 (개인 링크) ---- */
+function timeGet_(body) {
+  const who = timeWho_(body.token);
+  const data = readTime_(), today = timeToday_(), rec = data.players[who.id] || null;
+  const ev = timeEvent_();
+  return {
+    name: who.name, exp: who.exp, today, hours: TIME_HOURS,
+    mine: rec ? timeRow_(rec, today) : '0'.repeat(TIME_CELLS),
+    saved: !!rec, savedAt: rec ? rec.at || '' : '', repeat: rec ? rec.rep !== false : true, from: rec ? rec.from || '' : '',
+    levels: timeLevels_(data, today, who.id),
+    first: rec && rec.first ? 0 : timeFirst_(),                 // 처음 등록 포인트(이미 받았으면 0)
+    event: timeEventLive_(ev) ? { start: ev.start, end: ev.end, points: ev.points, got: !!(rec && rec.ev && rec.ev[ev.id]) } : null
+  };
+}
+
+// 시간표를 저장한다. slots 는 start 부터 7일의 칸(화면에 보인 그대로)이다. 화면을 연 뒤에 날짜가 바뀌었어도 하루까지는 받는다
+function timeSave_(body) {
+  const who = timeWho_(body.token);
+  const today = timeToday_();
+  const start = String(body.start == null ? '' : body.start);
+  if (start !== today && start !== addDays_(today, -1)) fail_('날짜가 바뀌었습니다. 페이지를 새로 고친 뒤 다시 저장해 주세요.', 'stale');
+  const grid = String(body.slots == null ? '' : body.slots);
+  if (grid.length !== TIME_CELLS || !/^[01]+$/.test(grid)) fail_('시간표 형식이 잘못됐습니다. 페이지를 새로 고친 뒤 다시 해 주세요.', 'slots');
+  if (grid.indexOf('1') < 0) fail_('한 칸 이상 칠해야 저장할 수 있습니다.', 'empty');
+  const slots = new Array(TIME_CELLS).fill('0');
+  for (let k = 0; k < 7; k++) {                              // 7일이 요일을 한 번씩 덮는다
+    const wd = weekday_(addDays_(start, k));
+    for (let r = 0; r < TIME_ROWS; r++) slots[wd * TIME_ROWS + r] = grid[k * TIME_ROWS + r];
+  }
+  return withLock_(() => {
+    const data = readTime_();
+    const at = new Date().toISOString();
+    const rec = data.players[who.id] || (data.players[who.id] = {});
+    Object.assign(rec, { u: who.username, n: who.name, s: slots.join(''), rep: body.repeat !== false, from: start, at });
+    const grant = (kind, key, points) => data.grants.push({ g: who.id + ':' + key, id: who.id, u: who.username, n: who.name, p: points, k: kind, at });
+    let first = 0, event = 0;
+    if (!rec.first) {
+      rec.first = at;
+      first = timeFirst_();
+      if (first) grant('first', 'first', first);
+    }
+    const ev = timeEvent_();
+    if (timeEventLive_(ev)) {
+      if (!rec.ev || typeof rec.ev !== 'object') rec.ev = {};
+      if (!rec.ev[ev.id]) {
+        rec.ev[ev.id] = at;
+        event = ev.points;
+        grant('event', ev.id, event);
+      }
+    }
+    writeTime_(data);
+    noteSaved_(who.id, at, first + event);
+    writeTimeSheet_(data);
+    return { savedAt: at, gained: first + event, first, event, repeat: rec.rep, from: start };
+  });
+}
+
+// 방금 저장한 사람을 적어 둔다(30분). 봇이 /시간등록 의 답을 "등록해 주셔서 감사합니다"로 바꾸려고 물어본다(adminTimeSaved)
+function recentSaves_() {
+  let list = {};
+  try { list = JSON.parse(PropertiesService.getScriptProperties().getProperty('TIME_RECENT') || '{}') || {}; } catch (err) { list = {}; }
+  const cut = Date.now() - TIME_RECENT_MS, out = {};
+  Object.keys(list).forEach(id => {
+    const saves = (Array.isArray(list[id]) ? list[id] : []).filter(x => x && Date.parse(x.at) >= cut);
+    if (saves.length) out[id] = saves;
+  });
+  return out;
+}
+
+function noteSaved_(id, at, gained) {
+  try {
+    const list = recentSaves_();
+    list[id] = (list[id] || []).concat([{ at, gained }]).slice(-10);
+    PropertiesService.getScriptProperties().setProperty('TIME_RECENT', JSON.stringify(list));
+  } catch (err) { console.warn('방금 저장한 것을 적어 두지 못했습니다: ' + err); }
+}
+
+// 시트의 '내전 가능 시간' 탭 (보기용): 한 사람에 한 줄, 요일마다 칠한 시간을 글로. 쓰지 못해도 저장은 끝낸다
+function writeTimeSheet_(data) {
+  try {
+    const when = v => v ? text_(Utilities.formatDate(new Date(v), 'Asia/Seoul', 'yyyy-MM-dd HH:mm')) : '-';
+    const md = day => Number(day.slice(5, 7)) + '/' + Number(day.slice(8, 10));
+    const rows = [['이름', '디스코드 사용자명', '디스코드 ID', '마지막 저장', '매주 반복'].concat(TIME_DAYS).concat(['처음 저장'])];
+    Object.keys(data.players).map(id => [id, data.players[id]])
+      .sort((a, b) => String(b[1].at || '').localeCompare(String(a[1].at || '')))
+      .forEach(([id, r]) => {
+        const s = String(r.s || '');
+        const rep = r.rep !== false ? '켬' : r.from && Number.isFinite(dayStart_(r.from)) ? '끔 (' + md(r.from) + '~' + md(addDays_(r.from, 6)) + '만)' : '끔';
+        rows.push([text_(r.n || ''), text_(r.u || ''), text_(id), when(r.at), rep]
+          .concat(TIME_DAYS.map((_, wd) => timeSpans_(s.substr(wd * TIME_ROWS, TIME_ROWS)) || '-'))
+          .concat([when(r.first)]));
+      });
+    mirrorTab_(SpreadsheetApp.getActiveSpreadsheet(), TIME_TAB, rows,
+      '이 탭은 선수가 /시간등록 링크로 시간표를 저장할 때마다 자동으로 다시 씁니다(보기용). 여기서 고친 내용은 지워집니다. '
+      + '하루는 오전 6시에 바뀌어서, 새벽 0~3시는 전날 요일에 적힙니다. 모아 보기는 리그 관리자 페이지에서 합니다.');
+  } catch (err) {
+    console.warn('내전 가능 시간 탭을 쓰지 못했습니다: ' + err);
+  }
+}
+
+/* ---- 봇과 리그 관리자 페이지 ---- */
+// 봇의 /시간등록: 그 디스코드 계정의 개인 링크 표시와, 답에 적을 포인트 안내(처음 등록 포인트, 받을 수 있는 이벤트 포인트)
+function timeLink_(body) {
+  const d = Array.isArray(body.discord) ? body.discord : [];
+  const id = String(d[0] == null ? '' : d[0]);
+  if (!/^\d{5,25}$/.test(id)) fail_('디스코드 계정이 올바르지 않습니다', 'discord');
+  const username = discordKey_(d[1]);
+  const link = timeToken_({ id, username, name: timeName_(body.name) || username });
+  let rec = null, known = true;
+  try { rec = readTime_().players[id] || null; }
+  catch (err) { known = false; console.warn('가능 시간 기록을 읽지 못해 포인트 안내 없이 링크만 줍니다: ' + err); }
+  const ev = timeEvent_();
+  return {
+    token: link.token, exp: link.exp, issued: Date.now(), saved: !!rec,
+    first: known && !(rec && rec.first) ? timeFirst_() : 0,
+    event: known && timeEventLive_(ev) && !(rec && rec.ev && rec.ev[ev.id]) ? { end: ev.end, points: ev.points } : null
+  };
+}
+
+// 봇이 /시간등록 의 답을 고치려고 묻는다: 그 사람들이 방금(30분 안) 저장했는지와 그때 받게 된 포인트
+function timeSaved_(body) {
+  const list = recentSaves_(), out = {};
+  (Array.isArray(body.ids) ? body.ids : []).slice(0, 100).map(String).forEach(id => { if (list[id]) out[id] = list[id]; });
+  return { saved: out };
+}
+
+// 리그 관리자 페이지의 모아 보기: 오늘부터 7일의 칸에 맞춘 모든 사람의 시간표(리그 관리자만 본다. 이름이 들어 있다)와 포인트 현황
+function timeView_() {
+  const data = readTime_(), today = timeToday_(), ev = timeEvent_();
+  const ids = Object.keys(data.players);
+  return {
+    today, hours: TIME_HOURS,
+    people: ids.map(id => {
+      const r = data.players[id];
+      return { name: r.n || r.u || '이름 없음', username: r.u || '', repeat: r.rep !== false, from: r.from || '', savedAt: r.at || '', slots: timeRow_(r, today) };
+    }),
+    firstCount: ids.filter(id => data.players[id].first).length,
+    eventCount: ev.id ? ids.filter(id => data.players[id].ev && data.players[id].ev[ev.id]).length : 0,
+    pending: data.grants.length,
+    timeFirst: timeFirst_(), timeEvent: Object.assign(ev, { live: timeEventLive_(ev) })
+  };
+}
+
+// 오라클 봇에게 넣어 달라고 줄 포인트. 5분마다 오는 봇(adminOracle {brief})의 답에 싣는다. 없으면 파일을 읽지 않는다
+function timeGrants_() {
+  if (!(Number(PropertiesService.getScriptProperties().getProperty('TIME_PENDING')) > 0)) return {};
+  try { return { timeGrants: readTime_().grants.slice(0, 200) }; }
+  catch (err) { console.warn('줄 포인트를 읽지 못했습니다. 다음에 다시 줍니다: ' + err); return {}; }
+}
+
+// 오라클 봇이 넣은 포인트를 지운다. 봇은 넣은 것을 기억해 두므로, 이 답을 받지 못해 같은 것을 다시 받아도 두 번 넣지 않는다
+function timeAck_(body) {
+  const done = {};
+  (Array.isArray(body.grants) ? body.grants : []).slice(0, 500).forEach(g => { done[String(g)] = true; });
+  if (!Object.keys(done).length) return { left: Number(PropertiesService.getScriptProperties().getProperty('TIME_PENDING')) || 0 };
+  return withLock_(() => {
+    const data = readTime_();
+    const left = data.grants.filter(g => !done[String(g && g.g)]);
+    if (left.length !== data.grants.length) {
+      data.grants = left;
+      writeTime_(data);
+    }
+    return { left: left.length };
+  });
 }
 
 /* =========================================================

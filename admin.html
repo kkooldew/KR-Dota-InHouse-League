@@ -101,6 +101,66 @@ details.by-file[open] summary{margin-bottom:10px}
 .btn.danger{background:var(--dire);border-color:var(--dire);color:#fff;font-weight:700}
 .btn.danger:hover{background:#cf5246;border-color:#cf5246}
 .btn.danger[disabled]:hover{background:var(--dire);border-color:var(--dire)}
+
+/* 내전 가능 시간 (서버 버전 22): 선수들이 /시간등록 링크로 칠한 시간을 모아 본다 */
+.t-stats{display:flex;flex-wrap:wrap;gap:10px 26px;align-items:flex-end;margin-bottom:14px}
+.t-stat{display:flex;flex-direction:column}
+.t-stat .k{font-size:12px;color:var(--bone-dim)}
+.t-stat .v{font-family:var(--num);font-size:24px;line-height:1.15;font-variant-numeric:tabular-nums}
+.t-stat .v small{font-family:var(--sans);font-size:13px;color:var(--bone-dim);margin-left:4px}
+.t-body{display:grid;grid-template-columns:minmax(0,1.55fr) minmax(0,1fr);gap:20px;align-items:start}
+@media (max-width:780px){.t-body{grid-template-columns:minmax(0,1fr)}}
+.t-scroll{overflow-x:auto;overscroll-behavior-x:contain;min-width:0}
+.tgrid{display:grid;grid-template-columns:40px repeat(7,minmax(42px,1fr));gap:3px;--row:26px}
+.tgrid .corner,.tgrid .gh{background:var(--panel)}
+.tgrid .corner{position:sticky;left:0;z-index:2}
+.tgrid .gh{display:flex;flex-direction:column;align-items:center;line-height:1.25;padding-bottom:5px;border-bottom:2px solid transparent;color:var(--bone-dim)}
+.tgrid .gh b{font-size:13px;font-weight:500;white-space:nowrap}
+.tgrid .gh span{font-family:var(--num);font-size:11.5px}
+.tgrid .gh.we b{color:var(--bone)}
+.tgrid .gh.today{border-bottom-color:var(--gold);color:var(--gold)}
+.tgrid .gh.today b{color:var(--gold);font-weight:700}
+.tgrid .tl{position:sticky;left:0;z-index:1;background:var(--panel);font-family:var(--num);font-size:12px;color:var(--faint);text-align:right;padding-right:6px;
+  height:var(--row);line-height:var(--row);white-space:nowrap}
+.tgrid .tl.am{color:var(--bone-dim)}
+.tgrid .tl small{font-family:var(--sans);font-size:10px;margin-right:2px}
+.tgrid .mid{margin-top:4px}
+.hcell{height:var(--row);border:0;border-radius:2px;padding:0;font-family:var(--num);font-size:12px;font-variant-numeric:tabular-nums;color:var(--bone-dim);
+  background:var(--ink-2);display:block;width:100%}
+.hcell.ten{outline:1px solid rgba(220,214,200,.45);outline-offset:-1px}
+.hcell.sel{outline:2px solid var(--bone);outline-offset:-2px}
+.t-side h3{margin:0 0 8px;font-size:14.5px}
+.t-side h3 + p{margin:-4px 0 10px;font-size:12.5px;color:var(--bone-dim)}
+ol.t-top{list-style:none;margin:0 0 18px;padding:0;display:grid;gap:6px}
+ol.t-top button{width:100%;display:grid;grid-template-columns:22px minmax(0,1fr) auto;gap:8px;align-items:center;text-align:left;background:var(--ink-2);
+  border:1px solid var(--line);border-radius:3px;padding:7px 10px}
+ol.t-top button[aria-pressed="true"]{border-color:var(--gold);background:var(--panel-2)}
+ol.t-top .rk{font-family:var(--num);color:var(--gold)}
+ol.t-top .when{font-weight:500}
+ol.t-top .cnt{font-family:var(--num);font-size:17px}
+ol.t-top .cnt small{font-family:var(--sans);font-size:12px;color:var(--bone-dim);margin-left:2px}
+.who-box{background:var(--ink-2);border:1px solid var(--line);border-radius:3px;padding:12px}
+.who-box .title{font-weight:700;margin-bottom:6px}
+.names{display:flex;flex-wrap:wrap;gap:4px 6px}
+.names span{font-size:13px;background:var(--panel-2);border-radius:3px;padding:1px 7px;color:#c9cdfb}
+.t-points{margin-top:22px;padding-top:16px;border-top:1px solid var(--line-soft)}
+.t-points h3{margin:0 0 4px;font-size:15px}
+.t-points ul{margin:0 0 14px;padding-left:18px;font-size:13px;color:var(--bone-dim);max-width:76ch}
+.t-points ul b{color:var(--bone);font-weight:500}
+.ev-form{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px 16px;align-items:end}
+.field{display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--bone-dim);min-width:0}
+.field input{background:var(--ink);border:1px solid var(--line);border-radius:3px;padding:7px 9px;width:100%;color:var(--bone)}
+.field input[type=number]{font-family:var(--num);font-size:15px}
+.field input:focus{outline:2px solid var(--gold-dim);outline-offset:-1px;border-color:var(--gold-dim)}
+.ev-sub{grid-column:1 / -1;margin:6px 0 -2px;font-size:13px;font-weight:700;color:var(--bone)}
+.switch{display:inline-flex;align-items:center;gap:9px;background:none;border:0;padding:2px 0;font-size:14px;text-align:left}
+.switch .track{flex:none;width:36px;height:20px;border-radius:10px;background:var(--line);position:relative;transition:background .15s}
+.switch .track::after{content:"";position:absolute;top:2px;left:2px;width:16px;height:16px;border-radius:50%;background:var(--bone);transition:transform .15s}
+.switch[aria-checked="true"] .track{background:var(--rad)}
+.switch[aria-checked="true"] .track::after{transform:translateX(16px)}
+.switch[disabled]{opacity:.5;cursor:not-allowed}
+.ev-status{display:flex;flex-wrap:wrap;gap:8px 18px;margin-top:14px;font-size:13.5px;align-items:center;color:var(--bone-dim)}
+.ev-status b{font-family:var(--num);font-size:17px;font-weight:500;color:var(--bone);margin-right:2px}
 </style>
 </head>
 <body>
@@ -246,6 +306,66 @@ details.by-file[open] summary{margin-bottom:10px}
       </div>
     </section>
 
+    <!-- 서버 버전 22부터: 선수들이 디스코드의 /시간등록 링크로 칠한 내전 가능 시간 -->
+    <section class="panel" id="timePanel" hidden>
+      <div class="bar" style="margin-bottom:10px">
+        <h2 class="grow" style="margin:0">내전 가능 시간</h2>
+        <button class="btn sm ghost" type="button" id="btnTimeReload">새로 고침</button>
+      </div>
+      <p class="hint">선수들이 디스코드에서 <b>/시간등록</b>으로 받은 링크로 칠한 시간입니다. 오늘부터 7일 동안 시간대마다 되는 사람의 수이고, 진할수록 많습니다.
+        10명 이상인 칸은 테두리로 표시합니다. 칸이나 추천 시간을 누르면 그 시간에 되는 사람이 나옵니다. 선수들의 화면에는 사람 수와 이름 없이 진하기만 보입니다.
+        구글 시트의 <b>내전 가능 시간</b> 탭에서도 한 사람씩 볼 수 있습니다.</p>
+      <div class="t-stats">
+        <div class="t-stat"><span class="k">시간표를 등록한 사람</span><span class="v" id="tAll">-</span></div>
+        <div class="t-stat"><span class="k">가장 많은 한 시간</span><span class="v" id="tBest">-</span></div>
+      </div>
+      <div class="controls">
+        <span class="seg" role="group" aria-label="몇 시간 연속" id="tSpanSeg">
+          <button type="button" data-span="1" aria-pressed="false">1시간</button>
+          <button type="button" data-span="2" aria-pressed="true">2시간 연속</button>
+          <button type="button" data-span="3" aria-pressed="false">3시간 연속</button>
+        </span>
+      </div>
+      <div class="t-body">
+        <div class="t-scroll"><div class="tgrid" id="tGrid" role="group" aria-label="시간대별 인원"></div></div>
+        <div class="t-side">
+          <h3 id="tTopTitle">추천 시간 TOP 5</h3>
+          <p id="tTopNote"></p>
+          <ol class="t-top" id="tTop"></ol>
+          <div class="who-box" aria-live="polite">
+            <div class="title" id="tWhoTitle">-</div>
+            <div class="names" id="tWho"></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="t-points">
+        <h3>시간 등록 포인트</h3>
+        <ul>
+          <li><b>처음 등록 포인트</b>: 시간표를 처음 저장한 선수에게 한 번 줍니다. 이벤트와 상관없고, 이벤트 기간에 처음 등록하면 이벤트 포인트도 함께 받습니다.</li>
+          <li><b>이벤트 포인트</b>: 이벤트 기간 안에 시간표를 저장하거나 확인한 선수에게 줍니다. 한 이벤트에서 선수당 한 번입니다. 예전에 칠해 둔 시간표가 남아 있으면 <b>이대로 확인</b>만 눌러도 받습니다.
+            기간은 시작 날짜 0시부터 끝 날짜 밤까지입니다. 기간이 앞의 이벤트와 겹치면(날짜를 고치거나 늘린 것) 같은 이벤트로 봐서 이미 받은 선수는 다시 받지 않고, 겹치지 않으면 새 이벤트라 모두 다시 받을 수 있습니다.</li>
+          <li>포인트는 오라클 봇이 5분마다 확인해서 넣어 줍니다(오라클 봇을 꺼 둔 동안에는 켜진 뒤에 넣습니다). 주인 키로만 바꿀 수 있습니다.</li>
+        </ul>
+        <div class="ev-form">
+          <label class="field" for="tFirst">처음 등록 포인트<input type="number" id="tFirst" min="0" max="10000" step="100" inputmode="numeric"></label>
+          <p class="ev-sub">이벤트</p>
+          <button class="switch" type="button" role="switch" aria-checked="false" id="tEvSwitch"><span class="track" aria-hidden="true"></span><span>이벤트 켜기</span></button>
+          <label class="field" for="tEvFrom">시작 날짜<input type="date" id="tEvFrom"></label>
+          <label class="field" for="tEvTo">끝 날짜(그날까지)<input type="date" id="tEvTo"></label>
+          <label class="field" for="tEvPts">이벤트 포인트<input type="number" id="tEvPts" min="0" max="10000" step="50" inputmode="numeric"></label>
+          <button class="btn" type="button" id="btnTimePoints">저장</button>
+        </div>
+        <div class="ev-status">
+          <span class="pill" id="tEvPill"></span>
+          <span id="tEvCount"></span>
+          <span id="tFirstCount"></span>
+          <span id="tPending"></span>
+          <span id="tOwnerOnly" hidden>주인 키로만 바꿀 수 있습니다.</span>
+        </div>
+      </div>
+    </section>
+
     <section class="panel">
       <h2>리그 매니저</h2>
       <p class="hint">팀 편성을 고치거나 경기 기록·선수단·정산 설정을 다루는 프로그램입니다. 아래 버튼으로 열면 이 서버에 이어진 채로 열리고, 처음 여는 브라우저에서는 서버의 기록을 받아 옵니다.</p>
@@ -384,6 +504,7 @@ details.by-file[open] summary{margin-bottom:10px}
       $('#login').hidden = true; $('#app').hidden = false;
       renderStatus();
       await reload();
+      loadTime();
     }catch(err){
       // 키가 틀린 경우는 lock()이 처리한다. 연결 문제면 저장한 키는 지우지 않고 다시 시도할 수 있게 둔다.
       if(err.code !== 'auth'){
@@ -459,6 +580,9 @@ details.by-file[open] summary{margin-bottom:10px}
     $('#oracleResetState').textContent = !resetAt ? '초기화한 적이 없습니다.'
       : '마지막으로 초기화한 때는 ' + fmt(resetAt) + '입니다. ' + (status.oracleSeen && status.oracleSeen >= resetAt ? '봇이 확인해서 반영했습니다.' : '봇이 확인하러 오면 반영됩니다(5분 안).');
     if(hasStaff() && owner && !staffSeen){ staffSeen = true; loadStaff(); }
+    // 내전 가능 시간(서버 버전 22): 모아 보기는 리그 관리자 누구나 보고, 시간 등록 포인트는 주인 키로만 바꾼다
+    $('#timePanel').hidden = !timeOn();
+    renderTimePoints();
     const auto = autoLink(), box = $('#byFile');
     $('#autoLink').hidden = !auto; $('#linkHint').hidden = !auto; $('#fileWhen').hidden = !auto;
     if(box.dataset.auto !== String(auto)){ box.open = !auto; box.dataset.auto = String(auto); }   // 서버가 넣어 주면 파일 방식은 접어 둔다 (리그 관리자가 펼친 것은 다시 접지 않는다)
@@ -853,6 +977,155 @@ details.by-file[open] summary{margin-bottom:10px}
   });
   $('#q').addEventListener('input', e => { ui.q = e.target.value; render(); });
   $('#sort').addEventListener('change', e => { ui.sort = e.target.value; render(); });
+
+  /* ---------- 내전 가능 시간 (서버 버전 22) ---------- */
+  // 선수들이 /시간등록 링크로 칠한 시간표를 서버가 오늘부터 7일의 칸으로 맞춰 준다(adminTimeView). 칸은 날짜마다 오전 10시 ~ 다음 날 새벽 3시(17칸)이고,
+  // 하루는 오전 6시에 바뀐다. 여기서 시간대마다 되는 사람을 세고, 1·2·3시간 연속으로 모두 되는 사람이 많은 시간을 추천한다
+  const WD = ['월', '화', '수', '목', '금', '토', '일'];
+  const pad2 = h => String(h).padStart(2, '0');
+  const tv = {data: null, dates: [], span: 2, sel: null};
+  const timeOn = () => !!status && (status.version || 0) >= 22;
+  function tDates(today){
+    const [y, m, d] = today.split('-').map(Number);
+    return Array.from({length: 7}, (_, k) => {
+      const t = new Date(Date.UTC(y, m - 1, d + k));
+      return {k, wd: (t.getUTCDay() + 6) % 7, m: t.getUTCMonth() + 1, d: t.getUTCDate()};
+    });
+  }
+  const tRows = () => (tv.data && tv.data.hours || []).length || 17;
+  const tHours = () => tv.data && tv.data.hours || [];
+  // 그 날짜(k)의 r번째 칸부터 n시간 동안 모두 되는 사람
+  const tWho = (k, r, n) => (tv.data ? tv.data.people : []).filter(p => { for(let j = 0; j < n; j++) if(p.slots[k * tRows() + r + j] !== '1') return false; return true; });
+  const tLabel = (c, r, n) => `${c.m}/${c.d}(${WD[c.wd]}) ${pad2(tHours()[r])}~${pad2((tHours()[r + n - 1] + 1) % 24)}시`;
+  function drawTime(){
+    const grid = $('#tGrid'), H = tHours(), R = tRows(), people = tv.data.people || [];
+    const cnt = []; let max = 1, best = null;
+    tv.dates.forEach(c => H.forEach((h, r) => {
+      const n = tWho(c.k, r, 1).length;
+      cnt[c.k * R + r] = n; max = Math.max(max, n);
+      if(n && (!best || n > best.n)) best = {c, r, n};
+    }));
+    $('#tAll').innerHTML = people.length + '<small>명</small>';
+    $('#tBest').innerHTML = best ? esc(tLabel(best.c, best.r, 1)) + '<small>' + best.n + '명</small>' : '-';
+    grid.textContent = '';
+    grid.append(Object.assign(document.createElement('div'), {className: 'corner'}));
+    tv.dates.forEach(c => {
+      const h = document.createElement('div');
+      h.className = 'gh' + (c.wd >= 5 ? ' we' : '') + (c.k === 0 ? ' today' : '');
+      h.innerHTML = `<b>${WD[c.wd]}${c.k === 0 ? ' (오늘)' : ''}</b><span>${c.m}/${c.d}</span>`;
+      grid.append(h);
+    });
+    H.forEach((hr, r) => {
+      const tl = document.createElement('div');
+      tl.className = 'tl' + (hr < 6 ? ' am' : '') + (hr === 0 ? ' mid' : '');
+      tl.innerHTML = (hr === 0 ? '<small>새벽</small>' : '') + pad2(hr);
+      grid.append(tl);
+      tv.dates.forEach(c => {
+        const n = cnt[c.k * R + r], a = n ? .08 + .87 * n / max : 0, b = document.createElement('button');
+        b.type = 'button'; b.className = 'hcell' + (hr === 0 ? ' mid' : '') + (n >= 10 ? ' ten' : '');
+        if(n){ b.style.background = `rgba(216,171,63,${a.toFixed(3)})`; b.style.color = a > .55 ? '#241d09' : 'var(--bone)'; b.textContent = n; }
+        b.dataset.k = c.k; b.dataset.r = r;
+        b.setAttribute('aria-label', `${c.m}월 ${c.d}일(${WD[c.wd]}) ${pad2(hr)}시 ${n}명`);
+        grid.append(b);
+      });
+    });
+    drawTop();
+  }
+  function drawTop(){
+    const R = tRows(), n = tv.span, wins = [];
+    tv.dates.forEach(c => { for(let r = 0; r + n <= R; r++){ const k = tWho(c.k, r, n).length; if(k) wins.push({c, r, n, k}); } });
+    wins.sort((a, b) => b.k - a.k || a.c.k - b.c.k || a.r - b.r);
+    const top = [];
+    for(const w of wins){ if(top.length === 5) break; if(!top.some(t => t.c === w.c && w.r < t.r + t.n && t.r < w.r + w.n)) top.push(w); }
+    $('#tTopTitle').textContent = n === 1 ? '사람이 많은 시간 TOP 5' : '추천 시간 TOP 5';
+    $('#tTopNote').textContent = n === 1 ? '그 한 시간에 되는 사람의 수입니다.' : `${n}시간 모두 되는 사람의 수입니다. 내전 한 판에 1~2시간이 걸려서 연속으로 되는 사람을 셉니다.`;
+    if(!tv.sel && top[0]) tv.sel = {k: top[0].c.k, r: top[0].r, n: top[0].n};
+    $('#tTop').innerHTML = top.length ? '' : '<li class="dim" style="font-size:13px">아직 시간표를 등록한 선수가 없습니다.</li>';
+    top.forEach((w, i) => {
+      const li = document.createElement('li'), b = document.createElement('button');
+      b.type = 'button';
+      b.setAttribute('aria-pressed', !!(tv.sel && tv.sel.k === w.c.k && tv.sel.r === w.r && tv.sel.n === w.n));
+      b.innerHTML = `<span class="rk">${i + 1}</span><span class="when"></span><span class="cnt">${w.k}<small>명</small></span>`;
+      b.querySelector('.when').textContent = tLabel(w.c, w.r, w.n);
+      b.addEventListener('click', () => { tv.sel = {k: w.c.k, r: w.r, n: w.n}; drawTop(); });
+      li.append(b); $('#tTop').append(li);
+    });
+    $('#tGrid').querySelectorAll('.hcell').forEach(x => {
+      const k = +x.dataset.k, r = +x.dataset.r;
+      x.classList.toggle('sel', !!(tv.sel && tv.sel.k === k && r >= tv.sel.r && r < tv.sel.r + tv.sel.n));
+    });
+    const box = $('#tWho'); box.textContent = '';
+    if(!tv.sel){ $('#tWhoTitle').textContent = '칸이나 추천 시간을 누르세요'; return; }
+    const c = tv.dates[tv.sel.k], list = tWho(tv.sel.k, tv.sel.r, tv.sel.n).map(p => p.name).sort((a, b) => a.localeCompare(b, 'ko'));
+    $('#tWhoTitle').textContent = `${tLabel(c, tv.sel.r, tv.sel.n)} · ${list.length}명` + (tv.sel.n > 1 ? ' (모두 되는 사람)' : '');
+    list.forEach(name => box.append(Object.assign(document.createElement('span'), {textContent: '@' + name})));
+  }
+  $('#tGrid').addEventListener('click', e => {
+    const x = e.target.closest('.hcell'); if(!x) return;
+    tv.sel = {k: +x.dataset.k, r: +x.dataset.r, n: 1}; drawTop();
+  });
+  $('#tSpanSeg').addEventListener('click', e => {
+    const b = e.target.closest('button'); if(!b || !tv.data) return;
+    $('#tSpanSeg').querySelectorAll('button').forEach(x => x.setAttribute('aria-pressed', String(x === b)));
+    tv.span = +b.dataset.span; tv.sel = null; drawTop();
+  });
+  async function loadTime(){
+    if(!timeOn()) return;
+    $('#btnTimeReload').disabled = true;
+    try{
+      tv.data = await adminPost({action: 'adminTimeView'});
+      tv.dates = tDates(tv.data.today); tv.sel = null;
+      drawTime(); renderTimePoints();
+    }catch(err){ toast(err.message); }
+    finally{ $('#btnTimeReload').disabled = false; }
+  }
+  $('#btnTimeReload').addEventListener('click', loadTime);
+
+  // 시간 등록 포인트: 처음 등록 포인트와 시간 등록 이벤트 (주인 키로만 바꾼다. 리그 관리자 키로는 보기만 한다)
+  const md = day => { const [, m, d] = String(day).split('-'); return `${+m}월 ${+d}일`; };
+  function renderTimePoints(){
+    if(!timeOn()) return;
+    const owner = isOwner(), ev = status.timeEvent || {}, v = tv.data;
+    const busy = ['#tFirst', '#tEvFrom', '#tEvTo', '#tEvPts'].some(s => document.activeElement === $(s));
+    if(!busy){
+      $('#tFirst').value = Number.isInteger(status.timeFirst) ? status.timeFirst : 1000;
+      $('#tEvFrom').value = ev.start || ''; $('#tEvTo').value = ev.end || '';
+      $('#tEvPts').value = Number.isInteger(ev.points) && ev.points ? ev.points : 300;
+      $('#tEvSwitch').setAttribute('aria-checked', String(!!ev.on));
+    }
+    ['#tFirst', '#tEvFrom', '#tEvTo', '#tEvPts', '#tEvSwitch', '#btnTimePoints'].forEach(s => { $(s).disabled = !owner; });
+    $('#tOwnerOnly').hidden = owner;
+    const span = ev.start && ev.end ? ' · ' + md(ev.start) + '~' + md(ev.end) : '';
+    const state = !ev.on ? '이벤트 꺼짐' : ev.live ? '진행 중' + span
+      : ev.end && dayStart(ev.end) + 86400000 <= Date.now() ? '끝남' + span : '시작 전' + span;
+    $('#tEvPill').textContent = state;
+    $('#tEvPill').className = 'pill ' + (ev.on && ev.live ? 'on' : 'off');
+    $('#tEvCount').innerHTML = v && ev.id ? '이번 이벤트 <b>' + v.eventCount + '</b>명 받음' : '';
+    $('#tFirstCount').innerHTML = v ? '처음 등록 포인트 <b>' + v.firstCount + '</b>명 받음' : '';
+    $('#tPending').innerHTML = v && v.pending ? '오라클 봇이 아직 넣지 않은 포인트 <b>' + v.pending + '</b>건' + (status.oracleOn ? '' : ' (오라클 봇이 꺼져 있습니다)') : '';
+  }
+  $('#tEvSwitch').addEventListener('click', () => {
+    const b = $('#tEvSwitch'); if(b.disabled) return;
+    b.setAttribute('aria-checked', String(b.getAttribute('aria-checked') !== 'true'));
+  });
+  $('#btnTimePoints').addEventListener('click', async () => {
+    const num = s => { const t = $(s).value.trim(); return /^\d+$/.test(t) && Number(t) <= 10000 ? Number(t) : NaN; };
+    const first = num('#tFirst'), points = num('#tEvPts'), start = $('#tEvFrom').value, end = $('#tEvTo').value;
+    const on = $('#tEvSwitch').getAttribute('aria-checked') === 'true';
+    if(!Number.isInteger(first) || !Number.isInteger(points)){ toast('포인트는 0부터 10000까지의 숫자로 적어 주세요. 0이면 주지 않습니다.'); return; }
+    if(on && (!start || !end)){ toast('이벤트를 켜려면 시작 날짜와 끝 날짜를 모두 골라 주세요.'); return; }
+    if(start && end && end < start){ toast('끝 날짜가 시작 날짜보다 앞입니다. 날짜를 확인해 주세요.'); return; }
+    $('#btnTimePoints').disabled = true;
+    try{
+      status = await adminPost({action: 'adminConfig', timeFirst: first, timeEvent: {on, start, end, points}});
+      ['#tFirst', '#tEvFrom', '#tEvTo', '#tEvPts'].forEach(s => $(s).blur());
+      renderStatus();
+      await loadTime();
+      const ev = status.timeEvent || {};
+      toast('시간 등록 포인트를 저장했습니다.' + (ev.on ? ' 이벤트는 ' + md(ev.start) + '부터 ' + md(ev.end) + '까지입니다.' : ' 이벤트는 꺼져 있습니다.'), 5000);
+    }catch(err){ toast(err.message); }
+    finally{ $('#btnTimePoints').disabled = !isOwner(); }
+  });
 
   /* ---------- 리그 관리자 (주인 키로만) ---------- */
   // 리그 관리자마다 키를 따로 준다. 새 키는 서버가 만들어 한 번만 돌려주고(서버에는 지문만 남는다), 이 화면에도 가리기를 누르거나 잠글 때까지만 둔다.

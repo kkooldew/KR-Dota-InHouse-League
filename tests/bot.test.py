@@ -7,6 +7,8 @@ bot.py 는 불러올 때 같은 폴더의 config.json 을 읽으므로, 임시 �
 """
 import asyncio
 import collections
+import contextlib
+import io
 import importlib.util
 import json
 import re
@@ -14,7 +16,7 @@ import shutil
 import sys
 import tempfile
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import AsyncMock, Mock
 
@@ -2164,8 +2166,8 @@ async def main():
           "/도움말: 리그 선수 역할이 없는 사람은 쓰지 못한다 (등록하고 승인을 받으라고 알린다)")
     mine = helps["선수"]
     check("**리그 선수**가 쓸 수 있는 명령어예요." in mine and "`/내전하자` — <#400> 에서 써요." in mine
-          and mine.index("\n\n**리그 선수**\n") < mine.index("`/참여` · `/참여취소` —") < mine.index("`/내전하자` —") < mine.index("`/포지션변경` —") < mine.index("`/내전알림` —") < mine.index("`/도움말` —")
-          and "`/내전생성`" not in mine and "`/선수역할`" not in mine, "/도움말: 선수가 쓰는 명령어(/참여·/참여취소·/내전하자·/포지션변경·/내전알림·/도움말)는 모두 리그 선수 칸에 있다")
+          and mine.index("\n\n**리그 선수**\n") < mine.index("`/참여` · `/참여취소` —") < mine.index("`/내전하자` —") < mine.index("`/포지션변경` —") < mine.index("`/내전알림` —") < mine.index("`/시간등록` —") < mine.index("`/도움말` —")
+          and "`/내전생성`" not in mine and "`/선수역할`" not in mine, "/도움말: 선수가 쓰는 명령어(/참여·/참여취소·/내전하자·/포지션변경·/내전알림·/시간등록·/도움말)는 모두 리그 선수 칸에 있다")
     check(all("누구나" not in h for h in helps.values()) and all(helps[k].count("**리그 선수**\n") == 1 for k in ("선수", "운영진", "관리자")),
           "/도움말: '누구나' 칸은 없고, 리그 선수 칸은 쓸 수 있는 모든 사람에게 한 번 보인다")
     check("**리그 운영진**이 쓸 수 있는 명령어예요." in helps["운영진"] and "`/내전생성` — <#100> 에서 써요." in helps["운영진"] and "동시에 3개까지" in helps["운영진"]
@@ -2720,6 +2722,114 @@ async def main():
           "오라클: 리그 기록의 답에 실린 '포인트를 초기화하라'는 표시도 오라클에게 알린다 (오라클이 곧 초기화한다)")
     mod.oracle.S.reset_wanted = None
     mod.SYNC_URL, mod.SYNC_KEY = "", ""
+
+    # ── /시간등록: 내전 가능 시간을 칠하는 개인 링크 (운영자가 2026-10-23에 요청. 리그 서버 버전 22) ──
+    async def timereg(u, channel=400):
+        i = inter(channel, u)
+        i.edit_original_response = AsyncMock()
+        await mod.time_link.callback(i)
+        return said(i), i
+
+    def iso(ms):
+        return datetime.fromtimestamp(ms / 1000, timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.") + f"{int(ms % 1000):03d}Z"
+
+    w = World(mod, forum=True)
+    w.admin.permissions_for = Mock(return_value=Mock(view_channel=False, use_application_commands=False))
+    mod.bot.player_role_id, mod.bot.time_waits, mod.bot.time_note, mod.bot.nicknames = 55, {}, "", {}
+    real_page = mod.TIME_PAGE
+    mod.SYNC_URL, mod.SYNC_KEY, mod.TIME_PAGE = "https://script.google.com/macros/s/x/exec", "k", "https://example.github.io/league/time/"
+    issued = time.time() * 1000
+    w.replies["adminTimeLink"] = {"ok": True, "token": "eyJp.c2ln", "exp": issued + 86400e3, "issued": issued, "saved": False, "first": 1000,
+                                  "event": {"end": "2026-10-31", "points": 300}}
+    tp = player(821)
+    t, i = await timereg(tp)
+    btn = i.followup.send.call_args.kwargs["view"].children[0]
+    check(w.server[-1] == {"action": "adminTimeLink", "discord": ["821", "u821"], "name": "선수821"} and i.response.defer.call_args.kwargs == {"ephemeral": True}
+          and i.followup.send.call_args.kwargs.get("ephemeral") is True, "/시간등록: 디스코드 계정과 이름으로 리그 서버에서 링크의 표시를 받아, 본인에게만 답한다")
+    check(t == "🗓️ **내전 가능 시간**을 알려 주세요. 참여 신청이 아니라, 내전을 열기 좋은 시간을 찾기 위한 시간 조사예요.\n"
+              "아래 버튼은 **선수821**님 전용 링크예요. 다른 사람에게 보내지 마세요.\n"
+              "🎁 **처음 등록하면 1,000 포인트를 드려요.**\n"
+              "🎁 **시간 등록 이벤트 · 10월 31일까지 한 번 저장하거나 확인하면 300 포인트를 드려요.**\n"
+              "-# 이 링크는 24시간 동안 쓸 수 있어요. 고치고 싶을 때는 언제든지 `/시간등록` 으로 새 링크를 받으세요.",
+          "/시간등록: 시간 조사라는 것과 받을 수 있는 포인트를 알린다 (포인트는 '○ 포인트'로 적는다)")
+    check(btn.label == "내 가능 시간 칠하기" and btn.url == "https://example.github.io/league/time/#t=eyJp.c2ln" and mod.bot.time_waits[821]["since"] == issued,
+          "/시간등록: 버튼은 사이트의 시간표 페이지를 연다 (표시는 주소의 # 뒤에 실어 사이트의 서버로 가지 않는다)")
+    w.replies["adminTimeLink"] = {"ok": True, "token": "eyJp.c2ln", "exp": 1, "issued": issued, "saved": True, "first": 0, "event": None}
+    mod.bot.nicknames["821"] = "리그*닉"
+    t, i = await timereg(tp)
+    check(w.server[-1]["name"] == "리그*닉" and "**리그\\*닉**님 전용 링크" in t and "🎁" not in t, "/시간등록: 리그 닉네임으로 부르고, 받을 포인트가 없으면 포인트 안내를 뺀다")
+    n = len(w.server)
+    t, i = await timereg(user(829, "손님3"))
+    check(t == mod.PLAYER_ONLY and len(w.server) == n, "/시간등록: 리그 선수만 쓴다 (/참여 와 같다)")
+    n_admin = len(w.texts(w.admin.send))
+    w.replies["adminTimeLink"] = mod.ServerError("알 수 없는 요청입니다")
+    t, _ = await timereg(tp)
+    t2, _ = await timereg(tp)
+    check(t == t2 == "링크를 만들지 못했어요. 리그 관리자에게 알려 주세요." and w.texts(w.admin.send)[n_admin:] ==
+          ["🗓️ 선수가 `/시간등록` 을 썼지만 링크를 만들지 못했어요. 리그 서버가 시간 등록을 모르는 예전 버전이에요. `Code.gs` 를 버전 22 이상으로 배포해 주세요."],
+          "/시간등록: 예전 리그 서버면 선수에게는 짧게 답하고, 운영진 채널에 한 번만 알린다")
+    w.replies["adminTimeLink"] = mod.ServerGlitch("서버가 40초 안에 답하지 않았습니다")
+    t, _ = await timereg(tp)
+    check(t == "리그 서버가 답하지 않아 링크를 만들지 못했어요. 잠시 뒤에 다시 입력해 주세요." and "adminTimeLink" in mod.REPEATABLE, "/시간등록: 서버가 답하지 않으면 다시 입력하라고 한다")
+    mod.TIME_PAGE = ""
+    n = len(w.server)
+    t, _ = await timereg(tp)
+    check(t == "지금은 시간 등록 링크를 만들 수 없어요. 리그 관리자에게 알려 주세요." and len(w.server) == n, "/시간등록: 사이트 주소를 모르면 링크를 만들지 않는다")
+    mod.TIME_PAGE = "https://example.github.io/league/time/"
+
+    # 저장하면 그 답을 감사 인사로 바꾼다 (운영자가 정한 문구)
+    check(mod.time_thanks(1300) == "참여 가능 시간 등록을 해주셔서 감사합니다. **1,300 포인트**는 이후 오라클 봇이 지급할 예정입니다."
+          and mod.time_thanks(0) == "참여 가능 시간 등록을 해주셔서 감사합니다.", "/시간등록: 저장한 뒤의 문구 (받을 포인트가 없으면 앞 문장만)")
+    mod.bot.time_waits = {}
+    w.replies["adminTimeLink"] = {"ok": True, "token": "eyJp.c2ln", "exp": 1, "issued": issued, "saved": False, "first": 1000, "event": None}
+    t, i1 = await timereg(tp)
+    t, i2 = await timereg(player(822))
+    w.replies["adminTimeSaved"] = {"ok": True, "saved": {}}
+    await mod.time_tick()
+    check(w.server[-1] == {"action": "adminTimeSaved", "ids": ["821", "822"]} and not i1.edit_original_response.await_count and len(mod.bot.time_waits) == 2,
+          "/시간등록: 저장하기 전에는 답을 그대로 둔다")
+    w.replies["adminTimeSaved"] = {"ok": True, "saved": {"821": [{"at": iso(issued - 60000), "gained": 1000}, {"at": iso(issued + 5000), "gained": 1000},
+                                                                {"at": iso(issued + 9000), "gained": 300}],
+                                                        "822": [{"at": iso(issued + 7000), "gained": 0}]}}
+    await mod.time_tick()
+    kw1, kw2 = i1.edit_original_response.await_args.kwargs, i2.edit_original_response.await_args.kwargs
+    check(kw1["content"] == "참여 가능 시간 등록을 해주셔서 감사합니다. **1,300 포인트**는 이후 오라클 봇이 지급할 예정입니다." and kw1["view"].children[0].url.endswith("#t=eyJp.c2ln")
+          and kw2["content"] == "참여 가능 시간 등록을 해주셔서 감사합니다." and mod.bot.time_waits == {},
+          "/시간등록: 링크를 받은 뒤에 저장하면 그 답을 감사 인사로 바꾼다 (그 뒤에 받게 된 포인트의 합. 링크 버튼은 남긴다)")
+    n = len(w.server)
+    await mod.time_tick()
+    check(len(w.server) == n and i1.edit_original_response.await_count == 1, "/시간등록: 한 번 고친 뒤에는 다시 묻지 않는다 (기다리는 사람이 없으면 서버에 묻지 않는다)")
+    t, i3 = await timereg(tp)
+    mod.bot.time_waits[821]["until"] = time.time() - 1
+    await mod.time_tick()
+    check(len(w.server) == n + 1 and mod.bot.time_waits == {} and not i3.edit_original_response.await_count, "/시간등록: 디스코드가 답을 고치게 하는 15분이 지나면 잊는다")
+    t, i4 = await timereg(tp)
+    w.replies["adminTimeSaved"] = mod.ServerGlitch("서버가 40초 안에 답하지 않았습니다")
+    with contextlib.redirect_stdout(io.StringIO()):
+        await mod.time_tick()
+    check(821 in mod.bot.time_waits and "adminTimeSaved" in mod.REPEATABLE, "/시간등록: 서버가 답하지 않으면 다음 차례에 다시 묻는다")
+    mod.bot.time_waits = {}
+
+    # 사이트 주소와 켤 때 찍는 상태
+    real_site, real_oracle = mod.SITE_URL, mod.ORACLE_PAGE
+    mod.SITE_URL, mod.ORACLE_PAGE = "", "https://kkooldew.github.io/KR-Dota-InHouse-League/rank/oracle.html"
+    a = mod.site_root()
+    mod.ORACLE_PAGE = "https://kkooldew.github.io/KR-Dota-InHouse-League/oracle.html"
+    b = mod.site_root()
+    mod.ORACLE_PAGE = ""
+    c = mod.site_root()
+    mod.SITE_URL = "https://example.org/league"
+    d = mod.site_root()
+    mod.SITE_URL, mod.ORACLE_PAGE = real_site, real_oracle
+    check(a == b == "https://kkooldew.github.io/KR-Dota-InHouse-League/" and c == "" and d == "https://example.org/league/",
+          "/시간등록: 사이트 주소는 site_url, 없으면 승부의 신 랭킹 주소(oracle_page)에서 알아낸다")
+    check(mod.time_status() == "링크 https://example.github.io/league/time/", "/시간등록: 켤 때 링크가 여는 주소를 찍는다")
+    mod.TIME_PAGE = ""
+    check(mod.time_status().startswith("[확인 필요] 사이트 주소를 몰라"), "/시간등록: 사이트 주소를 모르면 켤 때 알린다")
+    mod.SYNC_URL = ""
+    check(mod.time_status().startswith("[확인 필요] 리그 서버 설정"), "/시간등록: 리그 서버 설정이 없으면 켤 때 알린다")
+    check(mod.bot.tree.get_command("시간등록", guild=mod.GUILD) is mod.time_link and mod.time_link.parameters == [], "/시간등록: 칸이 없는 명령어다")
+    mod.SYNC_URL, mod.SYNC_KEY, mod.TIME_PAGE = "", "", real_page
 
     # ── 운영진 명령어로 봇이 하는 답은 모두 그 명령어를 쓴 운영진의 멘션으로 시작한다 (이 파일에서 돌린 모든 명령어를 본다) ──
     bare = [text for uid, text, _ in answers if not text.startswith(f"<@{uid}>")]

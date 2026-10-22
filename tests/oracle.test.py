@@ -99,6 +99,8 @@ class World:
         self.play = None                  # 리그 서버가 알려 주는 참가 포인트. None 이면 그 값을 모르는 예전 서버처럼 군다
         self.reset = None                 # 리그 서버가 알려 주는 '포인트를 초기화하라'는 표시. None 이면 그 값을 모르는 예전 서버처럼 군다
         self.first = None                 # 리그 서버가 알려 주는 그날의 첫 내전의 참가 포인트. None 이면 그 값을 모르는 예전 서버처럼 군다
+        self.grants = None                # 리그 서버가 알려 주는 시간 등록 포인트(넣어 달라는 것들). None 이면 싣지 않는다
+        self.acks, self.ack_fail = [], False   # 넣었다고 알려 온 것들. ack_fail 이면 그 알림에 답하지 않는다
 
         async def can_play(user):
             return user.id in self.players
@@ -113,7 +115,15 @@ class World:
                     extra["oracleReset"] = self.reset
                 if self.first is not None:
                     extra["oracleFirst"] = self.first
+                if self.grants:
+                    extra["timeGrants"] = self.grants
                 return {"ok": True} if self.switch is None else {"ok": True, "oracleOn": self.switch, **extra}
+            if payload["action"] == "adminTimeAck":
+                if self.ack_fail:
+                    raise RuntimeError("서버가 답하지 않음")
+                self.acks.append(payload["grants"])
+                self.grants = [g for g in self.grants or [] if not (isinstance(g, dict) and g.get("g") in payload["grants"])]
+                return {"ok": True, "left": len(self.grants)}
             self.asked.append(payload)
             if self.fail:
                 raise RuntimeError("서버 오류")
@@ -1187,6 +1197,67 @@ async def main():
                "books": [{"key": "k", "state": "open", "bets": {"4": {"side": "r", "amount": 10, "at": 0}}}]})
     check([mod.S.accounts[k]["listed"] for k in "1234"] == [True, True, False, True],
           "랭킹: 이 칸이 생기기 전의 기록은 포인트를 받았거나 건 적이 있으면 오른 것으로 본다 (걸어 둔 판이 있는 사람도)")
+
+    # ── 시간 등록 포인트 (서버 버전 22): 리그 서버가 5분마다 알려 주면 넣고, 넣었다고 알린다 ──
+    path.unlink(missing_ok=True)
+    w = World(mod, path, T0)
+    g1 = {"g": "100:first", "id": "100", "u": "u100", "n": "백", "p": 1000, "k": "first", "at": "2026-10-13T03:00:00Z"}
+    g2 = {"g": "101:first", "id": "101", "u": "u101", "n": "선수101", "p": 1000, "k": "first"}
+    g3 = {"g": "100:e1", "id": "100", "u": "u100", "n": "백", "p": 300, "k": "event"}
+    w.grants = [g1, g2, g3, {"g": "", "id": "1", "p": 5}, {"g": "x", "id": "abc", "p": 5}, {"g": "y", "id": "5", "p": -1}, {"g": "z", "id": "6", "p": True}, "junk"]
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        await mod.check_switch(force=True)
+    acc = mod.S.accounts
+    check(acc["100"]["points"] == 1300 and acc["101"]["points"] == 1000 and acc["100"]["username"] == "u100" and acc["100"]["name"] == "백"
+          and not acc["100"]["listed"] and acc["100"]["claimed"] == 0 and mod.S.dirty and set(acc) == {"100", "101"},
+          "시간 등록 포인트: 리그 서버가 알려 준 포인트를 넣는다 (랭킹에 오르는 기준은 그대로, 모양이 이상한 것은 버린다)")
+    check(w.acks == [["100:first", "101:first", "100:e1"]] and all(not isinstance(g, dict) or not g.get("g", "").startswith("10") for g in w.grants) and "시간 등록 포인트를 2명에게 넣었습니다 (모두 2,300 포인트)" in out.getvalue(),
+          "시간 등록 포인트: 넣은 것을 서버에 알리고(서버가 지운다) 창에 찍는다")
+    w.grants, w.ack_fail = [g1, g2, g3], True
+    w.at += mod.SWITCH_POLL
+    with contextlib.redirect_stdout(io.StringIO()):
+        await mod.check_switch()
+    check(acc["100"]["points"] == 1300 and acc["101"]["points"] == 1000 and len(w.acks) == 1 and len(w.grants) == 3,
+          "시간 등록 포인트: 서버가 같은 것을 다시 알려 와도 두 번 넣지 않는다 (알리지 못하면 서버에 남는다)")
+    w.ack_fail = False
+    w.at += mod.SWITCH_POLL
+    await mod.check_switch()
+    check(acc["100"]["points"] == 1300 and w.acks[-1] == ["100:first", "101:first", "100:e1"] and not w.grants, "시간 등록 포인트: 다음 확인 때 다시 알리기만 한다")
+    check(acc["100"]["points"] == 1300 and json.loads(path.read_text(encoding="utf-8"))["granted"].keys() == {"100:first", "101:first", "100:e1"},
+          "시간 등록 포인트: 넣은 것은 파일에 적어 둔다")
+    w = World(mod, path, w.at)
+    check(set(mod.S.granted) == {"100:first", "101:first", "100:e1"} and mod.S.accounts["100"]["points"] == 1300, "시간 등록 포인트: 껐다 켜도 넣은 것을 기억한다")
+    g4 = {"g": "102:first", "id": "102", "u": "u102", "n": "선수102", "p": 1000, "k": "first"}
+    w.grants, w.switch = [g4], False
+    with contextlib.redirect_stdout(io.StringIO()):
+        await mod.check_switch(force=True)
+    check(not mod.S.on and "102" not in mod.S.accounts and w.acks == [] and w.grants == [g4], "시간 등록 포인트: 주인이 꺼 둔 동안에는 넣지 않고 서버에 남겨 둔다")
+    w.switch = True
+    w.at += mod.SWITCH_POLL
+    with contextlib.redirect_stdout(io.StringIO()):
+        await mod.check_switch()
+    check(mod.S.on and mod.S.accounts["102"]["points"] == 1000 and w.acks == [["102:first"]], "시간 등록 포인트: 켜진 뒤에 넣는다")
+    w.at += 30
+    w.asked.clear()
+    await mod.tick()
+    sent = [x for x in w.asked if x["action"] == "saveOracle"]
+    check(sent and {r["id"]: r["points"] for r in sent[-1]["ledger"]} == {"100": 1300, "101": 1000, "102": 1000} and sent[-1]["board"]["players"] == [],
+          "시간 등록 포인트: 넣은 포인트는 시트의 기록에 올라가고, 랭킹에는 오르지 않는다")
+    mod.S.reset_wanted = "r1"
+    with contextlib.redirect_stdout(io.StringIO()):
+        await mod.apply_reset()
+    w.grants = [g1]
+    w.at += mod.SWITCH_POLL
+    with contextlib.redirect_stdout(io.StringIO()):
+        await mod.check_switch()
+    check(mod.S.accounts == {} and "100:first" in mod.S.granted and w.acks[-1] == ["100:first"],
+          "시간 등록 포인트: 포인트를 초기화해도 이미 넣은 처음 등록 포인트는 다시 넣지 않는다")
+    mod.S.granted["old:first"] = w.at - mod.GRANT_KEEP - 1
+    w.grants = [{"g": "103:first", "id": "103", "u": "u103", "n": "선수103", "p": 0, "k": "first"}]
+    w.at += mod.SWITCH_POLL
+    await mod.check_switch()
+    check("old:first" not in mod.S.granted and "103:first" in mod.S.granted and mod.S.accounts["103"]["points"] == 0, "시간 등록 포인트: 오래된 기억은 지운다 (0 포인트도 받아서 지운다)")
 
     # ── 오라클 봇을 쓰지 않을 때(토큰이 없을 때)는 아무 일도 하지 않는다 ──
     path.unlink(missing_ok=True)

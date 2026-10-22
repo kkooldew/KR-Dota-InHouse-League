@@ -14,5 +14,6 @@
   "max_games": 3,
   "lock_closed_threads": false,
   "oracle_token": "",
-  "oracle_page": ""
+  "oracle_page": "",
+  "site_url": ""
 }

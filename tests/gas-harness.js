@@ -99,6 +99,14 @@ function makeEnv(opt = {}){
       // 실제 Apps Script 처럼 부호 있는 바이트(-128~127) 배열을 돌려준다
       DigestAlgorithm: { SHA_256: 'sha256' }, Charset: { UTF_8: 'utf8' },
       computeDigest: (alg, value, charset) => Array.from(require('crypto').createHash(alg).update(String(value), charset || 'latin1').digest()).map(b => (b > 127 ? b - 256 : b)),
+      computeHmacSha256Signature: (value, key) => Array.from(require('crypto').createHmac('sha256', String(key)).update(String(value), 'utf8').digest()).map(b => (b > 127 ? b - 256 : b)),
+      // 글자는 UTF-8 로, 바이트 배열은 그대로 base64(웹용: + 대신 -, / 대신 _)로. 실제처럼 끝에 = 를 붙인다
+      base64EncodeWebSafe: data => (typeof data === 'string' ? Buffer.from(data, 'utf8') : Buffer.from(data.map(b => b & 255))).toString('base64').replace(/\+/g, '-').replace(/\//g, '_'),
+      base64DecodeWebSafe: s => {
+        if (!/^[A-Za-z0-9_-]*={0,2}$/.test(s) || s.length % 4) throw new Error('Could not decode string.');
+        return Array.from(Buffer.from(s.replace(/-/g, '+').replace(/_/g, '/'), 'base64')).map(b => (b > 127 ? b - 256 : b));
+      },
+      newBlob: bytes => ({ getDataAsString: () => Buffer.from(bytes.map(b => b & 255)).toString('utf8') }),
       // 'yyyy-MM-dd HH:mm' 만 흉내 낸다 (한국 시간)
       formatDate: (d, tz, fmt) => new Date(d.getTime() + 9 * 3600e3).toISOString().slice(0, 16).replace('T', ' ')
     },

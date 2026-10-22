@@ -1214,7 +1214,7 @@ assert(props.ADMIN_KEY === key, 'running setup again keeps the admin key');
     'dates: a day starts at 0:00 Korean time; days that do not exist are not dates');
 
   let st = status();
-  assert(st.open === true && st.regClose === '' && st.seasonEnd === '' && st.seasonEnded === false && st.version === 21 && !('registered' in st),
+  assert(st.open === true && st.regClose === '' && st.seasonEnd === '' && st.seasonEnded === false && st.version === 22 && !('registered' in st),
     'dates: nothing set at first (the public status carries both dates)');
 
   // 모집 종료 날짜
@@ -1355,7 +1355,7 @@ assert(props.ADMIN_KEY === key, 'running setup again keeps the admin key');
   const staffKey = post({ action: 'adminStaffAdd', key, name: '봇' }).key;
   assert(post({ action: 'saveOracle', key: staffKey, board: { players: [] } }).ok && get('oracle').oracle.players.length === 0, 'oracle: a staff key can save too');
   const st = get('status');
-  assert(st.version === 21 && !('oracle' in st) && !('oracleOn' in st) && !('oracleSeen' in st) && !('oraclePlay' in st), 'oracle: the public status is unchanged');
+  assert(st.version === 22 && !('oracle' in st) && !('oracleOn' in st) && !('oracleSeen' in st) && !('oraclePlay' in st), 'oracle: the public status is unchanged');
 
   // 켜고 끄기 (버전 18): 주인이 리그 관리자 페이지에서 켜고 끈다. 처음에는 꺼져 있다
   const logs = () => (S.sheets['운영 기록'] ? S.sheets['운영 기록'].grid.slice(1).map(r => r[2] + '|' + r[3]) : []);
@@ -1428,7 +1428,7 @@ assert(props.ADMIN_KEY === key, 'running setup again keeps the admin key');
   assert(!r.ok && r.code === 'confirm' && get('oracle').oracle.players.length === 1, 'reset: other words are refused');
   r = post({ action: 'adminOracleReset', key, confirm: '포인트 초기화' });
   const rid = S.props.ORACLE_RESET;
-  assert(r.ok && /^\d{4}-\d\d-\d\dT/.test(rid) && r.oracleResetAt === rid && 'registered' in r && r.version === 21
+  assert(r.ok && /^\d{4}-\d\d-\d\dT/.test(rid) && r.oracleResetAt === rid && 'registered' in r && r.version === 22
     && logs().filter(l => l === '주인|승부 예측 포인트 초기화').length === 1, 'reset: the owner resets (logged; the admin page is told when)');
   r = get('oracle');
   assert(r.ok && r.oracle.players.length === 0 && r.oracle.weekly === 1000 && r.oracle.play === 100 && /^\d{4}-/.test(r.oracle.updatedAt), 'reset: the public ranking is emptied at once');
@@ -1458,7 +1458,7 @@ assert(props.ADMIN_KEY === key, 'running setup again keeps the admin key');
 
   // 그날의 첫 내전의 참가 포인트: 처음에는 300이고 주인이 바꾼다
   let r = post({ action: 'ping', key });
-  assert(r.ok && r.version === 21 && r.oracleFirst === 300 && !('ORACLE_FIRST' in S.props), 'first game points: 300 at first');
+  assert(r.ok && r.version === 22 && r.oracleFirst === 300 && !('ORACLE_FIRST' in S.props), 'first game points: 300 at first');
   assert(post({ action: 'adminOracle', key, brief: true }).oracleFirst === 300 && post({ action: 'adminOracle', key }).oracleFirst === 300
     && post({ action: 'adminLeague', key }).oracleFirst === 300 && post({ action: 'saveOracle', key, board: { players: [] } }).oracleFirst === 300,
     'first game points: the bot is told wherever it is told the switch');
@@ -1526,4 +1526,220 @@ assert(props.ADMIN_KEY === key, 'running setup again keeps the admin key');
   delete S.props.LAYOUT; tab.grid[0][PT] = '';
   post({ action: 'ping', key });
   assert(S.props.LAYOUT === '4' && tab.grid[0][PT] === '승부예측포인트' && tab.grid[1][3] === '선수1', 'upgrade: the new header is filled in, rows untouched');
+})();
+/* ---- 버전 22: 내전 가능 시간 (개인 링크, 시간표 저장, 다른 선수들이 고른 정도, 처음 등록·이벤트 포인트, 오라클 봇에게 넘기기) ---- */
+(() => {
+  const S = makeEnv({ fresh: true });
+  const crypto = require('crypto');
+  const post = body => JSON.parse(S.env.doPost({ postData: { contents: JSON.stringify(body) } }).text);
+  const get = action => JSON.parse(S.env.doGet({ parameter: action ? { action } : {} }).text);
+  S.env.setup();
+  const key = S.props.ADMIN_KEY;
+  const logs = () => (S.sheets['운영 기록'] ? S.sheets['운영 기록'].grid.slice(1).map(r => r[2] + '|' + r[3]) : []);
+  const staffKey = post({ action: 'adminStaffAdd', key, name: '관리' }).key;
+  const ROWS = 17, CELLS = 119;
+  // 칸 고르기: [[날짜 순번(0~6), 칸 순번(0~16)], …] → '0'·'1' 119자
+  const grid = list => { const a = new Array(CELLS).fill('0'); list.forEach(([k, r]) => { a[k * ROWS + r] = '1'; }); return a.join(''); };
+  const span = (k, from, to) => Array.from({ length: to - from }, (_, i) => [k, from + i]);
+  const kst = off => new Date(Date.now() + 9 * 3600e3 + off * 86400e3).toISOString().slice(0, 10);   // 한국 날짜(0시 기준)
+  const today = S.env.timeToday_();
+  const link = (id, username, name) => post({ action: 'adminTimeLink', key, discord: [id, username], name });
+  const A = '111111111111111111', B = '222222222222222222', C = '333333333333333333', D = '444444444444444444', E = '555555555555555555';
+
+  // 날짜 도우미: 하루는 오전 6시(한국 시간)에 바뀐다
+  assert(S.env.timeToday_(Date.UTC(2026, 9, 22, 20, 59)) === '2026-10-22' && S.env.timeToday_(Date.UTC(2026, 9, 22, 21, 0)) === '2026-10-23'
+    && S.env.weekday_('2026-10-22') === 3 && S.env.weekday_('2026-10-26') === 0 && S.env.addDays_('2026-10-31', 1) === '2026-11-01',
+    'time: the day changes at 6 a.m. Korean time; weekdays start on Monday');
+  assert(S.env.timeSpans_('0000000111101111' + '1') === '17시~21시, 22시~03시' && S.env.timeSpans_('1'.repeat(17)) === '10시~03시' && S.env.timeSpans_('0'.repeat(17)) === '',
+    'time: hours are written as ranges (17시~21시, 22시~03시)');
+
+  // 처음 상태
+  let r = post({ action: 'ping', key });
+  assert(r.ok && r.version === 22 && r.timeFirst === 1000 && r.timeEvent.on === false && r.timeEvent.live === false, 'time: first-registration points are 1000 at first and no event');
+  const st = get('status');
+  assert(!('timeFirst' in st) && !('timeEvent' in st), 'time: nothing about it in the public status');
+
+  // 개인 링크
+  assert(post({ action: 'adminTimeLink', key: 'wrong', discord: [A, 'kim'], name: '김' }).code === 'auth', 'time link: needs a league admin key');
+  assert(post({ action: 'adminTimeLink', key, discord: ['abc', 'kim'], name: '김' }).code === 'discord', 'time link: needs a Discord ID');
+  r = link(A, '@Kim', '김<b>\n선수');
+  assert(r.ok && /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(r.token) && Math.abs(r.exp - Date.now() - 24 * 3600e3) < 5000 && r.first === 1000 && r.event === null
+    && r.saved === false && Math.abs(r.issued - Date.now()) < 5000 && /^[0-9a-f]{64}$/.test(S.props.TIME_SECRET), 'time link: a signed token good for 24 hours, with the first-registration points');
+  const tokA = r.token;
+  assert(!tokA.includes(key) && !tokA.includes(S.props.TIME_SECRET), 'time link: the token carries no key');
+
+  // 선수 화면
+  r = post({ action: 'timeGet', token: tokA });
+  assert(r.ok && r.name === '김b선수' && r.today === today && r.hours.length === 17 && r.hours[0] === 10 && r.hours[16] === 2 && r.mine === '0'.repeat(CELLS)
+    && r.saved === false && r.repeat === true && r.levels === '0'.repeat(CELLS) && r.first === 1000 && r.event === null && !('version' in r) && !('registered' in r),
+    'time page: an empty timetable for someone new (name cleaned, repeat on by default)');
+  const bad = [tokA.slice(0, -2) + (tokA.slice(-2) === 'AA' ? 'BB' : 'AA'), 'x' + tokA, 'nope', '', null, tokA.replace('.', '')];
+  bad.forEach(t => { const x = post({ action: 'timeGet', token: t }); assert(!x.ok && x.code === 'token', 'time page: a broken token is refused: ' + JSON.stringify(String(t).slice(0, 12))); });
+  const b64 = buf => buf.toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  const forge = p => { const body = b64(Buffer.from(JSON.stringify(p))); return body + '.' + b64(crypto.createHmac('sha256', S.props.TIME_SECRET).update(body).digest()); };
+  r = post({ action: 'timeGet', token: forge({ i: A, u: 'kim', n: '김', e: Date.now() - 1000 }) });
+  assert(!r.ok && r.code === 'expired' && /24시간/.test(r.error), 'time page: an expired link asks for a new one');
+  const [body] = tokA.split('.');
+  const other = b64(Buffer.from(JSON.stringify({ i: B, u: 'lee', n: '이', e: Date.now() + 3600e3 })));
+  r = post({ action: 'timeGet', token: other + '.' + tokA.split('.')[1] });
+  assert(!r.ok && r.code === 'token' && body !== other, "time page: a token changed to someone else's account is refused");
+
+  // 저장
+  const mine = grid([...span(0, 7, 11), ...span(0, 12, 17), ...span(3, 0, 2)]);   // 오늘 17~21시·22~03시, 사흘 뒤 10~12시
+  r = post({ action: 'timeSave', token: tokA, start: today, slots: '0'.repeat(CELLS), repeat: true });
+  assert(!r.ok && r.code === 'empty', 'time save: an empty timetable cannot be saved');
+  r = post({ action: 'timeSave', token: tokA, start: today, slots: mine.slice(1), repeat: true });
+  assert(!r.ok && r.code === 'slots', 'time save: a timetable of the wrong size is refused');
+  r = post({ action: 'timeSave', token: tokA, start: today, slots: mine.replace('1', '2'), repeat: true });
+  assert(!r.ok && r.code === 'slots', 'time save: only 0 and 1');
+  r = post({ action: 'timeSave', token: tokA, start: S.env.addDays_(today, -2), slots: mine, repeat: true });
+  assert(!r.ok && r.code === 'stale' && !S.props.TIME_FILE_ID, 'time save: a page opened two days ago must be reloaded (nothing written)');
+  r = post({ action: 'timeSave', token: forge({ i: A, u: 'kim', n: '김', e: Date.now() - 1 }), start: today, slots: mine, repeat: true });
+  assert(!r.ok && r.code === 'expired', 'time save: an expired link cannot save');
+  r = post({ action: 'timeSave', token: tokA, start: today, slots: mine, repeat: true });
+  assert(r.ok && r.gained === 1000 && r.first === 1000 && r.event === 0 && r.repeat === true && r.from === today && /^\d{4}-/.test(r.savedAt) && !('version' in r),
+    'time save: the first save earns the first-registration points (1000)');
+  let file = JSON.parse(S.files[S.props.TIME_FILE_ID]);
+  assert(file.players[A].u === 'kim' && file.players[A].n === '김b선수' && file.players[A].s.length === CELLS && file.players[A].rep === true && file.players[A].first
+    && file.grants.length === 1 && file.grants[0].g === A + ':first' && file.grants[0].p === 1000 && file.grants[0].k === 'first' && file.grants[0].id === A
+    && S.props.TIME_PENDING === '1', 'time save: kept by weekday in a private Drive file, with the points for the oracle bot to hand out');
+  r = post({ action: 'timeGet', token: tokA });
+  assert(r.saved === true && r.mine === mine && r.first === 0 && r.savedAt === file.players[A].at && r.levels === '0'.repeat(CELLS), 'time page: the saved timetable comes back; the first-registration points are gone');
+  r = post({ action: 'timeSave', token: tokA, start: today, slots: mine, repeat: true });
+  assert(r.ok && r.gained === 0 && JSON.parse(S.files[S.props.TIME_FILE_ID]).grants.length === 1, 'time save: saving again earns nothing more');
+
+  // 시트의 보기용 탭
+  const tab = S.sheets['내전 가능 시간'];
+  const wdA = S.env.weekday_(today), wd3 = S.env.weekday_(S.env.addDays_(today, 3));
+  assert(tab && tab.warnOnly && tab.grid[0][0].startsWith('이 탭은 선수가 /시간등록') && tab.grid[1].join('|') === '이름|디스코드 사용자명|디스코드 ID|마지막 저장|매주 반복|월|화|수|목|금|토|일|처음 저장'
+    && tab.grid[2][0] === '김b선수' && tab.grid[2][2] === A && tab.grid[2][4] === '켬' && tab.grid[2][5 + wdA] === '17시~21시, 22시~03시' && tab.grid[2][5 + wd3] === '10시~12시',
+    'time sheet: a view-only tab lists each player with the hours per weekday');
+
+  // 요일로 이어지는 것과 매주 반복
+  const yday = S.env.addDays_(today, -1);
+  const tokB = link(B, 'lee', '이').token;
+  const gB = grid([...span(0, 0, 3), ...span(1, 8, 10)]);               // 어제 10~13시, 오늘 18~20시
+  r = post({ action: 'timeSave', token: tokB, start: yday, slots: gB, repeat: true });
+  assert(r.ok && r.from === yday, 'time save: a page opened before 6 a.m. (yesterday) can still be saved');
+  r = post({ action: 'timeGet', token: tokB });
+  assert(r.mine.slice(0, ROWS) === gB.slice(ROWS, 2 * ROWS) && r.mine.slice(6 * ROWS) === gB.slice(0, ROWS), 'time repeat: on, the same weekday next week shows the same hours');
+  r = post({ action: 'timeSave', token: tokB, start: yday, slots: gB, repeat: false });
+  r = post({ action: 'timeGet', token: tokB });
+  assert(r.repeat === false && r.from === yday && r.mine.slice(0, ROWS) === gB.slice(ROWS, 2 * ROWS) && r.mine.slice(6 * ROWS) === '0'.repeat(ROWS),
+    'time repeat: off, nothing is registered after the saved seven days');
+  assert(S.sheets['내전 가능 시간'].grid.some(row => row[0] === '이' && /^끔 \(\d+\/\d+~\d+\/\d+만\)$/.test(row[4])), 'time sheet: repeat off shows the dates it covers');
+  post({ action: 'timeSave', token: tokB, start: today, slots: grid(span(0, 7, 9)), repeat: true });   // 이: 오늘 17~19시
+
+  // 다른 선수들이 고른 정도: 본인은 빼고, 가장 많은 칸을 기준으로 네 단계. 사람 수와 이름은 보내지 않는다
+  const tokC = link(C, 'park', '박').token, tokD = link(D, 'choi', '최').token;
+  post({ action: 'timeSave', token: tokC, start: today, slots: grid([[0, 7], [0, 8], [5, 0]]), repeat: true });
+  post({ action: 'timeSave', token: tokD, start: today, slots: grid([[0, 7], [6, 16]]), repeat: true });
+  r = post({ action: 'timeGet', token: tokA });                           // 김에게: 이·박·최 셋. 오늘 17시 칸은 셋, 18시 칸은 둘, 나머지는 하나
+  const lv = (k, h) => r.levels[k * ROWS + h];
+  assert(lv(0, 7) === '3' && lv(0, 8) === '2' && lv(5, 0) === '1' && lv(6, 16) === '1' && lv(0, 12) === '0' && /^[0-3]+$/.test(r.levels),
+    'time levels: three steps relative to the busiest hour (3 people → 3, 2 → 2, 1 → 1), no counts');
+  r = post({ action: 'timeGet', token: tokD });                           // 최에게: 김·이·박. 본인(최)의 칸은 세지 않는다
+  assert(lv(0, 7) === '3' && lv(6, 16) === '0' && lv(0, 12) === '1', 'time levels: my own timetable is not counted');
+
+  // 리그 관리자 페이지의 모아 보기
+  assert(post({ action: 'adminTimeView', key: 'wrong' }).code === 'auth', 'time view: needs a key');
+  r = post({ action: 'adminTimeView', key: staffKey });
+  const kim = r.people.find(p => p.username === 'kim');
+  assert(r.ok && r.today === today && r.people.length === 4 && kim.name === '김b선수' && kim.slots === mine && kim.repeat === true && r.firstCount === 4
+    && r.pending === 4 && r.timeFirst === 1000 && r.timeEvent.live === false && !JSON.stringify(r).includes(S.props.TIME_SECRET) && !JSON.stringify(r).includes(A),
+    "time view: every league admin sees everyone's timetable (names, not Discord IDs) and the point counts");
+
+  // 오라클 봇에게 넘기기: 5분마다 오는 확인(brief)에 줄 포인트를 싣고, 넣었다고 알려 오면 지운다
+  r = post({ action: 'adminOracle', key, brief: true });
+  assert(r.ok && r.timeGrants.length === 4 && r.timeGrants.every(g => g.k === 'first' && g.p === 1000 && /^\d+:first$/.test(g.g)) && r.timeGrants[0].u === 'kim',
+    'time grants: the oracle bot is handed the points to add when it checks in');
+  r = post({ action: 'adminTimeAck', key, grants: [A + ':first', 'nope'] });
+  assert(r.ok && r.left === 3 && S.props.TIME_PENDING === '3' && post({ action: 'adminOracle', key, brief: true }).timeGrants.length === 3, 'time grants: points the bot has added are dropped');
+  r = post({ action: 'adminTimeAck', key, grants: [A + ':first'] });
+  assert(r.ok && r.left === 3, 'time grants: telling it again changes nothing');
+  post({ action: 'adminTimeAck', key, grants: [B + ':first', C + ':first', D + ':first'] });
+  assert(S.props.TIME_PENDING === '0' && !('timeGrants' in post({ action: 'adminOracle', key, brief: true })), 'time grants: nothing to hand out, nothing in the answer');
+
+  // 방금 저장했는지 (봇이 /시간등록 의 답을 고치려고 묻는다)
+  r = post({ action: 'adminTimeSaved', key, ids: [A, E] });
+  assert(r.ok && r.saved[A].length === 2 && r.saved[A][0].gained === 1000 && r.saved[A][1].gained === 0 && !(E in r.saved), 'time saved: the bot can see who just saved and what they earned');
+  const recent = JSON.parse(S.props.TIME_RECENT);
+  recent[A][0].at = new Date(Date.now() - 31 * 60000).toISOString();
+  S.props.TIME_RECENT = JSON.stringify(recent);
+  assert(post({ action: 'adminTimeSaved', key, ids: [A] }).saved[A].length === 1, 'time saved: only the last 30 minutes are kept');
+
+  // 처음 등록 포인트: 주인 키로만 바꾼다
+  r = post({ action: 'adminConfig', key: staffKey, timeFirst: 500 });
+  assert(!r.ok && r.code === 'owner' && post({ action: 'ping', key }).timeFirst === 1000, 'time first points: only the owner key');
+  for (const v of [-1, 10001, 1.5, 'x', null]) {
+    r = post({ action: 'adminConfig', key, timeFirst: v, oraclePlay: 7 });
+    assert(!r.ok && r.code === 'timeFirst' && post({ action: 'ping', key }).oraclePlay === 100, 'time first points: ' + JSON.stringify(v) + ' is refused and nothing else is changed');
+  }
+  r = post({ action: 'adminConfig', key, timeFirst: 0 });
+  assert(r.ok && r.timeFirst === 0 && logs().filter(l => l === '주인|처음 등록 포인트').length === 1, 'time first points: the owner changes it (logged)');
+  const tokE = link(E, 'jung', '정');
+  assert(tokE.first === 0, 'time link: with 0, no first-registration points are promised');
+  r = post({ action: 'timeSave', token: tokE.token, start: today, slots: grid([[2, 2]]), repeat: true });
+  assert(r.ok && r.gained === 0 && JSON.parse(S.files[S.props.TIME_FILE_ID]).players[E].first && S.props.TIME_PENDING === '0', 'time first points: 0 gives nothing (the first save is still noted)');
+  post({ action: 'adminConfig', key, timeFirst: 1000 });
+
+  // 시간 등록 이벤트
+  const ev = (on, start, end, points) => post({ action: 'adminConfig', key, timeEvent: { on, start, end, points } });
+  r = post({ action: 'adminConfig', key: staffKey, timeEvent: { on: true, start: kst(-1), end: kst(3), points: 300 } });
+  assert(!r.ok && r.code === 'owner', 'time event: only the owner key');
+  assert(ev(true, '', kst(3), 300).code === 'timeEvent' && ev(true, kst(3), kst(1), 300).code === 'timeEvent' && ev(true, kst(-1), kst(3), -5).code === 'timeEvent'
+    && ev(true, '2026-02-30', kst(3), 300).code === 'date' && post({ action: 'adminConfig', key, timeEvent: 'on' }).code === 'timeEvent' && !S.props.TIME_EVENT,
+    'time event: missing or reversed dates, bad points and bad dates are refused');
+  r = ev(true, kst(-1), kst(3), 300);
+  const ev1 = JSON.parse(S.props.TIME_EVENT).id;
+  assert(r.ok && r.timeEvent.on && r.timeEvent.live && r.timeEvent.points === 300 && /^e/.test(ev1) && logs().filter(l => l === '주인|시간 등록 이벤트').length === 1,
+    'time event: the owner opens an event (logged)');
+  r = link(A, 'kim', '김');
+  assert(r.first === 0 && r.event.points === 300 && r.event.end === kst(3), 'time event: the link promises the event points to someone who has not had them');
+  assert(post({ action: 'timeGet', token: r.token }).event.got === false, 'time event: the page shows it is not yet received');
+  r = post({ action: 'timeSave', token: r.token, start: today, slots: mine, repeat: true });   // 바꾼 것 없이 그대로 확인
+  assert(r.ok && r.gained === 300 && r.event === 300 && r.first === 0, 'time event: confirming an old timetable as it is earns the event points');
+  r = post({ action: 'timeSave', token: tokA, start: today, slots: mine, repeat: true });
+  assert(r.gained === 0 && link(A, 'kim', '김').event === null && post({ action: 'timeGet', token: tokA }).event.got === true, 'time event: once per player per event');
+  const tokF = link('666666666666666666', 'yoon', '윤').token;
+  r = post({ action: 'timeSave', token: tokF, start: today, slots: grid([[1, 1]]), repeat: true });
+  assert(r.gained === 1300 && r.first === 1000 && r.event === 300, 'time event: a first registration during an event earns both');
+  file = JSON.parse(S.files[S.props.TIME_FILE_ID]);
+  assert(file.grants.map(g => g.g).join() === [A + ':' + ev1, '666666666666666666:first', '666666666666666666:' + ev1].join() && S.props.TIME_PENDING === '3',
+    'time event: each reward is handed to the oracle bot once (named by player and event)');
+  r = ev(true, kst(-1), kst(6), 500);
+  assert(JSON.parse(S.props.TIME_EVENT).id === ev1 && post({ action: 'timeSave', token: tokA, start: today, slots: mine, repeat: true }).gained === 0,
+    'time event: extending the dates keeps the same event (no second reward)');
+  r = ev(false, kst(-1), kst(6), 500);
+  assert(r.timeEvent.on === false && r.timeEvent.live === false && link(B, 'lee', '이').event === null, 'time event: turning it off stops the rewards');
+  r = ev(true, kst(-40), kst(-30), 300);
+  const ev2 = JSON.parse(S.props.TIME_EVENT).id;
+  assert(ev2 !== ev1 && r.timeEvent.live === false, 'time event: dates that do not overlap make a new event (this one is over)');
+  r = ev(true, kst(-1), kst(1), 200);
+  const ev3 = JSON.parse(S.props.TIME_EVENT).id;
+  assert(ev3 !== ev1 && ev3 !== ev2 && r.timeEvent.live && post({ action: 'timeSave', token: tokA, start: today, slots: mine, repeat: true }).gained === 200,
+    'time event: in a new event everyone can earn it again');
+  r = ev(true, kst(2), kst(4), 200);
+  assert(r.timeEvent.live === false && link(B, 'lee', '이').event === null, 'time event: an event that has not started yet gives nothing');
+  r = post({ action: 'adminTimeView', key });
+  assert(r.eventCount === 0 && r.firstCount === 6 && r.pending === 4, 'time view: the counts follow the current event');
+
+  // 드라이브가 답하지 않을 때: 저장하지 않고(모두의 시간표를 덮지 않게), 링크는 포인트 안내 없이 준다
+  const fid = S.props.TIME_FILE_ID, kept = S.files[fid];
+  const realGet = S.env.DriveApp.getFileById;
+  S.env.DriveApp.getFileById = id => { if (id === fid) throw new Error('드라이브 오류'); return realGet(id); };
+  r = post({ action: 'timeSave', token: tokA, start: today, slots: grid([[0, 0]]), repeat: true });
+  const l2 = link('777777777777777777', 'han', '한');
+  const brief = post({ action: 'adminOracle', key, brief: true });
+  S.env.DriveApp.getFileById = realGet;
+  assert(!r.ok && S.files[fid] === kept && S.props.TIME_FILE_ID === fid, 'time save: when Drive does not answer, nothing is overwritten');
+  assert(l2.ok && l2.token && l2.first === 0 && l2.event === null, 'time link: when Drive does not answer, the link is still given (without the points note)');
+  assert(brief.ok && !('timeGrants' in brief) && brief.oracleOn === false, 'time grants: when Drive does not answer, the oracle bot gets the rest of its answer');
+
+  // 서버가 시트를 쓰지 못해도 저장은 끝낸다
+  const realSS = S.env.SpreadsheetApp.getActiveSpreadsheet;
+  S.env.SpreadsheetApp.getActiveSpreadsheet = () => { throw new Error('시트 오류'); };
+  r = post({ action: 'timeSave', token: tokA, start: today, slots: grid([[0, 1]]), repeat: true });
+  S.env.SpreadsheetApp.getActiveSpreadsheet = realSS;
+  assert(r.ok && JSON.parse(S.files[fid]).players[A].s.includes('1'), 'time save: if the sheet cannot be written, the timetable is still saved');
 })();
