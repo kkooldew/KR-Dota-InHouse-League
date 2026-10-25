@@ -484,7 +484,7 @@ async def main():
     check(real_problem().startswith("꺼짐 (config.json 에 sync_url"), "서버 연결 설정이 없으면 자동 팀 편성은 꺼짐")
     named(w.signup, "내전모집", view_channel=True, send_messages=False, send_messages_in_threads=True, manage_threads=False)
     out = await startup(w)
-    check(out[1] == "참여 신청 채널: #내전모집 (포럼) [확인 필요] 봇에 없는 권한: 글 올리기, 스레드 관리(글 잠그기·지우기)", "켤 때 확인: 없는 권한 안내")
+    check(out[1] == "참여 신청 채널: #내전모집 (포럼) [확인 필요] 봇에 없는 권한: 글 올리기, 포스트 관리(글 잠그기·지우기)", "켤 때 확인: 없는 권한 안내")
     # 운영진 역할을 정하지 않았는데 운영진 채널이 모두에게 보이면, 누구나 운영진 명령어를 쓸 수 있다고 알린다
     named(w.admin, "운영진", everyone=True, view_channel=True, send_messages=True)
     named(w.signup, "내전모집", everyone=True, view_channel=True, send_messages=True, send_messages_in_threads=True, manage_threads=True)
@@ -2632,7 +2632,7 @@ async def main():
     await mod.tidy_tick()
     await mod.tidy_tick()
     check(rec in mod.bot.games and rec.delete_at == 0 and w.thread.delete.await_count == 1 and "취소한 내전의 글을 지우지 못했어요." in w.texts(w.admin.send)[-1]
-          and "스레드 관리" in w.texts(w.admin.send)[-1], "글 정리: 지울 권한이 없으면 운영진 채널에 한 번 알리고 다시 지우지 않는다")
+          and "포스트 관리" in w.texts(w.admin.send)[-1], "글 정리: 지울 권한이 없으면 운영진 채널에 한 번 알리고 다시 지우지 않는다")
     with contextlib.redirect_stdout(io.StringIO()):
         w, rec = await cancelled_post(discord.HTTPException(Mock(status=500, reason="Server Error"), "오류"))
         await mod.tidy_tick()

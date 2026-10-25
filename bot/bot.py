@@ -103,7 +103,7 @@ PLAYERS_NEEDED = 10  # 5 vs 5
 # 동시에 진행할 수 있는 내전 수(모집 중이거나, 팀이 짜였는데 결과를 아직 기록하지 않은 내전). 운영자가 팀 음성 채널을 3벌까지 만들기로 했다(2026-10-11).
 # 참여 신청 채널이 포럼이 아니면 내전마다 글이 따로 없어 가릴 수 없으므로 한 번에 하나만 모집한다
 MAX_GAMES = max(1, int(config.get("max_games", 3) or 3))
-# 마감한 모집 글을 잠글지. 잠근 글에는 디스코드가 스레드 관리 권한이 있는 사람에게만 글과 명령어를 허용한다.
+# 마감한 모집 글을 잠글지. 잠근 글에는 디스코드가 스레드 관리 권한(포럼의 권한 설정에서는 '포스트 관리')이 있는 사람에게만 글과 명령어를 허용한다.
 # 리그 운영진이 마감 뒤의 명령어(/시작·/승리 등)를 그 글에서 써야 하므로 기본은 잠그지 않는다. 리그 운영진 역할에 그 권한을 준 뒤에 true 로 바꾼다
 LOCK_CLOSED = bool(config.get("lock_closed_threads", False))
 RESTART_SECONDS = 300  # /재모집: 참여 신청을 모두 비우고 이만큼 뒤에 다시 마감한다
@@ -326,7 +326,7 @@ async def check_setup() -> None:
         forum = isinstance(channel, discord.ForumChannel)
         wanted = {"view_channel": "채널 보기", "send_messages": "글 올리기" if forum else "메시지 보내기"}
         if forum:
-            wanted.update(send_messages_in_threads="스레드에서 메시지 보내기", manage_threads="스레드 관리(글 잠그기·지우기)")
+            wanted.update(send_messages_in_threads="스레드에서 메시지 보내기", manage_threads="포스트 관리(글 잠그기·지우기)")
         perms = channel.permissions_for(channel.guild.me)
         missing = [name for attr, name in wanted.items() if not getattr(perms, attr)]
         print(f"{label}: #{channel.name} ({'포럼' if forum else '일반 채널'})"
@@ -1257,7 +1257,7 @@ async def delete_post(rec: Recruitment) -> None:
         except discord.Forbidden as e:
             rec.delete_at = 0.0
             save_state()
-            await tell_admins(f"취소한 내전의 글을 지우지 못했어요. 봇의 역할에 **스레드 관리** 권한이 있는지 확인하고, 이 글은 손으로 지워 주세요: <#{rec.place_id}> ({e})")
+            await tell_admins(f"취소한 내전의 글을 지우지 못했어요. 참가신청 포럼에서 봇에게 **포스트 관리** 권한이 있는지 확인하고, 이 글은 손으로 지워 주세요: <#{rec.place_id}> ({e})")
             return
         except discord.HTTPException as e:  # 디스코드가 잠깐 답하지 않았다. 조금 뒤에 다시 지운다
             print(f"취소한 내전의 글을 지우지 못했습니다. {minutes_text(TIDY_SECONDS)} 뒤에 다시 지웁니다: {e}")
