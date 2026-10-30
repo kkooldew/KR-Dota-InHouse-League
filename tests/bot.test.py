@@ -1903,7 +1903,7 @@ async def main():
     check(w.thread.edit.call_args.kwargs == {"locked": True, "archived": False}, "취소한 글은 잠근다")
     mod.LOCK_CLOSED = True
 
-    # ── /내전하자: 지금 내전을 하고 싶다고 알리기 (한 시간 유지, 10명이 모이면 대화방에서 리그 운영진을 멘션) ──
+    # ── /내전하자: 지금 내전을 하고 싶다고 알리기 (처음에는 3시간 유지, 10명이 모이면 대화방에서 리그 운영진을 멘션) ──
     w = World(mod, forum=True)
     PROLE, SROLE = role_of(55, "리그 선수"), role_of(66, "리그 운영진")
     SROLE.mentionable = True
@@ -1955,15 +1955,15 @@ async def main():
     check("리그 선수만 쓸 수 있는 명령어예요" in t and private(i) and not mod.bot.wants, "/내전하자: 리그 선수가 아니면 쓰지 못한다")
     t, i = await run(mod.want_game, 400, player(201))
     first = mod.bot.wants[201]
-    until = int(first + 3600)
-    check(t.startswith("✅ 내전하자에 등록했습니다. 지금 내전을 하고 싶어 하는 사람이 **1명** 있습니다.")
-          and f"<t:{until}:t>까지 한 시간 동안 유지되고, 10명이 모이면 리그 운영진에게 알립니다." in t and private(i) and not alerts(),
+    until = int(first + 3 * 3600)
+    check(mod.bot.want_hours == mod.WANT_HOURS == 3 and t.startswith("✅ 내전하자에 등록했습니다. 지금 내전을 하고 싶어 하는 사람이 **1명** 있습니다.")
+          and f"<t:{until}:t>까지 3시간 동안 유지되고, 10명이 모이면 리그 운영진에게 알립니다." in t and private(i) and not alerts(),
           "/내전하자: 등록하면 본인에게만 지금 몇 명인지 알려 준다")
     check(t.endswith("빠지려면 아래 **참여 취소** 버튼을 누르세요.") and isinstance(button(i), mod.WantLeave) and button(i).is_persistent()
           and [b.label for b in button(i).children] == ["참여 취소"], "등록한 사람에게만 보이는 답에 참여 취소 버튼을 단다")
     sent = w.chat.send.call_args
     check(len(boards()) == 1 and sent.args[0] == "🙋 지금 내전을 하고 싶어 하는 사람이 **1명** 있습니다. (10명이 모이면 리그 운영진을 부릅니다)\n<@201>\n"
-          "함께하려면 아래 **참여 희망** 버튼을 누르거나 `/내전하자` 를 입력하세요. 한 시간 동안 유지됩니다."
+          "함께하려면 아래 **참여 희망** 버튼을 누르거나 `/내전하자` 를 입력하세요. 3시간 동안 유지됩니다."
           and isinstance(sent.kwargs["view"], mod.WantBoard) and sent.kwargs["view"].is_persistent() and [b.label for b in sent.kwargs["view"].children] == ["참여 희망"]
           and sent.kwargs["allowed_mentions"].users is False and sent.kwargs["allowed_mentions"].roles is False
           and mod.bot.want_board == {"channel_id": 400, "message_id": 9001, "who": [201]},
@@ -2000,17 +2000,21 @@ async def main():
     await want(209)
     check(waiting() == 11 and len(alerts()) == 1, "그 뒤에 더 모여도 다시 알리지 않는다")
     for uid in (201, 202, 203):
-        mod.bot.wants[uid] -= 3601                            # 세 사람은 한 시간이 지났다
-    check(waiting() == 8 and 201 not in mod.bot.wants and not mod.bot.want_alerted, "한 시간이 지나면 저절로 풀린다 (10명 아래로 내려가면 다시 알릴 수 있게 된다)")
+        mod.bot.wants[uid] -= 3601                            # 한 시간이 지났다
+    check(waiting() == 11 and mod.bot.want_alerted, "한 시간이 지나도 그대로다 (처음에는 3시간 동안 유지된다)")
+    for uid in (201, 202, 203):
+        mod.bot.wants[uid] -= 2 * 3600                        # 세 사람은 3시간이 지났다
+    check(waiting() == 8 and 201 not in mod.bot.wants and not mod.bot.want_alerted, "3시간이 지나면 저절로 풀린다 (10명 아래로 내려가면 다시 알릴 수 있게 된다)")
     t = await want(201)
-    check(t.startswith("✅ 내전하자에 등록했습니다.") and "**9명**" in t and len(alerts()) == 1, "한 시간이 지난 사람은 다시 쓸 수 있다")
+    check(t.startswith("✅ 내전하자에 등록했습니다.") and "**9명**" in t and len(alerts()) == 1, "유지 시간이 지난 사람은 다시 쓸 수 있다")
     await want(210)
     check(waiting() == 10 and len(alerts()) == 1 and not mod.bot.want_alerted, "방금 리그 운영진을 불렀으면 10분 동안은 다시 10명이 돼도 부르지 않는다")
     mod.bot.want_alert_at -= 601
     await want(211)
     check(waiting() == 11 and len(alerts()) == 2 and "**11명**" in w.chat.send.call_args.args[0] and mod.bot.want_alerted, "10분이 지난 뒤에 10명 이상이면 다음 등록 때 또 알린다")
     saved = json.loads(mod.STATE_PATH.read_text(encoding="utf-8"))["want"]
-    check(len(saved["users"]) == 11 and saved["alerted"] is True and saved["channel_id"] == 400 and saved["role_id"] == 66, "등록한 사람들과 설정을 상태 파일에 적어 둔다")
+    check(len(saved["users"]) == 11 and saved["alerted"] is True and saved["channel_id"] == 400 and saved["role_id"] == 66 and saved["hours"] == 3,
+          "등록한 사람들과 설정을 상태 파일에 적어 둔다")
     keep, board, at = dict(mod.bot.wants), dict(mod.bot.want_board), mod.bot.want_alert_at
     check(saved["board"] == board and board["who"] == mod.wanting() and saved["alert_at"] == at, "모집판과 마지막으로 알린 시각도 상태 파일에 적어 둔다")
     mod.bot.wants, mod.bot.want_alerted, mod.bot.want_channel_id, mod.bot.want_role_id, mod.bot.want_board, mod.bot.want_alert_at = {}, False, 0, 0, None, 0.0
@@ -2027,7 +2031,7 @@ async def main():
           "모집이 열려 있으면 10명이 돼도 알리지 않고, 모집 글에서 /참여 하라고 알려 준다")
     for uid in (301, 302, 303):
         await run(mod.join, 300, player(uid))
-    check(waiting() == 7 and 301 in mod.bot.wants, "모집에 /참여 한 사람은 기다리는 사람으로 세지 않는다 (다시 쓰려면 한 시간이 지나야 하는 것은 그대로)")
+    check(waiting() == 7 and 301 in mod.bot.wants, "모집에 /참여 한 사람은 기다리는 사람으로 세지 않는다 (다시 쓰려면 유지 시간이 지나야 하는 것은 그대로)")
     await mod.board_tick()
     check(mod.bot.want_board["who"] == list(range(304, 311)) and "**7명**" in w.posts[mod.bot.want_board["message_id"]].edit.call_args.kwargs["content"],
           "모집에 /참여 한 사람은 모집판에서도 빠진다 (30초마다 확인해 그 자리에서 고친다)")
@@ -2105,14 +2109,14 @@ async def main():
         await mod.want_leave(press(player(uid)))
     check(mod.bot.want_board is None and not live() and not mod.bot.wants, "마지막 사람이 취소하면 모집판을 지운다")
 
-    # 한 시간이 지난 사람은 30초마다 하는 확인에서 모집판에서 빠진다. 바뀐 것이 없으면 건드리지 않는다
+    # 유지 시간이 지난 사람은 30초마다 하는 확인에서 모집판에서 빠진다. 바뀐 것이 없으면 건드리지 않는다
     await want(711, 712, 713)
     post = w.posts[mod.bot.want_board["message_id"]]
     await mod.board_tick()
     check(not post.edit.await_count, "모집판이 지금 상태와 같으면 건드리지 않는다")
-    mod.bot.wants[711] -= 3601
+    mod.bot.wants[711] -= 3 * 3600 + 1
     await mod.board_tick()
-    check(mod.bot.want_board["who"] == [712, 713] and post.edit.await_count == 1 and "**2명**" in post.edit.call_args.kwargs["content"], "한 시간이 지난 사람은 모집판에서 빠진다")
+    check(mod.bot.want_board["who"] == [712, 713] and post.edit.await_count == 1 and "**2명**" in post.edit.call_args.kwargs["content"], "유지 시간이 지난 사람은 모집판에서 빠진다")
     # 누가 모집판 글을 지웠으면 새로 올린다
     post.edit = AsyncMock(side_effect=discord.NotFound(Mock(status=404, reason="Not Found"), "Unknown Message"))
     await mod.want_leave(press(player(712)))
@@ -2155,6 +2159,30 @@ async def main():
     hall()
     t, _ = await run(mod.want_setup, 100, ADMIN, None, role_of(1, "@everyone", default=True))
     check("고를 수 없어요" in t and mod.bot.want_role_id == 66, "@everyone 은 알릴 역할로 받지 않는다")
+    check("등록이 유지되는 시간: 3시간 (이미 등록한 사람에게도 적용돼요)" in (await run(mod.want_setup, 100, ADMIN, None, None))[0], "/내전하자설정: 지금 유지 시간을 보여 준다 (처음 3시간)")
+
+    # 유지시간: 리그 관리자가 1~12시간으로 바꾼다. 이미 등록한 사람에게도 바로 적용된다(등록한 시각에서부터 센다)
+    span = mod.want_setup.get_parameter("hours")
+    check(span.display_name == "유지시간" and span.min_value == 1 and span.max_value == 12 and not span.required, "유지시간 칸은 1~12시간이고, 비워 둘 수 있다")
+    await want(731, 732)
+    mod.bot.wants[731] -= 2 * 3600 + 1                       # 731 은 두 시간 넘게 전에 등록했다
+    post = w.posts[mod.bot.want_board["message_id"]]
+    t, _ = await run(mod.want_setup, 100, ADMIN, None, None, 2)
+    check(t.startswith("<@1>님이 `/내전하자` 설정을 바꿨어요.") and "등록이 유지되는 시간: 2시간" in t and mod.bot.want_hours == 2
+          and json.loads(mod.STATE_PATH.read_text(encoding="utf-8"))["want"]["hours"] == 2 and mod.bot.want_channel_id == 400 and mod.bot.want_role_id == 66,
+          "/내전하자설정: 유지시간을 바꾼다 (다른 설정은 그대로, 상태 파일에 남는다)")
+    check(731 not in mod.bot.wants and mod.bot.want_board["who"] == [732] and "**1명**" in post.edit.call_args.kwargs["content"]
+          and post.edit.call_args.kwargs["content"].endswith("2시간 동안 유지됩니다."), "줄이면 그 시간이 지난 사람은 바로 모집판에서 빠지고, 모집판의 안내도 바뀐다")
+    t = await want(733)
+    check(f"<t:{int(mod.bot.wants[733] + 2 * 3600)}:t>까지 2시간 동안 유지되고," in t, "등록할 때의 안내도 바꾼 시간으로 알린다")
+    mod.bot.want_hours = mod.WANT_HOURS
+    await mod.restore_state()
+    check(mod.bot.want_hours == 2, "봇을 껐다 켜도 유지시간이 이어진다")
+    t, _ = await run(mod.want_setup, 100, ADMIN, None, None, 12)
+    mod.bot.wants[732] -= 11 * 3600
+    check(mod.bot.want_hours == 12 and 732 in mod.wanting(), "늘리면 이미 등록한 사람도 더 오래 남는다")
+    mod.bot.want_hours, mod.bot.wants = mod.WANT_HOURS, {}
+    await mod.show_board()
 
     # ── /도움말: 자기 자리에서 쓸 수 있는 명령어만 본인에게 보여 준다 ──
     helps, quiet = {}, []
