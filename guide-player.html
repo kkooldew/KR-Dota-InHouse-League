@@ -20,7 +20,7 @@
   <p class="g-eyebrow">리그 선수 안내</p>
   <h1 class="page-title">리그 선수 매뉴얼</h1>
   <p class="page-lead">선수 등록부터 디스코드에서 내전에 참여하고 결과를 확인하기까지, 선수가 알아야 할 것을 순서대로 적었습니다. 디스코드에서는 <strong>퍼그나봇</strong>의 명령어를 씁니다.</p>
-  <p class="g-date">2026년 10월 30일 기준입니다. 디스코드 대화 예시는 봇이 실제로 올리는 글 모양 그대로이고, 선수 이름과 MMR은 지어낸 값입니다. 파란 글자는 디스코드 멘션이라 실제로는 각자의 디스코드 이름으로 보입니다.</p>
+  <p class="g-date">2026년 11월 1일 기준입니다. 디스코드 대화 예시는 봇이 실제로 올리는 글 모양 그대로이고, 선수 이름과 MMR은 지어낸 값입니다. 파란 글자는 디스코드 멘션이라 실제로는 각자의 디스코드 이름으로 보입니다.</p>
 
   <ol class="g-flow">
     <li><b>선수 등록</b><span>사이트에서 정보를 입력합니다</span></li>
@@ -37,7 +37,7 @@
       <tbody>
         <tr><td><code>/참여</code></td><td>내전 모집 글</td><td>그 내전에 참여를 신청합니다.</td></tr>
         <tr><td><code>/참여취소</code></td><td>내전 모집 글</td><td>참여 신청을 취소합니다. 마감 전까지 됩니다.</td></tr>
-        <tr><td><code>/내전하자</code></td><td>#🗨️대화방</td><td>지금 내전을 하고 싶다고 알립니다. #🗨️대화방의 모집판에 이름이 올라가고, 10명이 모이면 봇이 리그 운영진을 부릅니다. 모집판의 <strong>참여 희망</strong> 버튼을 눌러도 됩니다.</td></tr>
+        <tr><td><code>/내전하자</code></td><td>#🗨️대화방</td><td>지금 내전을 하고 싶다고 알립니다. #🗨️대화방의 모집판에 이름이 올라가고, 10명이 모이면 봇이 리그 운영진을 부릅니다. 모집판의 <strong>참여 희망</strong> 버튼을 눌러도 됩니다. 모집 중인 내전이 있으면 그 모집 글을 알려 줍니다.</td></tr>
         <tr><td><code>/포지션변경</code></td><td>어디서나</td><td>등록한 포지션 순서를 바꿉니다.</td></tr>
         <tr><td><code>/내전알림</code></td><td>어디서나</td><td>내전 모집 글이 올라올 때 알림을 받을지 켜고 끕니다. 한 번 입력하면 켜지고, 다시 입력하면 꺼집니다.</td></tr>
         <tr><td><code>/시간등록</code></td><td>어디서나</td><td>내전에 참여할 수 있는 시간을 칠하는 내 시간표 링크를 받습니다. 참여 신청이 아니라 시간 조사입니다.</td></tr>
@@ -115,6 +115,17 @@
         <div class="dc-msg me"><div class="dc-av">퍼</div><div class="dc-body"><div class="dc-head"><b>퍼그나봇</b><i>앱</i><time>오후 8:57</time></div><div class="dc-text">✅ 참여 완료! 12번째 참여자예요. 마감 <span class="ts">3분 후</span></div><div class="dc-only">👁 이 메시지는 나만 볼 수 있어요</div></div></div>
       </div>
       <p class="after">맨 위가 모집 글의 본문이고, 그 아래가 내전 알림을 켠 선수들에게 알림을 보내는 글입니다. 누가 <code>/참여</code>할 때마다 본문의 <strong>참여자</strong> 줄이 바로 바뀝니다. 내 이름이 들어갔는지 여기서 확인합니다.</p>
+    </figure>
+
+    <h3 id="chat">#🗨️대화방의 모집 소식</h3>
+    <p>내전이 열리면 봇이 <strong>#🗨️대화방</strong>에도 모집 소식을 올립니다. 모집 글의 링크, 마감 시각, 지금 참여한 사람이 적혀 있습니다. 링크를 누르면 모집 글로 갑니다. <code>/참여</code>는 모집 글 안에서 입력합니다.</p>
+    <figure class="g-fig">
+      <figcaption><b>예시</b>#🗨️대화방에 올라오는 모집 소식</figcaption>
+      <div class="dc">
+        <div class="dc-title"><span><span class="hash">#</span>🗨️대화방</span></div>
+        <div class="dc-msg"><div class="dc-av">퍼</div><div class="dc-body"><div class="dc-head"><b>퍼그나봇</b><i>앱</i><time>오후 8:56</time></div><div class="dc-text"><span class="at">@운영진1</span>님이 내전 모집을 열었어요! <span class="ch"># 10월 10일(토) 20:54 내전 모집</span> 에서 <code>/참여</code> 로 신청하세요.<br>⏰ <strong><span class="ts">오후 9:00</span>까지</strong> 받아요. (<span class="ts">4분 후</span> 마감)<br>👥 지금 <strong>3명</strong> 참여했어요. (10명까지 7명 남았어요)<br><span class="at">@플레이어1</span> · <span class="at">@플레이어2</span> · <span class="at">@플레이어3</span></div></div></div>
+      </div>
+      <p class="after">누가 <code>/참여</code>할 때마다 이 글이 #🗨️대화방 맨 아래에 새로 올라옵니다(내전마다 글은 하나). <code>/참여취소</code>하면 그 자리에서 고쳐지고, 마감되거나 취소되면 그렇게 바뀝니다. 이름에 알림은 울리지 않습니다.</p>
     </figure>
 
     <h3 id="alert">모집 알림 받기: <code>/내전알림</code></h3>
@@ -320,8 +331,20 @@
 
     <ul>
       <li><code>/내전하자</code> 명령어는 <strong>#🗨️대화방</strong> 채널에서 입력합니다. 다른 채널에서 입력하면 봇이 그 채널을 알려 줍니다.</li>
-      <li>이미 모집이 열려 있으면 봇이 그 모집 글을 알려 줍니다. 그 글에서 <code>/참여</code>하면 됩니다. 모집에 <code>/참여</code>한 사람은 모집판에서 빠집니다.</li>
+      <li>이미 모집이 열려 있으면 등록하지 않고 그 모집 글을 알려 줍니다(모집판의 <strong>참여 희망</strong> 버튼도 같습니다). 그 글에서 <code>/참여</code>하면 됩니다. 아래 예시를 보세요.</li>
+      <li>모집이 열리기 전에 등록해 둔 사람은 등록이 그대로 남고, 모집에 <code>/참여</code>하면 모집판에서 빠집니다.</li>
+      <li>앞 경기의 결과를 기다리는 판에서 뛰고 있는 사람은 모집 중인 내전에 들어갈 수 없으므로, 모집 중이어도 전처럼 등록됩니다(다음 판을 기다리는 것으로 봅니다).</li>
     </ul>
+
+    <figure class="g-fig">
+      <figcaption><b>예시</b>모집 중일 때 <code>/내전하자</code>를 입력하면</figcaption>
+      <div class="dc">
+        <div class="dc-title"><span><span class="hash">#</span>🗨️대화방</span></div>
+        <div class="dc-used"><span class="dc-mini">플</span><b>플레이어8</b> 님이 <span class="dc-cmd">/내전하자</span> 사용함</div>
+        <div class="dc-msg me"><div class="dc-av">퍼</div><div class="dc-body"><div class="dc-head"><b>퍼그나봇</b><i>앱</i><time>오후 8:56</time></div><div class="dc-text">지금 모집 중인 내전이 있습니다. 여기에서 <code>/참여</code> 를 입력하세요.<br>👉 <span class="ch"># 10월 10일(토) 20:54 내전 모집</span> · 지금 <strong>3명</strong> · <span class="ts">4분 후</span> 마감</div><div class="dc-only">👁 이 메시지는 나만 볼 수 있어요</div></div></div>
+      </div>
+      <p class="after">링크를 눌러 모집 글로 들어가 <code>/참여</code>를 입력합니다. 이미 그 모집에 신청해 둔 사람에게는 <strong>이미 모집 중인 내전에 참여 신청을 했습니다.</strong>라고 그 글을 알려 줍니다.</p>
+    </figure>
   </section>
 
   <!-- 7 -->
@@ -556,7 +579,7 @@
       <figcaption><b>예시</b>리그 선수가 <code>/도움말</code>을 입력했을 때</figcaption>
       <div class="dc">
         <div class="dc-used"><span class="dc-mini">플</span><b>플레이어5</b> 님이 <span class="dc-cmd">/도움말</span> 사용함</div>
-        <div class="dc-msg me"><div class="dc-av">퍼</div><div class="dc-body"><div class="dc-head"><b>퍼그나봇</b><i>앱</i><time>오후 7:15</time></div><div class="dc-text"><strong>퍼그나봇 명령어</strong><br><strong>리그 선수</strong>가 쓸 수 있는 명령어예요.<br><br><strong>리그 선수</strong><br><code>/참여</code> · <code>/참여취소</code> — 내전 모집 글에서 참여를 신청하거나 취소해요.<br><code>/내전하자</code> — <span class="ch"># 🗨️대화방</span> 에서 써요. 지금 내전을 하고 싶다고 알려요. 대화방의 모집판에 이름이 올라가고 3시간 동안 유지돼요. 모집판의 <strong>참여 희망</strong> 버튼을 눌러도 돼요. 10명이 모이면 리그 운영진에게 알려요.<br><code>/포지션변경</code> — 등록한 포지션 순서를 바꿔요. 1지망부터 차례로 골라요.<br><code>/내전알림</code> — 내전 모집 글이 올라올 때 알림을 받을지 켜고 꺼요. 한 번 입력하면 켜지고, 다시 입력하면 꺼져요.<br><code>/시간등록</code> — 내전에 참여할 수 있는 시간을 칠하는 내 시간표 링크를 받아요. 참여 신청이 아니라 시간 조사예요.<br><code>/도움말</code> — 이 안내를 다시 봐요.</div><div class="dc-only">👁 이 메시지는 나만 볼 수 있어요</div></div></div>
+        <div class="dc-msg me"><div class="dc-av">퍼</div><div class="dc-body"><div class="dc-head"><b>퍼그나봇</b><i>앱</i><time>오후 7:15</time></div><div class="dc-text"><strong>퍼그나봇 명령어</strong><br><strong>리그 선수</strong>가 쓸 수 있는 명령어예요.<br><br><strong>리그 선수</strong><br><code>/참여</code> · <code>/참여취소</code> — 내전 모집 글에서 참여를 신청하거나 취소해요.<br><code>/내전하자</code> — <span class="ch"># 🗨️대화방</span> 에서 써요. 지금 내전을 하고 싶다고 알려요. 대화방의 모집판에 이름이 올라가고 3시간 동안 유지돼요. 모집판의 <strong>참여 희망</strong> 버튼을 눌러도 돼요. 10명이 모이면 리그 운영진에게 알려요. 모집 중인 내전이 있으면 그 글을 알려 줘요.<br><code>/포지션변경</code> — 등록한 포지션 순서를 바꿔요. 1지망부터 차례로 골라요.<br><code>/내전알림</code> — 내전 모집 글이 올라올 때 알림을 받을지 켜고 꺼요. 한 번 입력하면 켜지고, 다시 입력하면 꺼져요.<br><code>/시간등록</code> — 내전에 참여할 수 있는 시간을 칠하는 내 시간표 링크를 받아요. 참여 신청이 아니라 시간 조사예요.<br><code>/도움말</code> — 이 안내를 다시 봐요.</div><div class="dc-only">👁 이 메시지는 나만 볼 수 있어요</div></div></div>
       </div>
     </figure>
   </section>

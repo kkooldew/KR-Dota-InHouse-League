@@ -2022,23 +2022,47 @@ async def main():
     check(mod.bot.wants == keep and mod.bot.want_alerted and mod.bot.want_channel_id == 400 and mod.bot.want_role_id == 66
           and mod.bot.want_board == board and mod.bot.want_alert_at == at, "봇을 껐다 켜도 이어진다 (모집판도 이어받아 그 글을 고치고 지운다)")
 
-    # 모집이 열려 있는 동안에는 알리지 않고 모집 글을 알려 준다. 모집에 /참여 한 사람은 기다리는 사람으로 세지 않는다
+    # 모집 중인 내전이 있으면 등록하지 않고 그 모집 글을 알려 준다 (운영자가 2026-11-01에 요청. 그 전에는 등록한 뒤 끝에 덧붙여 알렸다).
+    # 모집에 /참여 한 사람은 기다리는 사람으로 세지 않는다
     mod.bot.wants, mod.bot.want_joined, mod.bot.want_alerted, mod.bot.want_alert_at = {}, set(), False, 0.0
     n = len(alerts())
+    await want(*range(301, 310))
+    check(waiting() == 9 and len(alerts()) == n, "모집을 열기 전에 9명이 등록해 있다")
     await run(mod.create_inhouse, 100, ADMIN)
-    t = await want(*range(301, 311))
-    check(waiting() == 10 and len(alerts()) == n and not mod.bot.want_alerted and "지금 모집 중인 내전이 있습니다. <#300> 에서 `/참여` 를 입력하세요." in t,
-          "모집이 열려 있으면 10명이 돼도 알리지 않고, 모집 글에서 /참여 하라고 알려 준다")
+    rec = mod.bot.current
+    k = len(boards())
+    t, i = await run(mod.want_game, 400, player(310))
+    check(t == f"지금 모집 중인 내전이 있습니다. 여기에서 `/참여` 를 입력하세요.\n👉 <#300> · 지금 **0명** · <t:{rec.end_ts}:R> 마감"
+          and private(i) and button(i) is None and 310 not in mod.bot.wants and waiting() == 9 and len(alerts()) == n and len(boards()) == k,
+          "모집 중인 내전이 있으면 /내전하자 로 등록하지 않고 그 모집 글을 알려 준다 (10번째여도 리그 운영진을 부르지 않는다)")
+    i = inter(400, player(311))
+    await mod.want_join(i)
+    check(said(i).startswith("지금 모집 중인 내전이 있습니다.") and 311 not in mod.bot.wants, "모집판의 참여 희망 버튼도 같다")
+    t, i = await run(mod.want_game, 400, player(304))
+    until = int(mod.bot.wants[304] + 3 * 3600)
+    check(t.startswith("지금 모집 중인 내전이 있습니다. 여기에서 `/참여` 를 입력하세요.\n👉 <#300>")
+          and t.endswith(f"\n내전하자 등록은 <t:{until}:t>까지 유지됩니다. 빠지려면 아래 **참여 취소** 버튼을 누르세요.") and isinstance(button(i), mod.WantLeave),
+          "모집을 열기 전에 등록해 둔 사람에게는 모집 글과 함께 참여 취소 버튼을 보여 준다 (등록은 그대로)")
     for uid in (301, 302, 303):
         await run(mod.join, 300, player(uid))
-    check(waiting() == 7 and 301 in mod.bot.wants, "모집에 /참여 한 사람은 기다리는 사람으로 세지 않는다 (다시 쓰려면 유지 시간이 지나야 하는 것은 그대로)")
+    check(waiting() == 6 and 301 in mod.bot.wants, "모집에 /참여 한 사람은 기다리는 사람으로 세지 않는다 (다시 쓰려면 유지 시간이 지나야 하는 것은 그대로)")
     await mod.board_tick()
-    check(mod.bot.want_board["who"] == list(range(304, 311)) and "**7명**" in w.posts[mod.bot.want_board["message_id"]].edit.call_args.kwargs["content"],
+    check(mod.bot.want_board["who"] == list(range(304, 310)) and "**6명**" in w.posts[mod.bot.want_board["message_id"]].edit.call_args.kwargs["content"],
           "모집에 /참여 한 사람은 모집판에서도 빠진다 (30초마다 확인해 그 자리에서 고친다)")
+    t, i = await run(mod.want_game, 400, player(301))
+    check(t.startswith("이미 모집 중인 내전에 참여 신청을 했습니다.\n<#300>\n내전하자 등록은") and isinstance(button(i), mod.WantLeave) and waiting() == 6,
+          "이미 모집에 참여한 사람에게는 그렇다고 알려 준다")
     await run(mod.join, 300, player(320))
-    k = len(boards())
-    await want(320)
-    check(waiting() == 7 and 320 in mod.bot.wants and len(boards()) == k, "이미 모집에 참여해 있는 사람이 입력해도 기다리는 사람으로 세지 않는다 (모집판도 그대로)")
+    t, i = await run(mod.want_game, 400, player(320))
+    check(t == "이미 모집 중인 내전에 참여 신청을 했습니다.\n<#300>" and button(i) is None and 320 not in mod.bot.wants and len(boards()) == k,
+          "모집에 참여해 있는 사람은 등록하지 않는다 (모집판도 그대로)")
+    # 결과를 기다리는 판에서 뛰는 사람은 모집 중인 내전에 들어갈 수 없다. 다음 판을 기다리는 것이니 전처럼 등록한다
+    playing = {"at": time.time(), "ids": ["p330"], "who": {"p330": 330}, "lanes": {"r": ["p330"]}, "message_id": 999, "place_id": 999}
+    mod.bot.lineups.append(playing)
+    t = await want(330)
+    check(t.startswith("✅ 내전하자에 등록했습니다.") and "모집 중인 내전" not in t and 330 in mod.bot.wants and waiting() == 7 and len(alerts()) == n,
+          "결과를 기다리는 판에서 뛰는 사람은 모집 중이어도 전처럼 등록한다 (리그 운영진은 부르지 않는다)")
+    mod.bot.lineups.remove(playing)
     await run(mod.cancel, 100, ADMIN)
     await want(311, 312)
     check(waiting() == 9 and len(alerts()) == n, "모집이 끝난 뒤에도 9명이면 알리지 않는다")
@@ -2231,6 +2255,105 @@ async def main():
     mod.bot.player_role_id = 55
     await run(mod.cancel, 300, ADMIN)
     mod.bot.player_role_id = 0
+
+    # ── 대화방의 모집 소식: 내전을 열면 대화방에도 알리고, /참여 하면 /내전하자 의 모집판처럼 새로 올린다 (운영자가 2026-11-01에 요청) ──
+    w = World(mod, forum=True)
+    news = lambda: [c for c in w.chat.send.call_args_list if "내전 모집" in c.args[0]]   # 대화방에 올린 모집 소식
+    live = lambda: [mid for mid, m in w.posts.items() if not m.delete.await_count]       # 지워지지 않은 대화방 글
+    await run(mod.create_inhouse, 100, ADMIN)
+    check(not w.chat.send.await_count and mod.bot.current.chat is None, "대화방을 정해 두지 않았으면 모집 소식을 올리지 않는다")
+    await run(mod.cancel, 300, ADMIN)
+    mod.bot.want_channel_id = 400
+    t, _ = await run(mod.create_inhouse, 100, ADMIN)
+    rec = mod.bot.current
+    sent = w.chat.send.call_args
+    quiet = sent.kwargs["allowed_mentions"]
+    check(len(news()) == 1 and sent.args[0] == f"<@1>님이 내전 모집을 열었어요! <#300> 에서 `/참여` 로 신청하세요.\n"
+          f"⏰ **<t:{rec.end_ts}:t>까지** 받아요. (<t:{rec.end_ts}:R> 마감)\n👥 아직 참여한 사람이 없어요."
+          and quiet.users is False and quiet.roles is False and quiet.everyone is False and rec.chat == {"channel_id": 400, "message_id": w.post_no} and "⚠️" not in t,
+          "내전을 열면 대화방에도 모집 소식을 올린다 (모집을 연 리그 운영진이 맨 앞, 알림은 울리지 않는다)")
+    check(json.loads(mod.STATE_PATH.read_text(encoding="utf-8"))["games"][-1]["chat"] == rec.chat, "모집 소식은 상태 파일에 적어 둔다")
+    m1 = rec.chat["message_id"]
+    for u in (A, B):
+        await run(mod.join, 300, u)
+    check(live() == [rec.chat["message_id"]] and rec.chat["message_id"] != m1 and w.posts[m1].delete.await_count == 1
+          and w.chat.send.call_args.args[0].endswith("\n👥 지금 **2명** 참여했어요. (10명까지 8명 남았어요)\n<@11> · <@12>"),
+          "누가 /참여 하면 앞의 소식을 지우고 새로 올린다 (글은 하나, 대화방 맨 아래. 참여한 사람은 멘션으로 적는다)")
+    await asyncio.gather(*(run(mod.join, 300, user(uid, f"선수{uid}")) for uid in range(801, 805)))
+    check(live() == [rec.chat["message_id"]] and w.chat.send.call_args.args[0].endswith("**6명** 참여했어요. (10명까지 4명 남았어요)\n<@11> · <@12> · <@801> · <@802> · <@803> · <@804>")
+          and len(news()) < 1 + 2 + 4, "여러 사람이 한꺼번에 /참여 해도 모집 소식은 하나만 남고, 마지막 상태를 보여 준다")
+    post, k = w.posts[rec.chat["message_id"]], w.chat.send.await_count
+    await run(mod.leave, 300, B)
+    check(w.chat.send.await_count == k and post.edit.await_count == 1 and "**5명**" in post.edit.call_args.kwargs["content"]
+          and "<@12>" not in post.edit.call_args.kwargs["content"] and post.edit.call_args.kwargs["allowed_mentions"].users is False,
+          "/참여취소 면 새로 올리지 않고 그 자리에서 고친다")
+    await run(mod.extend, 300, ADMIN)
+    check(w.chat.send.await_count == k and post.edit.await_count == 2 and f"(<t:{rec.end_ts}:R> 마감, 연장됨)" in post.edit.call_args.kwargs["content"],
+          "모집 중에 /연장 하면 마감 시각을 그 자리에서 고친다")
+    await run(mod.close_now, 300, ADMIN)
+    check(w.chat.send.await_count == k and post.edit.call_args.kwargs["content"]
+          == "<@1>님이 연 내전 모집이 마감됐어요. 10명이 모이지 않았어요. <#300>\n🔒 최종 **5명**\n<@11> · <@801> · <@802> · <@803> · <@804>",
+          "마감하면 그 자리에서 고쳐 끝났다고 적는다")
+    await run(mod.extend, 300, ADMIN)
+    check(w.chat.send.await_count == k + 1 and live() == [rec.chat["message_id"]] and post.delete.await_count == 1
+          and w.chat.send.call_args.args[0].startswith("<@1>님이 내전 모집을 열었어요! <#300> 에서"), "마감한 모집을 /연장 으로 다시 열면 새로 올린다")
+    await run(mod.restart, 300, ADMIN)
+    check(w.chat.send.await_count == k + 2 and live() == [rec.chat["message_id"]] and w.chat.send.call_args.args[0].endswith("\n👥 아직 참여한 사람이 없어요."),
+          "/재모집 하면 새로 올린다 (참여 신청이 모두 취소됐다)")
+    await run(mod.join, 300, C)
+    post = w.posts[rec.chat["message_id"]]
+    post.edit = AsyncMock(side_effect=discord.NotFound(Mock(status=404, reason="Not Found"), "Unknown Message"))
+    await run(mod.leave, 300, C)
+    check(rec.chat["message_id"] != post.id and w.chat.send.call_args.args[0].endswith("\n👥 아직 참여한 사람이 없어요."), "누가 모집 소식을 지웠으면 모집 중일 때는 새로 올린다")
+    del w.posts[post.id]
+    post = w.posts[rec.chat["message_id"]]
+    await run(mod.cancel, 300, ADMIN)
+    check(post.edit.call_args.kwargs["content"] == "<@1>님이 연 내전 모집이 취소됐어요." and not post.delete.await_count, "취소하면 그 자리에서 고쳐 알린다 (지우지 않는다)")
+    chat = dict(rec.chat)
+    await mod.restore_state()
+    check(mod.bot.current.chat == chat, "봇을 껐다 켜도 모집 소식의 글을 이어받는다")
+    # 글의 모양: 10명이 넘었을 때, 아무도 없을 때, 이름이 아주 많을 때, 시즌이 끝난 뒤의 내전
+    big = mod.Recruitment(1, rec.end_ts)
+    big.thread, big.closed = w.thread, True
+    big.participants = {uid: {"name": "x", "username": "x"} for uid in range(1001, 1081)}
+    t = mod.chat_text(big)
+    check(t.startswith("<@1>님이 연 내전 모집이 마감됐어요. 팀 편성은 <#300> 에서 확인하세요.\n🔒 최종 **80명**\n<@1001> · ") and t.count("<@") == 51
+          and t.endswith(" 외 30명") and len(t) < 2000, "10명이 넘게 모여 마감했으면 팀 편성을 보라고 적는다 (이름은 50명까지)")
+    big.participants = {}
+    check(mod.chat_text(big) == "<@1>님이 연 내전 모집이 마감됐어요. 참여한 사람이 없었어요.", "아무도 참여하지 않고 마감했을 때")
+    big.closed, big.offseason = False, True
+    big.participants = {uid: {"name": "x", "username": "x"} for uid in range(1001, 1013)}
+    t = mod.chat_text(big)
+    check("\n👥 지금 **12명** 참여했어요.\n<@1001> · " in t and t.endswith("\n" + mod.OFFSEASON_NOTE), "10명이 넘으면 남은 인원은 적지 않는다. 시즌이 끝난 뒤의 내전이면 그렇다고 적는다")
+    # 내전이 여러 개면 모집 소식도 내전마다 따로 있다. /내전하자 는 모집 중인 내전을 모두 알려 준다
+    w.many = True
+    await run(mod.create_inhouse, 100, ADMIN)
+    g1 = mod.bot.current
+    await run(mod.create_inhouse, 100, ADMIN)
+    g2 = mod.bot.current
+    a, b = g1.chat["message_id"], g2.chat["message_id"]
+    await run(mod.join, g1.place_id, A)
+    check(g1.place_id != g2.place_id and g1.chat["message_id"] not in (a, b) and g2.chat["message_id"] == b and not w.posts[b].delete.await_count
+          and not w.posts[b].edit.await_count and w.chat.send.call_args.args[0].startswith(f"<@1>님이 내전 모집을 열었어요! <#{g1.place_id}> 에서")
+          and "<@11>" in w.chat.send.call_args.args[0], "내전이 여러 개면 모집 소식도 내전마다 따로 있다 (참여한 내전의 소식만 새로 올린다)")
+    t, _ = await run(mod.want_game, 400, user(805, "선수805"))
+    check(t == f"지금 모집 중인 내전이 있습니다. 여기에서 `/참여` 를 입력하세요.\n👉 <#{g1.place_id}> · 지금 **1명** · <t:{g1.end_ts}:R> 마감"
+          f"\n👉 <#{g2.place_id}> · 지금 **0명** · <t:{g2.end_ts}:R> 마감" and 805 not in mod.bot.wants, "/내전하자: 모집 중인 내전이 여러 개면 모두 알려 준다")
+    t, _ = await run(mod.want_game, 400, A)
+    check(t == f"이미 모집 중인 내전에 참여 신청을 했습니다.\n<#{g1.place_id}>", "/내전하자: 다른 내전에 참여해 있으면 그 내전만 알려 준다")
+    for g in (g1, g2):
+        await run(mod.cancel, g.place_id, ADMIN)
+    w.many = False
+    # 대화방에 글을 올리지 못해도 모집은 열리고, 리그 운영진에게 알린다
+    w.chat.send = AsyncMock(side_effect=discord.Forbidden(Mock(status=403, reason="Forbidden"), "Missing Permissions"))
+    with contextlib.redirect_stdout(io.StringIO()) as out:
+        t, _ = await run(mod.create_inhouse, 100, ADMIN)
+    check(mod.bot.current.chat is None and not mod.bot.current.closed and t.startswith("<@1>님이 모집을 시작했어요! ")
+          and "\n⚠️ <#400> 에 모집 소식을 올리지 못했어요. 봇이 그 채널에 글을 올릴 수 있는지 확인해 주세요." in t and "모집 소식을 맞추지 못했습니다" in out.getvalue(),
+          "대화방에 모집 소식을 올리지 못해도 모집은 열리고, 리그 운영진에게 알린다")
+    await run(mod.cancel, 300, ADMIN)
+    w.fresh_chat()
+    mod.bot.want_channel_id = 0
 
     # ── 모집 글에서 '내전 알림' 역할 부르기 (운영자가 2026-10-21에 바꿈. 2026-10-12부터는 리그 선수 역할을 불렀다) ──
     def arole(rid, name, position=3):
